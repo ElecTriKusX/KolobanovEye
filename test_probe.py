@@ -42,6 +42,25 @@ class ProbeTest(unittest.TestCase):
             with self.subTest(data=data), self.assertRaises(ValueError):
                 probe.level_info(self.write("level.bin", data))
 
+    def test_extracts_embedded_oodle_lightmap(self):
+        name = b"avg_normandy_lightmap"
+        named = struct.pack("<I", len(name)) + name + bytes((-len(name)) % 4)
+        payload = bytes((0x8C, 6, 0, 0, 0))
+        ddsx = struct.pack("<4s4sIHHBBHHBBII", b"DDSx", b"DXT1", 0x60000000, 4, 4, 1, 0, 0, 4, 0, 3, 8, len(payload))
+        outer = b"DBLD3x64" + bytes(4)
+        for declared in (len(ddsx) + len(payload), len(ddsx) + 1):
+            tex = block(b"TEX", named + struct.pack("<I", declared) + ddsx + payload)
+            path = self.write("level.bin", outer + tex + block(b"END"))
+            if declared == len(ddsx) + len(payload):
+                info, data = probe.read_normandy_lightmap(path)
+                self.assertEqual(data, payload)
+                self.assertEqual(info["first_stream_type"], "Kraken")
+                self.assertEqual(info["mip_bytes"], 8)
+                self.assertEqual(info["payload_offset"], 84)
+            else:
+                with self.assertRaisesRegex(ValueError, "Invalid DDSx sizes"):
+                    probe.read_normandy_lightmap(path)
+
     def test_inventory_accepts_optional_hq_pack_absence(self):
         self.write(probe.LEVEL, b"DBLD3x64" + bytes(4) + block(b"END"))
         self.write(probe.GRP, b"GRP3" + bytes(12))

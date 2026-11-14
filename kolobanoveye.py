@@ -10,6 +10,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 
 REV = "9639942de5a8e5b01d91977f60ed82cda22d5f41"
 HERE = Path(__file__).resolve().parent
@@ -17,6 +18,10 @@ PATCHES = (
     HERE / "patches/dagor-phase0.patch",
     HERE / "patches/dagor-editor-unused-parameters.patch",
 )
+OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
+OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
+OOZ_LIMIT = 256 * 1024 * 1024
+OOZ_STREAM_TYPES = {5: "LZNA", 6: "Kraken", 10: "Mermaid/Selkie", 11: "Bitknit", 12: "Leviathan"}
 BIN = Path("tools/dagor_cdk/windows-x86_64")
 LEVEL = Path("levels/avg_normandy.bin")
 GRP = Path("content/base/res/tanks/germ_pzkpfw_vi_ausf_h1_tiger.grp")
@@ -197,7 +202,136 @@ def verify_png(path, width, height):
             raise ValueError("Truncated PNG")
 
 
-def build(dagor):
+def read_normandy_lightmap(path):
+    """Find the embedded DDSx and return its metadata and raw Oodle stream."""
+    name = b"avg_normandy_lightmap"
+    blocks = (item for item in level_info(path)["blocks"] if item["tag"] == "TEX")
+    with path.open("rb") as stream:
+        for block in blocks:
+            end = block["offset"] + 4 + block["bytes"]
+            if block["bytes"] < 8:
+                raise ValueError("Truncated TEX block")
+            stream.seek(block["offset"] + 8)
+            (length,) = struct.unpack("<i", read_exact(stream, 4))
+            aligned_length = (length + 3) & ~3
+            if length < 0 or aligned_length > end - stream.tell():
+                raise ValueError("Invalid TEX name length")
+            if length not in (len(name), len(name) + 1):
+                continue
+            if read_exact(stream, aligned_length)[:length].rstrip(b"\0") != name:
+                continue
+            if end - stream.tell() < 36:
+                raise ValueError("Truncated embedded DDSx block")
+            (nested,) = struct.unpack("<I", read_exact(stream, 4))
+            nested_size = nested & 0x3FFFFFFF
+            if not 32 <= nested_size <= end - stream.tell():
+                raise ValueError("Invalid embedded DDSx block length")
+            label, fmt, flags, width, height, levels, _, depth, bpp, _, mip, unpacked, packed = struct.unpack(
+                "<4s4sIHHBBHHBBII", read_exact(stream, 32)
+            )
+            if label != b"DDSx" or not (width and height and levels) or levels > 32:
+                raise ValueError("Invalid embedded DDSx header")
+            if flags & 0xE0000000 != 0x60000000:
+                raise ValueError(f"Expected DDSx Oodle compression, got flags=0x{flags:08x}")
+            if not 2 <= packed <= min(nested_size - 32, OOZ_LIMIT) or not 1 <= unpacked <= OOZ_LIMIT:
+                raise ValueError(f"Invalid DDSx sizes (packed={packed}, decoded={unpacked})")
+
+            # Plain PC 2D textures store one surface per level (including reversed mip order).
+            surface_bytes = None
+            if not depth and not flags & (0x800 | 0x1000 | 0x2000 | 0x4000 | 0x20000 | 0x100000 | 0x200000):
+                shift = mip & 0xF
+                sizes = []
+                for level in range(levels):
+                    w, h = max(width >> level, 1), max(height >> level, 1)
+                    sizes.append((max(w >> 2, 1) * max(h >> 2, 1)) << shift if shift else w * h * bpp // 8)
+                surface_bytes = sum(sizes)
+                if surface_bytes != unpacked:
+                    raise ValueError(f"DDSx mip sizes total {surface_bytes}, header declares {unpacked}")
+            offset = stream.tell()
+            payload = read_exact(stream, packed)
+            meta = {
+                "texture": name.decode(),
+                "texture_format_hex": fmt.hex(),
+                "width": width,
+                "height": height,
+                "mip_levels": levels,
+                "mip_bytes": surface_bytes,
+                "payload_offset": offset,
+                "packed_bytes": packed,
+                "expected_bytes": unpacked,
+                "stream_header_hex": payload[:2].hex(),
+                "first_stream_type": OOZ_STREAM_TYPES.get(payload[1] & 0x7F, "unsupported"),
+            }
+            return meta, payload
+    raise ValueError("Embedded avg_normandy_lightmap DDSx not found")
+
+
+def probe_ooz(game, ooz_exe):
+    executable = require_file(ooz_exe.resolve())
+    meta, data = read_normandy_lightmap(require_file(game / LEVEL))
+    print(json.dumps(meta, ensure_ascii=False), flush=True)
+    if data[0] & 0x3F != 0x0C or meta["first_stream_type"] == "unsupported":
+        raise ValueError("Unsupported Oodle stream header")
+    if data[1] & 0x80:
+        raise ValueError("ooz does not implement Oodle quantum checksums")
+    with tempfile.TemporaryDirectory(prefix="ke-ooz-probe-") as temporary:
+        work = Path(temporary)
+        packed = work / "lightmap.ooz"
+        unpacked = work / "lightmap.raw"
+        packed.write_bytes(struct.pack("<Q", meta["expected_bytes"]) + data)
+        run = subprocess.run([executable, "-d", packed, unpacked], cwd=work, capture_output=True, timeout=60)
+        if run.returncode:
+            detail = (run.stdout + run.stderr).decode(errors="replace").strip()
+            raise ValueError(f"ooz exited with {run.returncode} while decoding the lightmap: {detail}")
+        size = unpacked.stat().st_size
+        if size != meta["expected_bytes"]:
+            raise ValueError(f"ooz produced {size} bytes, expected {meta['expected_bytes']}")
+        with unpacked.open("rb") as decoded:
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: decoded.read(1024 * 1024), b""):
+                digest.update(chunk)
+    print(f"[KE] OOZ_LIGHTMAP_OK {size} bytes sha256={digest.hexdigest()}")
+
+
+def stage_ooz_sources(ooz, work):
+    actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ooz, text=True).strip()
+    if actual != OOZ_REV:
+        raise ValueError(f"Expected powzix/ooz {OOZ_REV}, got {actual}")
+    for filename in ("stdafx.h", "targetver.h", "lzna.cpp", "bitknit.cpp"):
+        content = subprocess.check_output(["git", "show", f"HEAD:{filename}"], cwd=ooz)
+        if filename == "lzna.cpp":
+            content = content.replace(b"lut->short_length[0][i] = 0x2000;", b"lut->short_length[i / 4][i % 4] = 0x2000;")
+        (work / filename).write_bytes(content)
+    source = subprocess.check_output(["git", "show", "HEAD:kraken.cpp"], cwd=ooz)
+    source, marker, _ = source.partition(b"// The decompressor will write outside of the target buffer.")
+    if not marker:
+        raise ValueError("Could not identify the upstream ooz CLI boundary")
+    source = source.replace(b"  memset(dec, 0, sizeof(KrakenDecoder));",
+                            b"  if (!dec) return NULL;\n  memset(dec, 0, sizeof(KrakenDecoder));", 1)
+    source = source.replace(b"  KrakenDecoder *dec = Kraken_Create();",
+                            b"  KrakenDecoder *dec = Kraken_Create();\n  if (!dec) return -1;", 1)
+    source = source.replace(b"src = Kraken_ParseHeader(&dec->hdr, src);\n    if (!src)",
+                            b"src = Kraken_ParseHeader(&dec->hdr, src);\n    if (!src || dec->hdr.use_checksums)", 1)
+    (work / "kraken.cpp").write_bytes(source)
+
+
+def prepare_ooz(ooz, logs):
+    cl, lib = shutil.which("cl.exe"), shutil.which("lib.exe")
+    if not cl or not lib or os.environ.get("VSCMD_ARG_TGT_ARCH") != "x64":
+        raise ValueError("Run build --ooz from Developer PowerShell configured for x64")
+    work = logs / "ooz-local"
+    dagor_path(work)
+    work.mkdir(exist_ok=True)
+    stage_ooz_sources(ooz, work)
+    run_logged([cl, "/nologo", "/c", "/O2", "/MT", "/Zl", "kraken.cpp", "lzna.cpp", "bitknit.cpp"],
+               logs / "ooz-compile.log", work)
+    library = work / "ke-ooz.lib"
+    run_logged([lib, "/nologo", "/machine:x64", "/out:ke-ooz.lib", "kraken.obj", "lzna.obj", "bitknit.obj"],
+               logs / "ooz-lib.log", work)
+    return require_file(library)
+
+
+def build(dagor, ooz=None):
     if os.name != "nt":
         raise ValueError("Build requires Windows x64")
     actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=dagor, text=True).strip()
@@ -209,16 +343,27 @@ def build(dagor):
     if not jam:
         raise ValueError("jam.exe missing from PATH. Run Dagor make_devtools.py first.")
     apply = ["git", "apply", "--whitespace=error-all"]
-    for patch in PATCHES:
+    patches = (*PATCHES, OOZ_PATCH) if ooz else PATCHES
+    for patch in patches:
         if subprocess.run([*apply, "--reverse", "--check", patch], cwd=dagor, capture_output=True).returncode:
             subprocess.run([*apply, "--check", patch], cwd=dagor, check=True)
             subprocess.run([*apply, patch], cwd=dagor, check=True)
 
     logs = HERE / "build-logs"
     logs.mkdir(exist_ok=True)
-    for target, jamfile in (("editor", "sceneTools/daEditorX/jamfile-editor"), ("dumpGrp", "sceneTools/dumpGrp/jamfile")):
-        args = [jam, "-sRoot=../..", "-sPlatformArch=x86_64", "-sConfig=dev", "-f", jamfile]
-        run_logged(args, logs / f"{target}.log", dagor / "prog/tools")
+    args = [jam, "-sRoot=../..", "-sPlatformArch=x86_64", "-sConfig=dev"]
+    if ooz:
+        require_file(dagor / BIN / "dumpGrp-dev.exe")
+        library = prepare_ooz(ooz, logs)
+        args += ["-sUseOoz=yes", f"-sOozLib={dagor_path(library)}"]
+    editor_log = logs / ("editor-ooz.log" if ooz else "editor.log")
+    run_logged([*args, "-f", "sceneTools/daEditorX/jamfile-editor"], editor_log, dagor / "prog/tools")
+    if ooz:
+        if b"Building daKernel with the decode-only ooz backend" not in editor_log.read_bytes():
+            raise ValueError(f"Jam did not select the ooz backend. See {editor_log}")
+        require_file(dagor / BIN / "daKernel-dev.dll")
+    else:
+        run_logged([*args, "-f", "sceneTools/dumpGrp/jamfile"], logs / "dumpGrp.log", dagor / "prog/tools")
     require_file(dagor / BIN / "dumpGrp-dev.exe")
     print(f"[KE] BUILD_OK {require_file(dagor / BIN / 'daEditor3x-dev.exe')}")
 
@@ -316,6 +461,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     build_cmd, inspect_cmd, frame_cmd = (commands.add_parser(name) for name in ("build", "inspect", "frame"))
+    ooz_cmd = commands.add_parser("probe-ooz", help="Decode Normandy's embedded lightmap with the local ooz.exe")
+    ooz_cmd.add_argument("--game", type=Path, default=Path(r"D:\Games\WarThunder"))
+    ooz_cmd.add_argument("--ooz-exe", type=Path, required=True)
+    build_cmd.add_argument("--ooz", type=lambda path: Path(path).resolve(), help="Local powzix/ooz checkout for decode-only daKernel")
     for command in (build_cmd, frame_cmd):
         command.add_argument("--dagor", type=lambda path: Path(path).resolve(), required=True)
     for command in (inspect_cmd, frame_cmd):
@@ -335,7 +484,9 @@ def main():
     args = parser.parse_args()
     try:
         if args.command == "build":
-            build(args.dagor)
+            build(args.dagor, args.ooz)
+        elif args.command == "probe-ooz":
+            probe_ooz(args.game.resolve(), args.ooz_exe)
         else:
             game = args.game.resolve()
             cdk = args.cdk.resolve() if args.cdk else (game / "WarThunderCDK").resolve()

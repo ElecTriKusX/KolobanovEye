@@ -89,3 +89,92 @@ py -3 -m unittest -v
 ```
 
 Тесты Python проверяют разбор заголовка уровня и границ его блоков, диагностику версии шейдеров, необязательный HQ-пакет, выбор типизированных записей из `dumpGrp` и различение RGB/RGBA PNG. Для них создаются только синтетические тестовые байты. Они не используются для рендера.
+
+## Сборка с ooz и проверка Normandy без Oodle SDK
+
+На Linux адаптер и декодер были скомпилированы вместе с тестовым
+`IGenLoad`, который возвращал данные порциями. Все шесть файлов
+`testdata/dickens.*` из upstream дали 10 192 446 байт и одинаковый
+SHA-256 `b24c37886142e11d0ee687db6ab06f936207aa7f2ea1fd1d9a36763c7a507e6a`.
+Проверены чтение, пропуск байтов, повторное открытие и отказ при коротком
+входном потоке. Для повтора из корня KolobanovEye под Linux x86-64 с g++:
+
+```sh
+git -C /path/to/DagorEngine apply /path/to/KolobanovEye/patches/dagor-ooz.patch
+python tests/ooz_linux.py --dagor /path/to/DagorEngine --ooz /path/to/ooz
+```
+
+Если патч уже применён, начните со второй команды. Линковку Windows и
+игровые пакеты нужно проверить отдельно.
+
+Для этого режима нужен локальный Git checkout [powzix/ooz](https://github.com/powzix/ooz) на коммите
+`05038060aa68f9187ae9923b2388ca8db40e58d1` и уже собранный Windows x64 `dumpGrp-dev.exe`.
+Откройте **Developer PowerShell for VS** с целевой архитектурой **x64**. В нём должны быть
+доступны `cl.exe`, `lib.exe` и установленный Windows SDK. Выполните команды из каталога
+KolobanovEye, обновлённого с GitHub.
+
+```powershell
+$env:Path = "D:\Develop\devtools;$env:Path"
+git -C D:\Projects\ooz rev-parse HEAD
+python .\kolobanoveye.py probe-ooz --game D:\Games\WarThunder --ooz-exe D:\Projects\ooz\x64\Release\ooz.exe
+```
+
+`probe-ooz` читает DDSx из вложенного блока `TEX` в `avg_normandy.bin`.
+Он выводит смещение, размеры, первый тип потока и параметры текстуры. Для обычной
+2D-текстуры PC сверяет сумму размеров mip-уровней с DDSx. Скрипт добавляет
+8-байтовую длину только для CLI, запускает его отдельным процессом, проверяет
+длину результата и печатает `OOZ_LIGHTMAP_OK` с SHA-256. Временные файлы
+удаляются, карта открывается только для чтения. Контрольная сумма позволяет
+сравнить результаты повторных запусков. Успешный тест покрывает одну lightmap.
+
+Если `rev-parse` вернул ошибку или другой коммит, подготовьте отдельный checkout
+и передайте `--ooz D:\Projects\ooz-src` в команду сборки ниже. Для
+`probe-ooz` можно использовать уже собранный `ooz.exe`.
+
+```powershell
+git clone https://github.com/powzix/ooz.git D:\Projects\ooz-src
+git -C D:\Projects\ooz-src checkout --detach 05038060aa68f9187ae9923b2388ca8db40e58d1
+```
+
+После `OOZ_LIGHTMAP_OK` выполните:
+
+```powershell
+python .\kolobanoveye.py build --dagor D:\Projects\DagorEngine --ooz D:\Projects\ooz
+```
+
+Скрипт применяет `patches/dagor-ooz.patch`, собирает локальную x64-библиотеку
+декодера и запускает Jam только для DaEditorX с его зависимостями, включая
+динамический `daKernel`. Журналы — `build-logs\ooz-compile.log`,
+`build-logs\ooz-lib.log` и `build-logs\editor-ooz.log`. В последнем должна быть
+строка `Building daKernel with the decode-only ooz backend`. Флаги Jam этого
+режима — `-sUseOoz=yes` и `-sOozLib=<абсолютный путь к ke-ooz.lib>`.
+Обычный `build` сохраняет штатный выбор SDK или заглушки. Jam по-прежнему
+сообщает об отсутствующей или неполной версии SDK по своим штатным правилам.
+
+```powershell
+python .\kolobanoveye.py frame --dagor D:\Projects\DagorEngine --game D:\Games\WarThunder --out D:\Projects\ke-run-03 --model pzkpfw_VI_ausf_h1_tiger --skeleton pzkpfw_VI_ausf_h1_tiger_skeleton
+```
+
+При ошибке сохраните вывод `probe-ooz`. Если он успешен, приложите первый сбой из
+`editor-ooz.log` либо из журнала `debug` под `ke-run-03\.logs`. Запись
+`FRAME_WRITTEN` и визуальная проверка `ke-run-03\frame.png` подтверждают
+получение кадра.
+
+`ooz` читает Kraken, Mermaid/Selkie, Leviathan, LZNA и Bitknit. Поддержка
+контрольных сумм Oodle quantum отсутствует в upstream. Backend отклоняет такие
+потоки и возвращает ошибку на вызовах сжатия. Потоковый интерфейс Dagor
+распаковывает блок целиком при первом чтении или положительном `seekrel`.
+Лимит — 256 МиБ отдельно для входа и выхода. У каждого буфера дополнительно
+выделяется 64 байта для доступа SIMD на границе. Upstream прямо предупреждает,
+что декодер не fuzz-safe. Проверка заголовков и размеров не делает
+безопасными произвольные повреждённые потоки. Этот режим рассчитан на
+ресурсы доверенной локальной установки.
+
+Код декодера `ooz` распространяется по GPL-3.0-or-later. Скрипт берёт
+исходники из указанного checkout, готовит локальную копию без CLI, добавляет
+проверку отказа выделения памяти, исправляет индексирование двумерной
+таблицы LZNA и явно отклоняет флаг контрольных сумм.
+В репозиторий входят адаптер и скрипт, а исходники декодера и собранный с ним
+`daKernel-dev.dll` остаются у пользователя. При распространении сборки с
+`ooz` нужно выполнить условия GPL для распространяемого результата.
+[Исходники и лицензия ooz](https://github.com/powzix/ooz/blob/05038060aa68f9187ae9923b2388ca8db40e58d1/kraken.cpp)

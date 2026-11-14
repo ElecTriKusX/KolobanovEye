@@ -1,0 +1,236 @@
+diff --git a/prog/engine/ioSys/jamfile b/prog/engine/ioSys/jamfile
+index 43ee625b..13417d1f 100644
+--- a/prog/engine/ioSys/jamfile
++++ b/prog/engine/ioSys/jamfile
+@@ -53,9 +53,11 @@ UseProgLibs =
+ ;
+ if $(KernelLinkage) != dynamic { UseProgLibs += 3rdPartyLibs/eastl ; }
+ 
++local ooz_enabled = ;
++if $(UseOoz) = yes && $(KernelLinkage) = dynamic && $(ProjectAllowsOodle) = yes { ooz_enabled = yes ; }
+ local oodle_ver = ;
+-if $(ProjectAllowsOodle) = yes && ! [ GLOB $(_DEVTOOL) : oodle.* ] { Echo OODLE is missing, ignored ; ProjectAllowsOodle = no ; }
+-if $(ProjectAllowsOodle) = yes {
++if $(ooz_enabled) != yes && $(ProjectAllowsOodle) = yes && ! [ GLOB $(_DEVTOOL) : oodle.* ] { Echo OODLE is missing, ignored ; ProjectAllowsOodle = no ; }
++if $(ooz_enabled) != yes && $(ProjectAllowsOodle) = yes {
+   if $(KernelLinkage) != dynamic {
+     oodle_ver = 2 9 2 ;
+     if $(Platform) in linux { oodle_ver = 2 7 6 ; }
+@@ -66,7 +68,14 @@ if $(ProjectAllowsOodle) = yes {
+     if $(Platform) = macOS || $(Platform)-$(PlatformArch) = windows-arm64 { oodle_ver = 2 9 2 ; }
+   }
+ }
+-if $(ProjectAllowsOodle) = yes && $(oodle_ver) {
++if $(ooz_enabled) = yes {
++  if $(Platform)-$(PlatformArch) != windows-x86_64 { Exit UseOoz requires Windows x86_64 ; }
++  if ! $(OozLib) || ! [ GLOB $(OozLib:D) : $(OozLib:BS) ] { Exit UseOoz requires OozLib pointing to the local ooz static library ; }
++  Echo Building daKernel with the decode-only ooz backend ;
++  Target = $(Target:S=-ooz.lib) ;
++  AddLibs += $(OozLib) ;
++  Sources += oodleIoOoz.cpp oodleIoFatal.cpp ;
++} else if $(ProjectAllowsOodle) = yes && $(oodle_ver) {
+   local oodle_dir = $(_DEVTOOL)/oodle.$(oodle_ver[1]).$(oodle_ver[2]) ;
+   if ! [ GLOB $(oodle_dir) : oodle2_version_$(oodle_ver:J=.) ] { Exit $(oodle_dir) not found ($(oodle_ver:J=.) required), please update it from CVS ; }
+ 
+diff --git a/prog/engine/ioSys/oodleIoOoz.cpp b/prog/engine/ioSys/oodleIoOoz.cpp
+new file mode 100644
+index 00000000..a53e23c8
+--- /dev/null
++++ b/prog/engine/ioSys/oodleIoOoz.cpp
+@@ -0,0 +1,196 @@
++// Optional decode-only backend for locally installed Oodle-compressed game assets.
++#include <util/dag_globDef.h>
++#include <ioSys/dag_oodleIo.h>
++#include <cstdlib>
++#include <cstring>
++#include <memory>
++
++// powzix/ooz's raw-stream entry point. The CLI's size prefix is absent here.
++int Kraken_Decompress(const unsigned char *src, size_t src_len, unsigned char *dst, size_t dst_len);
++
++namespace
++{
++constexpr size_t padding = 64; // ooz SAFE_SPACE, also allow padded input lookahead.
++constexpr size_t maxBlockSize = 256u * 1024u * 1024u;
++using Buffer = std::unique_ptr<char, decltype(&std::free)>;
++
++bool valid_sizes(size_t packed, size_t unpacked)
++{
++  if (packed >= 2 && packed <= maxBlockSize && unpacked > 0 && unpacked <= maxBlockSize)
++    return true;
++  logerr("ooz: invalid block sizes (packed=%llu, unpacked=%llu, per-buffer limit=256 MiB)",
++    static_cast<unsigned long long>(packed), static_cast<unsigned long long>(unpacked));
++  return false;
++}
++
++Buffer allocate_buffer(size_t size)
++{
++  Buffer buffer(static_cast<char *>(std::malloc(size + padding)), &std::free);
++  if (buffer)
++    std::memset(buffer.get() + size, 0, padding);
++  else
++    logerr("ooz: could not allocate %u bytes", static_cast<unsigned>(size + padding));
++  return buffer;
++}
++
++bool decode(const char *src, size_t packed_size, char *dst, size_t unpacked_size, const char *name)
++{
++  const auto *input = reinterpret_cast<const unsigned char *>(src);
++  const int codec = input[1] & 0x7f;
++  if (input[1] & 0x80)
++  {
++    logerr("ooz: Oodle quantum checksums are unsupported in '%s'", name);
++    return false;
++  }
++  if ((input[0] & 0x3f) != 0x0c || (codec != 5 && codec != 6 && codec != 10 && codec != 11 && codec != 12))
++  {
++    logerr("ooz: unsupported stream header (%02X %02X) in '%s'", int(input[0]), int(input[1]), name);
++    return false;
++  }
++  const int result = Kraken_Decompress(input, packed_size, reinterpret_cast<unsigned char *>(dst), unpacked_size);
++  if (result != static_cast<int>(unpacked_size))
++  {
++    logerr("ooz: decode failed in '%s' (stream type=%d, packed=%u, expected=%u, result=%d)", name, codec,
++      static_cast<unsigned>(packed_size), static_cast<unsigned>(unpacked_size), result);
++    return false;
++  }
++  return true;
++}
++} // namespace
++
++size_t oodle_compress(void *, size_t, const void *, size_t, int)
++{
++  logerr("ooz: Oodle compression is unavailable. Build with the official Oodle SDK to encode.");
++  return 0;
++}
++
++int oodle_compress_data(IGenSave &, IGenLoad &, int, int) { return static_cast<int>(oodle_compress(nullptr, 0, nullptr, 0)); }
++
++size_t oodle_decompress(void *dst, size_t unpacked_size, const void *src, size_t packed_size)
++{
++  if (!dst || !src || !valid_sizes(packed_size, unpacked_size))
++    return 0;
++  auto input = allocate_buffer(packed_size);
++  auto output = allocate_buffer(unpacked_size);
++  if (!input || !output)
++    return 0;
++  std::memcpy(input.get(), src, packed_size);
++  if (!decode(input.get(), packed_size, output.get(), unpacked_size, "<memory>"))
++    return 0;
++  std::memcpy(dst, output.get(), unpacked_size);
++  return unpacked_size;
++}
++
++int oodle_decompress_data(IGenSave &dest, IGenLoad &src, int compr_sz, int orig_sz)
++{
++  OodleLoadCB reader(src, compr_sz, orig_sz);
++  char window[4096];
++  int count = reader.tryRead(window, sizeof(window));
++  while (count > 0)
++  {
++    dest.write(window, count);
++    count = reader.tryRead(window, sizeof(window));
++  }
++  return reader.decodedBytes();
++}
++
++void OodleLoadCB::open(IGenLoad &in_crd, int enc_size, int dec_size)
++{
++  close();
++  loadCb = &in_crd;
++  rdPos = 0;
++  encBufWrPos = 0;
++  encDataLeft = enc_size;
++  decDataSize = dec_size;
++  isFinished = !valid_sizes(enc_size, dec_size);
++}
++
++void OodleLoadCB::close()
++{
++  std::free(decBuf);
++  decBuf = nullptr;
++  loadCb = nullptr;
++  encDataLeft = 0;
++  isFinished = true;
++}
++
++inline int OodleLoadCB::decodeData(int size)
++{
++  if (isFinished || size <= 0 || rdPos >= decDataSize)
++    return 0;
++  if (!decBuf)
++  {
++    // The source may return short reads. Keep its exact packed position for ceaseReading().
++    const int packed_size = encDataLeft;
++    auto input = allocate_buffer(packed_size);
++    auto output = allocate_buffer(decDataSize);
++    isFinished = true;
++    if (!input || !output)
++      return 0;
++    while (encDataLeft > 0)
++    {
++      const int count = loadCb->tryRead(input.get() + encBufWrPos, encDataLeft);
++      if (count <= 0 || count > encDataLeft)
++      {
++        logerr("ooz: short or invalid input read in '%s' (%d of %d bytes)", getTargetName(), encBufWrPos, packed_size);
++        return 0;
++      }
++      encBufWrPos += count;
++      encDataLeft -= count;
++    }
++    const char *target = getTargetName();
++    if (!decode(input.get(), packed_size, output.get(), decDataSize, target ? target : "<unnamed>"))
++      return 0;
++    decBuf = output.release();
++    isFinished = false;
++  }
++  return min(size, decDataSize - rdPos);
++}
++
++int OodleLoadCB::tryRead(void *ptr, int size)
++{
++  const int count = ptr ? decodeData(size) : 0;
++  if (count)
++  {
++    std::memcpy(ptr, decBuf + rdPos, count);
++    rdPos += count;
++  }
++  return count;
++}
++
++void OodleLoadCB::read(void *ptr, int size)
++{
++  if (tryRead(ptr, size) == size)
++    return;
++  isFinished = true;
++#if DAGOR_EXCEPTIONS_ENABLED
++  DAGOR_THROW(LoadException("ooz: Oodle read error", -1));
++#else
++  DAG_FATAL("ooz: Oodle read error in '%s'", getTargetName());
++#endif
++}
++
++void OodleLoadCB::seekrel(int ofs)
++{
++  if (ofs < 0)
++    issueFatal();
++  else
++    rdPos += decodeData(ofs);
++}
++
++bool OodleLoadCB::ceaseReading()
++{
++  if (loadCb && encBufWrPos > 0 && encDataLeft > 0)
++  {
++    loadCb->seekrel(encDataLeft);
++    encDataLeft = 0;
++  }
++  // An unread stream leaves the source position untouched, as with the SDK.
++  isFinished = true;
++  std::free(decBuf);
++  decBuf = nullptr;
++  return true;
++}
++
++#define EXPORT_PULL dll_pull_iosys_oodleIo
++#include <supp/exportPull.h>
