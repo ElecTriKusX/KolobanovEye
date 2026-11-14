@@ -1,0 +1,14 @@
+diff --git a/prog/tools/sceneTools/daEditorX/binSceneView/plugin_scn.h b/prog/tools/sceneTools/daEditorX/binSceneView/plugin_scn.h
+--- a/prog/tools/sceneTools/daEditorX/binSceneView/plugin_scn.h
++++ b/prog/tools/sceneTools/daEditorX/binSceneView/plugin_scn.h
+@@ -53,8 +53,8 @@
+ 
+   void setVisible(bool vis) override;
+   bool getVisible() const override { return isVisible; }
+-  bool getSelectionBox(BBox3 &box) const override { return false; }
+-  bool getStatusBarPos(Point3 &pos) const override { return false; }
++  bool getSelectionBox(BBox3 &) const override { return false; }
++  bool getStatusBarPos(Point3 &) const override { return false; }
+ 
+   void clearObjects() override;
+   void saveObjects(DataBlock &blk, DataBlock &local_data, const char *base_path) override;

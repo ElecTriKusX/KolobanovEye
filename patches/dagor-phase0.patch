@@ -1,0 +1,533 @@
+diff --git a/prog/tools/sceneTools/daEditorX/binSceneView/plugin_scn.cpp b/prog/tools/sceneTools/daEditorX/binSceneView/plugin_scn.cpp
+index fd6aa00c..a8451fa9 100644
+--- a/prog/tools/sceneTools/daEditorX/binSceneView/plugin_scn.cpp
++++ b/prog/tools/sceneTools/daEditorX/binSceneView/plugin_scn.cpp
+@@ -10,6 +10,9 @@
+ #include <oldEditor/de_cm.h>
+ #include <debug/dag_debug.h>
+ #include <de3_interface.h>
++#include <de3_dynRenderService.h>
++#include <shaders/dag_dynSceneRes.h>
++#include <shaders/dag_shaders.h>
+ #include <de3_editorEvents.h>
+ #include <de3_entityFilter.h>
+ #include <de3_hmapDebugShadingService.h>
+@@ -462,6 +465,22 @@ bool BinSceneViewPlugin::catchEvent(unsigned ev_huid, void *userData)
+   return false;
+ }
+ 
++bool BinSceneViewPlugin::loadKolobanovEyeLevel(const char *path)
++{
++  if (!streamingScene || !dd_file_exist(path))
++    return false;
++  setVisible(false);
++  streamingScene->loadLevel(path);
++  isVisible = streamingScene->hasKolobanovEyeTerrain();
++  return isVisible;
++}
++
++void BinSceneViewPlugin::setKolobanovEyeModel(DynamicRenderableSceneInstance *model)
++{
++  kolobanovEyeModel = model;
++  kolobanovEyeDrawCount = 0;
++}
++
+ void BinSceneViewPlugin::renderGeometry(Stage stage)
+ {
+   if (!isVisible || !streamingScene)
+@@ -492,6 +511,35 @@ void BinSceneViewPlugin::renderGeometry(Stage stage)
+ 
+     default: break;
+   }
++
++  if (!kolobanovEyeModel)
++    return;
++  if (stage == STG_BEFORE_RENDER)
++  {
++    kolobanovEyeDrawCount = 0;
++    kolobanovEyeModel->beforeRender(::grs_cur_view.pos);
++    for (unsigned i = 0; i < kolobanovEyeModel->getNodeCount(); ++i)
++    {
++      TMatrix prev = kolobanovEyeModel->getNodeWtm(i);
++      prev.setcol(3, prev.getcol(3) - ::grs_cur_view.pos);
++      kolobanovEyeModel->setPrevNodeWtm(i, prev);
++    }
++  }
++  if (stage == STG_RENDER_DYNAMIC_OPAQUE || stage == STG_RENDER_DYNAMIC_DECALS || stage == STG_RENDER_DYNAMIC_TRANS ||
++      stage == STG_RENDER_SHADOWS)
++  {
++    if (auto *renderer = EDITORCORE->queryEditorInterface<IDynRenderService>())
++    {
++      const int shaderVar = get_shader_variable_id("editor_dynmodel_render", true);
++      if (shaderVar >= 0)
++        ShaderGlobal::set_int(shaderVar, 1);
++      renderer->renderOneDynModelInstance(kolobanovEyeModel, stage);
++      if (shaderVar >= 0)
++        ShaderGlobal::set_int(shaderVar, 0);
++      if (stage == STG_RENDER_DYNAMIC_OPAQUE)
++        ++kolobanovEyeDrawCount;
++    }
++  }
+ }
+ 
+ 
+diff --git a/prog/tools/sceneTools/daEditorX/binSceneView/plugin_scn.h b/prog/tools/sceneTools/daEditorX/binSceneView/plugin_scn.h
+index 457d7f4a..eef2664a 100644
+--- a/prog/tools/sceneTools/daEditorX/binSceneView/plugin_scn.h
++++ b/prog/tools/sceneTools/daEditorX/binSceneView/plugin_scn.h
+@@ -12,6 +12,7 @@
+ //==============================================================================
+ 
+ class AcesScene;
++class DynamicRenderableSceneInstance;
+ 
+ class BinSceneViewPlugin : public IGenEditorPlugin,
+                            public IRenderingService,
+@@ -108,6 +109,10 @@ public:
+   // SceneHolder *getScene() { return streamingScene; };
+   AcesScene *getScene() { return streamingScene; };
+ 
++  bool loadKolobanovEyeLevel(const char *path);
++  void setKolobanovEyeModel(DynamicRenderableSceneInstance *model);
++  unsigned getKolobanovEyeDrawCount() const { return kolobanovEyeDrawCount; }
++
+ private:
+   void showPanel();
+   void fillPanel();
+@@ -129,6 +134,8 @@ private:
+   String streamingFolder, streamingBlkPath, binFn;
+   DataBlock strmBlk;
+   AcesScene *streamingScene;
++  DynamicRenderableSceneInstance *kolobanovEyeModel = nullptr;
++  unsigned kolobanovEyeDrawCount = 0;
+   int toolBarId;
+   PropPanel::PanelWindowPropertyControl *propPanel = nullptr;
+   DataBlock mainPanelState;
+diff --git a/prog/tools/sceneTools/daEditorX/binSceneView/strmlevel.h b/prog/tools/sceneTools/daEditorX/binSceneView/strmlevel.h
+index e4013562..b60cf1b1 100644
+--- a/prog/tools/sceneTools/daEditorX/binSceneView/strmlevel.h
++++ b/prog/tools/sceneTools/daEditorX/binSceneView/strmlevel.h
+@@ -96,6 +96,7 @@ public:
+   bool tracerayNormalizedHeightmap(const Point3 &p0, const Point3 &dir, float &t, Point3 *norm);
+   bool getHeightmapAtPoint(float x, float z, float &out_height, Point3 *out_normal);
+   bool isInited() { return intited; }
++  bool hasKolobanovEyeTerrain() const { return bindumpHandle && lmeshMgr && lmeshRenderer; }
+ 
+   LandMeshManager *lmeshMgr;
+ 
+diff --git a/prog/tools/sceneTools/daEditorX/de_appwnd.h b/prog/tools/sceneTools/daEditorX/de_appwnd.h
+index 498313ab..3b6ef8c1 100644
+--- a/prog/tools/sceneTools/daEditorX/de_appwnd.h
++++ b/prog/tools/sceneTools/daEditorX/de_appwnd.h
+@@ -499,6 +499,7 @@ private:
+ 
+   void registerConsoleCommands();
+   bool runExitCmd(dag::ConstSpan<const char *> params);
++  bool runKolobanovEyeFrame(const char *config_path);
+   void runCameraAtCmd(dag::ConstSpan<const char *> params);
+   void runCameraPosCmd(dag::ConstSpan<const char *> params);
+   void runCameraDirCmd(dag::ConstSpan<const char *> params);
+diff --git a/prog/tools/sceneTools/daEditorX/de_appwndConCmd.cpp b/prog/tools/sceneTools/daEditorX/de_appwndConCmd.cpp
+index a46d91de..8563a016 100644
+--- a/prog/tools/sceneTools/daEditorX/de_appwndConCmd.cpp
++++ b/prog/tools/sceneTools/daEditorX/de_appwndConCmd.cpp
+@@ -80,6 +80,11 @@ bool DagorEdConsoleCommandProcessor::processCommand(const char *argv[], int argc
+     CONSOLE_COMMAND_BATCH_MODE_RESULT(get_app().runExitCmd(params));
+   }
+ 
++  CONSOLE_CHECK_NAME_EX("kolobanoveye", "frame", 2, 2, "Render one compatibility probe frame.", "<config.blk>")
++  {
++    CONSOLE_COMMAND_BATCH_MODE_RESULT(get_app().runKolobanovEyeFrame(params[0]));
++  }
++
+   CONSOLE_CHECK_NAME_EX("camera", "at", 1, 8,
+     "Type:\n"
+     "'camera.at' prints the camera's position, direction and FOV in last active viewport.\n"
+diff --git a/prog/tools/sceneTools/daEditorX/jamfile-editor b/prog/tools/sceneTools/daEditorX/jamfile-editor
+index 75bf5df7..eb99d654 100644
+--- a/prog/tools/sceneTools/daEditorX/jamfile-editor
++++ b/prog/tools/sceneTools/daEditorX/jamfile-editor
+@@ -49,6 +49,7 @@ Sources =
+   de_apphandler.cpp
+   de_appwnd.cpp
+   de_appwndConCmd.cpp
++  kolobanovEye.cpp
+   de_collision.cpp
+   de_engine.cpp
+   de_exportlevel.cpp
+diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+new file mode 100644
+index 00000000..ba29aa7f
+--- /dev/null
++++ b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+@@ -0,0 +1,344 @@
++// KolobanovEye 2.0 single-frame compatibility probe.
++#include "de_appwnd.h"
++#include "binSceneView/plugin_scn.h"
++#include "binSceneView/strmlevel.h"
++
++#include <de3_dynRenderService.h>
++#include <de3_skiesService.h>
++#include <de3_waterSrv.h>
++#include <EditorCore/ec_ViewportWindow.h>
++#include <coolConsole/coolConsole.h>
++#include <3d/dag_lockTexture.h>
++#include <3d/dag_texIdSet.h>
++#include <3d/dag_texMgr.h>
++#include <drv/3d/dag_info.h>
++#include <drv/3d/dag_lock.h>
++#include <gameRes/dag_gameResSystem.h>
++#include <gameRes/dag_stdGameRes.h>
++#include <image/dag_png.h>
++#include <image/dag_texPixel.h>
++#include <ioSys/dag_dataBlock.h>
++#include <math/dag_geomTree.h>
++#include <osApiWrappers/dag_direct.h>
++#include <osApiWrappers/dag_miscApi.h>
++#include <shaders/dag_dynSceneRes.h>
++#include <shaders/dag_shaders.h>
++#include <util/dag_delayedAction.h>
++
++#include <cmath>
++#include <cstring>
++#include <EASTL/unique_ptr.h>
++
++namespace
++{
++struct ScopedGameRes
++{
++  GameResource *res;
++  unsigned type;
++  ~ScopedGameRes()
++  {
++    if (res)
++      release_game_resource_ex(res, type);
++  }
++};
++
++struct ScopedTankRender
++{
++  BinSceneViewPlugin &scene;
++  ~ScopedTankRender() { scene.setKolobanovEyeModel(nullptr); }
++};
++
++bool finite_point(const Point3 &p) { return std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z); }
++
++// The 12 edges of the transformed local AABB. Clip to both depth planes
++// before dividing by z, then clip the resulting rectangle to the image.
++bool project_bounds(const BBox3 &bounds, const TMatrix &model, const TMatrix &camera, float near_z, float far_z, float wk,
++  float hk, int width, int height, Point4 &bbox)
++{
++  const TMatrix view = inverse(camera);
++  Point3 vertices[8];
++  float left = float(width), top = float(height), right = 0.f, bottom = 0.f;
++  auto include = [&](const Point3 &p) {
++    const float x = 0.5f * width * (1.f + wk * p.x / p.z);
++    const float y = 0.5f * height * (1.f - hk * p.y / p.z);
++    left = fminf(left, x);
++    right = fmaxf(right, x);
++    top = fminf(top, y);
++    bottom = fmaxf(bottom, y);
++  };
++  for (int i = 0; i < 8; ++i)
++  {
++    Point3 local(bounds[(i & 1) != 0].x, bounds[(i & 2) != 0].y, bounds[(i & 4) != 0].z);
++    vertices[i] = (model * local) * view;
++    if (vertices[i].z >= near_z && vertices[i].z <= far_z)
++      include(vertices[i]);
++  }
++  for (int i = 0; i < 8; ++i)
++    for (int axis = 1; axis <= 4; axis *= 2)
++    {
++      if (i & axis)
++        continue;
++      const Point3 &a = vertices[i];
++      const Point3 &b = vertices[i | axis];
++      for (const float z : {near_z, far_z})
++        if ((a.z < z && b.z > z) || (b.z < z && a.z > z))
++          include(a + (b - a) * ((z - a.z) / (b.z - a.z)));
++    }
++  left = fmaxf(0.f, left);
++  top = fmaxf(0.f, top);
++  right = fminf(float(width), right);
++  bottom = fminf(float(height), bottom);
++  bbox = Point4(left, top, right - left, bottom - top);
++  return bbox.z > 0.f && bbox.w > 0.f;
++}
++} // namespace
++
++bool DagorEdAppWindow::runKolobanovEyeFrame(const char *config_path)
++{
++  auto fail = [&](const char *stage, const char *message) {
++    console->addMessage(ILogWriter::ERROR, "[KE] FAIL %s: %s", stage, message);
++    return false;
++  };
++
++  DataBlock config;
++  if (!config.load(config_path))
++    return fail("CONFIG", "Cannot load probe settings");
++  const char *level = config.getStr("level", "");
++  const char *modelName = config.getStr("model", "");
++  const char *skeletonName = config.getStr("skeleton", "");
++  const char *expectedPack = config.getStr("expected_grp", "");
++  const char *output = config.getStr("output", "");
++  const char *metadata = config.getStr("metadata", "");
++  const int width = config.getInt("width", 1280);
++  const int height = config.getInt("height", 720);
++  const Point3 requested = config.getPoint3("tank", Point3(0, 0, 0));
++  const float yaw = config.getReal("yaw", 0.f);
++  const float fov = config.getReal("fov", 55.f);
++  if (!*level || !dd_file_exist(level) || !*modelName || !*output || !*metadata || width < 64 || width > 4096 || height < 64 ||
++      height > 4096 || !finite_point(requested) || !std::isfinite(yaw) || !(fov >= 15.f && fov <= 100.f))
++    return fail("CONFIG", "Check level file, model, output, frame size, tank position and FOV");
++
++  if (!d3d::get_driver_code().is(d3d::dx11))
++    return fail("DRIVER", "DX11 is required for this probe");
++  auto *renderer = queryEditorInterface<IDynRenderService>();
++  if (!renderer || renderer->getRenderType() != IDynRenderService::RTYPE_DYNAMIC_DEFERRED || !queryEditorInterface<IWaterService>())
++    return fail("RENDERER", "CDK deferred renderer and water service are required");
++  auto *plugin = static_cast<BinSceneViewPlugin *>(getPluginByName("bin_scene_view"));
++  auto *viewport = ged.getViewportCount() > 0 ? ged.getViewport(0) : nullptr;
++  if (!plugin || !plugin->getScene() || !viewport)
++    return fail("HOST", "Scene view plugin or viewport unavailable");
++  AcesScene &scene = *plugin->getScene();
++
++  console->addMessage(ILogWriter::NOTE, "[KE] MAP_BEGIN %s", level);
++  debug("[KE] MAP_BEGIN %s", level);
++  if (!plugin->loadKolobanovEyeLevel(level))
++    return fail("MAP", "Binary dump did not produce a terrain renderer");
++  float ground = 0.f;
++  Point3 groundNormal;
++  if (!scene.getHeightmapAtPoint(requested.x, requested.z, ground, &groundNormal) || !std::isfinite(ground))
++    return fail("TERRAIN", "No terrain at requested X/Z. Choose a different point.");
++  console->addMessage(ILogWriter::NOTE, "[KE] MAP_OK terrain_y=%.3f normal_y=%.3f static_collision=%d", ground, groundNormal.y,
++    scene.hasStaticScene() ? 1 : 0);
++
++  console->addMessage(ILogWriter::NOTE, "[KE] MODEL_BEGIN %s", modelName);
++  debug("[KE] MODEL_BEGIN %s", modelName);
++  const int packId = get_game_resource_pack_id_by_resource(modelName);
++  const char *pack = packId >= 0 ? get_game_resource_pack_fname(packId) : nullptr;
++  if (!pack || get_resource_type_id(modelName) != DynModelGameResClassId)
++    return fail("MODEL_INDEX", "DynModel missing from registered resource packs");
++  console->addMessage(ILogWriter::NOTE, "[KE] MODEL_PACK %s", pack);
++  if (*expectedPack && stricmp(dd_get_fname(pack), expectedPack) != 0)
++    return fail("MODEL_INDEX", "Resource resolves to a different GRP");
++
++
++  ScopedGameRes modelRef{get_one_game_resource_ex(modelName, DynModelGameResClassId), DynModelGameResClassId};
++  auto *lods = reinterpret_cast<DynamicRenderableSceneLodsResource *>(modelRef.res);
++  if (!lods || lods->lods.empty() || !lods->lods[0].scene)
++    return fail("MODEL_LOAD", "DynModel load returned no LODs");
++  DynamicRenderableSceneInstance model(lods);
++  if (model.getNodeCount() == 0)
++    return fail("MODEL_LOAD", "DynModel has no render nodes");
++
++  ScopedGameRes skeletonRef{*skeletonName ? get_one_game_resource_ex(skeletonName, GeomNodeTreeGameResClassId) : nullptr,
++    GeomNodeTreeGameResClassId};
++  const auto *sourceTree = reinterpret_cast<const GeomNodeTree *>(skeletonRef.res);
++  if ((*skeletonName && (!sourceTree || sourceTree->empty())) || (!sourceTree && model.getNodeCount() > 1))
++    return fail("SKELETON", "Select the matching GeomNodeTree from the pack/dependencies for a multi-node model");
++  GeomNodeTreeUniquePtr tree(sourceTree ? GeomNodeTree::make(*sourceTree) : nullptr);
++
++  const BBox3 bounds = lods->getLocalBoundingBox();
++  if (!finite_point(bounds[0]) || !finite_point(bounds[1]) || bounds[0].x >= bounds[1].x || bounds[0].y >= bounds[1].y ||
++      bounds[0].z >= bounds[1].z)
++    return fail("MODEL_BOUNDS", "Invalid DynModel bounds");
++  const Point3 position(requested.x, ground + requested.y - bounds[0].y, requested.z);
++  const float yawRad = yaw * DEG_TO_RAD;
++  const float cs = cosf(yawRad), sn = sinf(yawRad);
++  TMatrix world = TMatrix::IDENT;
++  world.setcol(0, cs, 0, -sn);
++  world.setcol(2, sn, 0, cs);
++  world.setcol(3, position);
++  if (tree)
++  {
++    tree->setRootTmScalar(world);
++    tree->invalidateWtm();
++    tree->calcWtm();
++  }
++
++  for (unsigned i = 0; i < model.getNodeCount(); ++i)
++  {
++    const char *node = lods->getNames().node.getNameSlow(i);
++    TMatrix transform = world;
++    if (tree && node && std::strcmp(node, "@root") != 0)
++    {
++      const GeomNodeTree::Index16 index = tree->findNodeIndex(node);
++      if (!index)
++      {
++        console->addMessage(ILogWriter::ERROR, "[KE] SKELETON_NODE_MISSING %s", node);
++        return fail("SKELETON", "Render node absent from GeomNodeTree");
++      }
++      tree->partialCalcWtm(index);
++      tree->getNodeWtmScalar(index, transform);
++    }
++    model.setNodeWtm(i, transform);
++    console->addMessage(ILogWriter::NOTE, "[KE] MODEL_NODE %u %s", i, node ? node : "");
++  }
++  if (tree)
++    for (unsigned i = 0; i < tree->nodeCount(); ++i)
++    {
++      const GeomNodeTree::Index16 index(i);
++      const auto parent = tree->getParentNodeIdx(index);
++      console->addMessage(ILogWriter::NOTE, "[KE] SKELETON_NODE %u parent=%d %s", i, parent ? int(parent.index()) : -1,
++        tree->getNodeName(index));
++    }
++
++  const Point3 aim = world * ((bounds[0] + bounds[1]) * 0.5f);
++  const Point3 eye = config.getPoint3("eye", aim + Point3(12, 5, 16));
++  if (!finite_point(eye) || lengthSq(aim - eye) < 0.01f || lengthSq(Point3(0, 1, 0) % (aim - eye)) < 0.01f)
++    return fail("CAMERA", "Eye must be finite and offset horizontally from the target");
++  const Point3 forward = normalize(aim - eye);
++  const Point3 right = normalize(Point3(0, 1, 0) % forward);
++  TMatrix camera = TMatrix::IDENT;
++  camera.setcol(0, right);
++  camera.setcol(1, forward % right);
++  camera.setcol(2, forward);
++  camera.setcol(3, eye);
++
++  model.beforeRender(eye);
++  const int lod = model.getCurrentLodNo();
++  if (lod < 0 || lod >= lods->lods.size() || !lods->lods[lod].scene)
++    return fail("MODEL_LOD", "No valid LOD at requested camera distance");
++  Tab<ShaderMaterial *> materials;
++  lods->gatherLodUsedMat(materials, lod);
++  TextureIdSet textures;
++  lods->lods[lod].scene->gatherUsedTex(textures);
++  textures.del(BAD_TEXTUREID);
++  if (materials.empty() || textures.empty())
++    return fail("MODEL_MATERIALS", "Selected LOD did not resolve materials and texture IDs");
++  for (const ShaderMaterial *material : materials)
++    console->addMessage(ILogWriter::NOTE, "[KE] MATERIAL %s", material->getShaderClassName());
++  if (!prefetch_and_wait_managed_textures_loaded(make_span_const(textures.data(), textures.size()), false, 15000000))
++    return fail("MODEL_TEXTURES", "Selected LOD texture prefetch failed or timed out");
++  console->addMessage(ILogWriter::NOTE, "[KE] MODEL_OK lod=%d nodes=%u materials=%d textures=%d", lod, model.getNodeCount(),
++    int(materials.size()), int(textures.size()));
++
++  ged.setCurrentViewportId(0);
++  int viewportW = 0, viewportH = 0;
++  viewport->getViewportSize(viewportW, viewportH);
++  if (viewportW <= 0 || viewportH <= 0)
++    return fail("CAMERA", "Viewport has no dimensions");
++  const float aspect = float(width) / height;
++  const float viewportAspect = float(viewportW) / viewportH;
++  const float horizontalFov = fov * DEG_TO_RAD;
++  // renderInTex preserves vertical FOV when the output is wider than the viewport.
++  const float viewportFov =
++    viewportAspect < aspect ? 2.f * atanf(tanf(horizontalFov * 0.5f) * viewportAspect / aspect) : horizontalFov;
++  constexpr float nearZ = 0.2f, farZ = 20000.f;
++  viewport->setProjection(false, viewportFov, nearZ, farZ);
++  viewport->setCameraTransform(camera);
++  console->addMessage(ILogWriter::NOTE, "[KE] CAMERA_OK eye=(%.3f,%.3f,%.3f) fov_x=%.3f", eye.x, eye.y, eye.z, fov);
++  if (scene.hasStaticScene())
++  {
++    const Point3 offset = aim - eye;
++    float hit = length(offset);
++    if (scene.tracerayNormalizedStaticScene(eye, forward, hit, nullptr, nullptr))
++      console->addMessage(ILogWriter::WARNING, "[KE] CAMERA_CENTER_STATIC_HIT distance=%.3f", hit);
++  }
++
++  const float wk = 1.f / tanf(horizontalFov * 0.5f);
++  Point4 bbox;
++  if (!project_bounds(bounds, world, camera, nearZ, farZ, wk, wk * aspect, width, height, bbox))
++    return fail("CAMERA", "Projected tank bounds do not intersect the frame");
++
++  ScopedTankRender binding{*plugin};
++  auto *skies = queryEditorInterface<ISkiesService>();
++  TexPtr frame;
++  int frames = 0;
++  for (; frames < 48; ++frames)
++  {
++    scene.update(eye, 1.f / 60.f);
++    perform_delayed_actions();
++    if (skies)
++      skies->updateSkies(1.f / 60.f);
++    plugin->setKolobanovEyeModel(&model);
++    frame = renderInTex(width, height, nullptr, true);
++    if (!frame)
++      return fail("RENDER", "Offscreen texture creation or render failed");
++    if (frames >= 7 && (!scene.getSsm() || !scene.getSsm()->isLoading()) &&
++        get_managed_textures_streaming_pending_count() == 0 && (!skies || skies->areCloudTexturesReady()))
++      break;
++    sleep_msec(20);
++  }
++  console->addMessage(ILogWriter::NOTE, "[KE] WARMUP passes=%d pending_textures=%d settled=%d", frames < 48 ? frames + 1 : frames,
++    get_managed_textures_streaming_pending_count(), frames < 48 ? 1 : 0);
++  console->addMessage(ILogWriter::NOTE, "[KE] ENV_LIGHT_READY %d", renderer->isEnvironmentLightingReady() ? 1 : 0);
++  if (frames == 48)
++    return fail("STREAMING", "Map or sky did not settle within 48 warm-up renders");
++  if (plugin->getKolobanovEyeDrawCount() == 0)
++    return fail("RENDER", "No opaque tank submission in the screenshot pass");
++
++  {
++    d3d::GpuAutoLock gpuLock;
++    const auto pixels = lock_texture<const TexPixel32>(frame.get(), 0, TEXLOCK_READ);
++    if (!pixels || pixels.getWidthInElems() != width || pixels.getHeightInElems() != height)
++      return fail("READBACK", "Could not read the requested render target");
++    const auto *first = reinterpret_cast<const TexPixel32 *>(pixels.get());
++    bool varied = false;
++    for (int y = 0; y < height && !varied; ++y)
++    {
++      const auto *row = reinterpret_cast<const TexPixel32 *>(reinterpret_cast<const char *>(first) + y * pixels.getByteStride());
++      for (int x = 0; x < width; ++x)
++        if (row[x].r != first->r || row[x].g != first->g || row[x].b != first->b)
++        {
++          varied = true;
++          break;
++        }
++    }
++    if (!varied)
++      return fail("READBACK", "Render target is flat");
++    if (!save_png32(output, first, width, height, pixels.getByteStride(), nullptr, 0, false))
++      return fail("PNG", "RGB PNG write failed");
++  }
++
++  DataBlock result;
++  result.setStr("level", level);
++  result.setStr("class", "tank");
++  result.setStr("model", modelName);
++  result.setStr("skeleton", skeletonName);
++  result.setStr("pack", pack);
++  result.setReal("terrain_y", ground);
++  result.setInt("width", width);
++  result.setInt("height", height);
++  result.setInt("lod", lod);
++  result.setPoint3("tank_world", position);
++  result.setReal("yaw_deg", yaw);
++  result.setPoint3("eye", eye);
++  result.setPoint3("look_at", aim);
++  result.setReal("fov_x_deg", fov);
++  result.setReal("near", nearZ);
++  result.setReal("far", farZ);
++  result.setPoint4("bbox_amodal_aabb_xywh", bbox);
++  if (!result.saveToTextFile(metadata))
++    return fail("METADATA", "Metadata write failed");
++  console->addMessage(ILogWriter::NOTE, "[KE] FRAME_OK %dx%d %s", width, height, output);
++  return true;
++}
+diff --git a/prog/tools/sceneTools/daEditorX/services/dynRenderSrv/dynRender.cpp b/prog/tools/sceneTools/daEditorX/services/dynRenderSrv/dynRender.cpp
+index 227b9086..fc8b9b8c 100644
+--- a/prog/tools/sceneTools/daEditorX/services/dynRenderSrv/dynRender.cpp
++++ b/prog/tools/sceneTools/daEditorX/services/dynRenderSrv/dynRender.cpp
+@@ -825,6 +825,7 @@ public:
+ 
+   void renderScreenShot(bool force_disable_wireframe)
+   {
++    gatherRendSrv();
+     int viewportX, viewportY, viewportW, viewportH;
+     float viewportMinZ, viewportMaxZ;
+     Driver3dRenderTarget rt;
+diff --git a/prog/tools/sceneTools/daEditorX/srvEngine.cpp b/prog/tools/sceneTools/daEditorX/srvEngine.cpp
+index 8bf1ba52..c6ba82cd 100644
+--- a/prog/tools/sceneTools/daEditorX/srvEngine.cpp
++++ b/prog/tools/sceneTools/daEditorX/srvEngine.cpp
+@@ -558,7 +558,8 @@ public:
+         debug("tex/res registered with   AssetBase: %d", get_max_managed_texture_id().index());
+     }
+     assetlocalprops::init("develop/.asset-local");
+-    AssetExportCache::createSharedData(assetlocalprops::makePath("assets-hash.bin"));
++    if (!dgs_get_argv("kolobanoveye-probe"))
++      AssetExportCache::createSharedData(assetlocalprops::makePath("assets-hash.bin"));
+ 
+     if (!assettags::load(assetMgr))
+       con.addMessage(con.WARNING, "Failed to load asset tags!");
