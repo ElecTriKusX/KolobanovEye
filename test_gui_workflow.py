@@ -54,3 +54,35 @@ class WorkflowTest(unittest.TestCase):
             data=json.loads((run/'coco/all.json').read_text())
             self.assertTrue((run/'coco'/data['images'][0]['file_name']).is_file())
             with self.assertRaises(ValueError): export([run], run/'images'/ 'bad')
+
+    def test_worker_forces_utf8_output(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d) / 'ke-generate-01'; environments = []
+            class Process:
+                def __init__(self, args, **kw):
+                    environments.append(kw['env'])
+                    if len(environments) == 1: run.mkdir()
+                    self.stdout = iter([])
+                def wait(self): return 0
+            app = SimpleNamespace(events=queue.Queue(), process=None)
+            with patch('ke_gui.subprocess.Popen', Process):
+                App.worker(app, {'output': str(run)}, ['renderer'])
+            self.assertEqual(len(environments), 3)
+            self.assertTrue(all(e['PYTHONIOENCODING'] == 'utf-8' for e in environments))
+
+    def test_copy_selected_or_entire_log(self):
+        import tkinter as tk
+        class Log:
+            def __init__(self, selection): self.selection = selection
+            def get(self, a, b):
+                if a == 'sel.first':
+                    if self.selection is None: raise tk.TclError('no selection')
+                    return self.selection
+                return 'весь журнал'
+        class Root:
+            def clipboard_clear(self): self.value = ''
+            def clipboard_append(self, s): self.value += s
+        for selection, expected in [('выделено', 'выделено'), (None, 'весь журнал')]:
+            root = Root(); state = SimpleNamespace(set=lambda x: None)
+            App.copy_log(SimpleNamespace(log=Log(selection), root=root, state=state))
+            self.assertEqual(root.value, expected)

@@ -1,5 +1,6 @@
 """Minimal Tk interface for the existing single-process sequence renderer."""
 import json
+import os
 import queue
 import subprocess
 import sys
@@ -77,12 +78,36 @@ class App:
         menu_button['menu'] = menu
         menu_button.pack(side='left', padx=8)
         ttk.Button(buttons, text='? Справка', command=self.show_help).pack(side='left')
+        self.open_button = ttk.Button(buttons, text='Открыть папку', command=self.open_result, state='disabled')
+        self.open_button.pack(side='left', padx=5)
+        ttk.Button(buttons, text='Копировать журнал', command=self.copy_log).pack(side='left')
         self.state = tk.StringVar(value='Готово')
         ttk.Label(main, textvariable=self.state).pack(anchor='w')
         self.log = tk.Text(main, height=12, wrap='word', state='disabled')
         self.log.pack(fill='both', expand=True, pady=(4, 0))
         root.protocol('WM_DELETE_WINDOW', self.on_close)
         root.after(100, self.poll)
+
+    def open_result(self):
+        if not self.last_run:
+            return
+        try:
+            if not Path(self.last_run).is_dir():
+                raise OSError('Папка результата не найдена')
+            if sys.platform != 'win32':
+                raise OSError('Открытие папки доступно в Windows')
+            os.startfile(self.last_run)
+        except OSError as exc:
+            messagebox.showerror('Не удалось открыть папку', str(exc))
+
+    def copy_log(self):
+        try:
+            selected = self.log.get('sel.first', 'sel.last')
+        except tk.TclError:
+            selected = self.log.get('1.0', 'end-1c')
+        self.root.clipboard_clear()
+        self.root.clipboard_append(selected)
+        self.state.set('Журнал скопирован в буфер обмена')
 
     def on_close(self):
         if self.running:
@@ -137,6 +162,7 @@ class App:
 
     def show_help(self):
         messagebox.showinfo('Справка',
+            'Открыть папку — показывает последний успешный результат в Проводнике. Копировать журнал — копирует выделенный текст или весь журнал.\n\n'
             'Основная кнопка: создаёт новую папку ke-generate-XX, рендерит кадры, проверяет их и создаёт COCO в подпапке coco.\n\n'
             'Проверить серию — проверяет файлы и границы рамок существующей серии.\n'
             'Рамки — создаёт отдельные копии кадров с зелёной рамкой.\n'
@@ -176,7 +202,8 @@ class App:
     def tool_worker(self, cmd):
         try:
             proc = subprocess.Popen(cmd, cwd=Path(__file__).resolve().parent, stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace')
+                                    stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace',
+                                    env={**os.environ, 'PYTHONIOENCODING': 'utf-8'})
             for line in proc.stdout: self.events.put(('line', line))
             self.events.put(('done', proc.wait()))
         except OSError as exc: self.events.put(('error', str(exc)))
@@ -187,7 +214,8 @@ class App:
             def execute(stage, args):
                 self.events.put(('line', f'\n[KE] {stage}\n'))
                 proc = subprocess.Popen(args, cwd=Path(__file__).resolve().parent, stdout=subprocess.PIPE,
-                                        stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace')
+                                        stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace',
+                                    env={**os.environ, 'PYTHONIOENCODING': 'utf-8'})
                 self.process = proc
                 for line in proc.stdout: self.events.put(('line', line))
                 code = proc.wait()
@@ -212,6 +240,7 @@ class App:
                     self.running = False; self.run_button.config(state='normal')
                     if kind == 'success':
                         self.last_run = value
+                        self.open_button.config(state='normal')
                         self.state.set(f'Готово: {value}')
                         messagebox.showinfo('Готово', f'Кадры и метаданные: {value}\nCOCO: {value}\\coco\\all.json\n\nРамка приблизительная; видимость не проверена.')
                     else:
