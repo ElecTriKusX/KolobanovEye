@@ -151,6 +151,8 @@ def analyze(run, dagor=None, game=None):
     warmup = find_lines(text, 'WARMUP')
     add('warmup', ('ok' if 'settled=1' in warmup[-1] else 'warning') if warmup else 'unknown',
         'Warmup status as reported by the engine.', warmup[-1:])
+    abi_lines = find_lines(text, '[KE] CLIPMAP_ABI ')
+    add('clipmap_storage', 'ok' if abi_lines else 'unknown', 'Clipmap table format selected by the engine.', abi_lines[-2:])
     native_draws = find_lines(text, '[KE] DX11_DRAW ')
     native_scopes = find_lines(text, '[KE] DX11_SCOPE ')
     add('dx11_draw_state', 'ok' if native_draws else ('warning' if native_scopes else 'unknown'),
@@ -240,7 +242,8 @@ def main():
     parser.add_argument('--skeleton', default='pzkpfw_VI_ausf_h1_tiger_skeleton')
     parser.add_argument('--tank-xz', nargs=2, type=float, default=(0, 0), metavar=('X', 'Z'))
     parser.add_argument('--clipmap-feedback', choices=('software', 'hardware'), default='software')
-    parser.add_argument('--indirection', choices=('cpu', 'gpu'), default='cpu')
+    parser.add_argument('--clipmap-abi', choices=('legacy-color', 'native-int'), default='legacy-color')
+    parser.add_argument('--indirection', choices=('cpu', 'gpu'), default='gpu')
     parser.add_argument('--dagor', type=Path, help='Dagor checkout for version and executable fingerprint')
     parser.add_argument('--game', type=Path, help='Game directory for CDK shader dump fingerprint; read-only')
     parser.add_argument('--ooz-exe', type=Path, help='Optionally test the real Normandy lightmap with ooz; requires --game')
@@ -263,7 +266,7 @@ def main():
         cmd = [sys.executable, str(Path(__file__).with_name('kolobanoveye.py')), 'frame', '--dagor', str(args.dagor),
                '--game', str(args.game), '--out', str(run), '--model', args.model, '--skeleton', args.skeleton,
                '--tank-xz', str(args.tank_xz[0]), str(args.tank_xz[1]), '--clipmap-feedback', args.clipmap_feedback,
-               '--indirection', args.indirection, '--render-debug']
+               '--clipmap-abi', args.clipmap_abi, '--indirection', args.indirection, '--render-debug']
         if args.keep_open:
             cmd.append('--keep-open')
         if args.dx11_trace:

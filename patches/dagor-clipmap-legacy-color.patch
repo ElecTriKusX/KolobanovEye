@@ -1,0 +1,98 @@
+--- a/prog/gameLibs/landMesh/virtualtexture.cpp
++++ b/prog/gameLibs/landMesh/virtualtexture.cpp
+@@ -411,8 +411,15 @@
+   uint32_t tilePacked = -1;
+ 
+   TexTileIndirection() = default;
+-  TexTileIndirection(CacheCoords cacheCoords, int mip, uint32_t tag)
+-  {
++  TexTileIndirection(CacheCoords cacheCoords, int mip, uint32_t tag, bool legacy_color)
++  {
++    if (legacy_color)
++    {
++      // The older CDK reads UNORM .zyxw and reconstructs cache X, cache Y and mip.
++      // The CDK tileConstantFiller always writes alpha 1.
++      tilePacked = uint32_t(cacheCoords.x) | (uint32_t(cacheCoords.y) << 8) | (uint32_t(mip) << 16) | 0xff000000u;
++      return;
++    }
+     G_FAST_ASSERT(tag <= INDIRECTION_MASK.w);
+     tilePacked = (uint32_t(cacheCoords.x) & INDIRECTION_MASK.x);
+     tilePacked |= (uint32_t(cacheCoords.y) & INDIRECTION_MASK.y) << INDIRECTION_SHIFT.y;
+@@ -481,6 +488,7 @@
+   int bindedTexMipCnt = 0;
+ 
+   UniqueTexWithShaderVar indirection;
++  bool legacyColorIndirection = false;
+   uint32_t captureTargetCounter = 0;
+   int oldestCaptureTargetCounter = 0;
+ 
+@@ -2678,7 +2686,12 @@
+   currentTexMipCnt = max_tex_mips;
+ 
+   String ind_tex(30, "ind_tex_%p", this);
+-  unsigned indFlags = (enable_18bit_tags ? TEXFMT_R32UI : TEXFMT_R16UI) | TEXCF_RTARGET;
++  legacyColorIndirection = !enable_18bit_tags && dgs_get_argv("ke-clipmap-legacy-color") &&
++    d3d::get_driver_code().is(d3d::dx11);
++  const unsigned format = legacyColorIndirection ? TEXFMT_A8R8G8B8 : (enable_18bit_tags ? TEXFMT_R32UI : TEXFMT_R16UI);
++  const unsigned indFlags = format | TEXCF_RTARGET;
++  if (dgs_get_argv("kolobanoveye-probe"))
++    debug("[KE] CLIPMAP_ABI storage=%s format=0x%08x", legacyColorIndirection ? "legacy-color" : "native-int", format);
+ 
+   // TODO: we only need half of MAX_VTEX_CNT (with ri vtex),
+   // but need to rebuild it after primary/secondary switch,
+@@ -2990,7 +3003,8 @@
+   const IBBox2 indirectionArea{IPoint2(-HALF_TILE_WIDTH, -HALF_TILE_WIDTH), IPoint2(HALF_TILE_WIDTH, HALF_TILE_WIDTH) - IPoint2::ONE};
+ 
+   const ConstantVert *basequad = quad;
+-  TexTileIndirection tti({0xff, 0xff}, 0xff, tag_clear_value);
++  const bool legacyColor = currentContext->legacyColorIndirection;
++  TexTileIndirection tti({0xff, 0xff}, 0xff, tag_clear_value, legacyColor);
+   quad[0].pos_wh = int16_tx2(0, 0);
+   quad[0].tti = tti;
+   quad[1].pos_wh = int16_tx2(TILE_WIDTH * TEX_MIPS, 0);
+@@ -3006,7 +3020,7 @@
+     {
+       const TexLRU &ti = LRU[mippedLRU[mipI][i]];
+       G_ASSERT(ti.tilePos.mip == mipI);
+-      TexTileIndirection tti(ti.cacheCoords, ti.tilePos.mip, ti.externalTag);
++      TexTileIndirection tti(ti.cacheCoords, ti.tilePos.mip, ti.externalTag, legacyColor);
+       for (int targI = 0; targI <= mipI; ++targI)
+       {
+         const IBBox2 tiProj = ti.tilePos.projectOnLowerMip(getMipPosition(ti.tilePos.ri_offset), targI);
+@@ -3041,15 +3055,17 @@
+   const bool diagnose = dgs_get_argv("ke-render-debug") && d3d::get_driver_code().is(d3d::dx11);
+   const int debugWidth = TILE_WIDTH * maxTexMipCnt;
+   const int debugHeight = TILE_WIDTH * max_ri_offset;
++  const int bytesPerEntry = (enable18bitTags || legacyColor) ? 4 : 2;
++  const uint32_t storageMask = bytesPerEntry == 4 ? 0xffffffffu : 0xffffu;
+   eastl::vector<uint32_t> expected;
+   if (diagnose)
+   {
+-    expected.resize(debugWidth * debugHeight, enable18bitTags ? 0xffffffffu : 0xffffu);
++    expected.resize(debugWidth * debugHeight, storageMask);
+     // Replay the submitted rectangles on CPU, including coarse-to-fine overwrites.
+     for (const ConstantVert *q = basequad; q < quad; q += 4)
+       for (int y = max(0, int(q[0].pos_wh.y)); y < min(debugHeight, int(q[2].pos_wh.y)); ++y)
+         for (int x = max(0, int(q[0].pos_wh.x)); x < min(debugWidth, int(q[2].pos_wh.x)); ++x)
+-          expected[y * debugWidth + x] = q[0].tti.tilePacked & (enable18bitTags ? 0xffffffffu : 0xffffu);
++          expected[y * debugWidth + x] = q[0].tti.tilePacked & storageMask;
+   }
+ 
+   d3d::set_render_target({}, DepthAccess::RW, {{currentContext->indirection.getTex2D(), 0, 0}});
+@@ -3075,7 +3091,6 @@
+     d3d::set_render_target({}, DepthAccess::RW, {});
+     const auto checkIndirection = [&](const char *source) {
+       const auto pixels = lock_texture<const ImageRawBytes>(currentContext->indirection.getTex2D(), 0, TEXLOCK_READ);
+-      const int bytesPerEntry = enable18bitTags ? 4 : 2;
+       if (pixels && pixels.getBytesPerElement() != bytesPerEntry)
+         debug("[KE] INDIRECTION_CHECK format_mismatch expected_bytes=%d actual_bytes=%d", bytesPerEntry,
+           pixels.getBytesPerElement());
+@@ -3115,7 +3130,7 @@
+       {
+         char *dst = d3d::get_update_buffer_addr_for_write(upload);
+         const size_t pitch = d3d::get_update_buffer_pitch(upload);
+-        const size_t bytes = enable18bitTags ? 4 : 2;
++        const size_t bytes = bytesPerEntry;
+         const size_t rowBytes = size_t(debugWidth) * bytes;
+         if (dst && pitch >= rowBytes && d3d::get_update_buffer_size(upload) >= pitch * size_t(debugHeight))
+         {

@@ -21,6 +21,8 @@ INDIRECTION_FIX_PATCH = HERE / "patches/dagor-indirection-readback-fix.patch"
 INDIRECTION_CPU_PATCH = HERE / "patches/dagor-indirection-cpu-test.patch"
 RESOLVE_PASS_PATCH = HERE / "patches/dagor-resolve-pass-capture.patch"
 RESOLVE_FLOAT_PATCH = HERE / "patches/dagor-resolve-float-capture.patch"
+DX11_TRACE_PATCH = HERE / "patches/dagor-dx11-terrain-trace.patch"
+CLIPMAP_LEGACY_PATCH = HERE / "patches/dagor-clipmap-legacy-color.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
     HERE / "patches/dagor-editor-unused-parameters.patch",
@@ -38,7 +40,8 @@ PATCHES = (
     HERE / "patches/dagor-terrain-bind-diagnostics.patch",
     RESOLVE_PASS_PATCH,
     RESOLVE_FLOAT_PATCH,
-    HERE / "patches/dagor-dx11-terrain-trace.patch",
+    DX11_TRACE_PATCH,
+    CLIPMAP_LEGACY_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -446,7 +449,13 @@ def build(dagor, ooz=None):
     resolve_float_applied = subprocess.run([*apply, "--reverse", "--check"],
         input=RESOLVE_FLOAT_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor,
         capture_output=True).returncode == 0
+    legacy_clip_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=CLIPMAP_LEGACY_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor,
+        capture_output=True).returncode == 0
     for patch in patches:
+        if legacy_clip_applied and patch in (INDIRECTION_PATCH, INDIRECTION_FIX_PATCH, INDIRECTION_CPU_PATCH, DX11_TRACE_PATCH,
+                                             CLIPMAP_LEGACY_PATCH):
+            continue
         if resolve_float_applied and patch in (RENDER_DEBUG_PATCH, DIRECT_DEPTH_PATCH, RESOLVE_PASS_PATCH, RESOLVE_FLOAT_PATCH):
             continue
         if resolve_pass_applied and patch in (RENDER_DEBUG_PATCH, DIRECT_DEPTH_PATCH, RESOLVE_PASS_PATCH):
@@ -560,6 +569,8 @@ def frame(args, game, cdk):
     if args.keep_open:
         command.remove("-quiet")
         print("[KE] Editor remains open. Close its window to finalize the frame and report.", flush=True)
+    if args.clipmap_abi == "legacy-color":
+        command.insert(-2, "-ke-clipmap-legacy-color")
     if args.clipmap_feedback == "software":
         command.insert(-2, "-ke-clipmap-software")
     if args.indirection == "cpu":
@@ -636,6 +647,8 @@ def main():
     frame_cmd.add_argument("--timeout", type=int, default=360)
     frame_cmd.add_argument("--dx11-trace", action="store_true", help="Log native DX11 draw state for terrain and clipmap updates")
     frame_cmd.add_argument("--render-debug", action="store_true", help="Export terrain and static G-buffer diagnostics")
+    frame_cmd.add_argument("--clipmap-abi", choices=("legacy-color", "native-int"), default="legacy-color",
+                           help="Clipmap table encoding required by the loaded CDK shaders")
     frame_cmd.add_argument("--clipmap-feedback", choices=("hardware", "software"), default="hardware",
                            help="Compute terrain tile requests on the GPU or CPU")
     frame_cmd.add_argument("--indirection", choices=("gpu", "cpu"), default="gpu",
