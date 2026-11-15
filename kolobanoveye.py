@@ -18,6 +18,7 @@ RENDER_DEBUG_PATCH = HERE / "patches/dagor-render-debug.patch"
 DIRECT_DEPTH_PATCH = HERE / "patches/dagor-direct-debug-depth.patch"
 INDIRECTION_PATCH = HERE / "patches/dagor-indirection-check.patch"
 INDIRECTION_FIX_PATCH = HERE / "patches/dagor-indirection-readback-fix.patch"
+INDIRECTION_CPU_PATCH = HERE / "patches/dagor-indirection-cpu-test.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
     HERE / "patches/dagor-editor-unused-parameters.patch",
@@ -31,6 +32,7 @@ PATCHES = (
     HERE / "patches/dagor-deferred-terrain-view-rays.patch",
     INDIRECTION_PATCH,
     INDIRECTION_FIX_PATCH,
+    INDIRECTION_CPU_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -429,7 +431,12 @@ def build(dagor, ooz=None):
     indirection_fixed = subprocess.run([*apply, "--reverse", "--check"],
         input=INDIRECTION_FIX_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor,
         capture_output=True).returncode == 0
+    indirection_cpu_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=INDIRECTION_CPU_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor,
+        capture_output=True).returncode == 0
     for patch in patches:
+        if indirection_cpu_applied and patch in (INDIRECTION_PATCH, INDIRECTION_FIX_PATCH, INDIRECTION_CPU_PATCH):
+            continue
         if indirection_fixed and patch in (INDIRECTION_PATCH, INDIRECTION_FIX_PATCH):
             continue
         # The follow-up edits lines inserted by the original render diagnostics patch.
@@ -536,6 +543,9 @@ def frame(args, game, cdk):
                f"-ws:{workspace_name}", project, batch]
     if args.clipmap_feedback == "software":
         command.insert(-2, "-ke-clipmap-software")
+    if args.indirection == "cpu":
+        args.render_debug = True
+        command.insert(-2, "-ke-indirection-cpu")
     if args.render_debug:
         debug_dir = out / "render-debug"
         debug_path = dagor_path(debug_dir)
@@ -593,6 +603,8 @@ def main():
     frame_cmd.add_argument("--render-debug", action="store_true", help="Export terrain and static G-buffer diagnostics")
     frame_cmd.add_argument("--clipmap-feedback", choices=("hardware", "software"), default="hardware",
                            help="Compute terrain tile requests on the GPU or CPU")
+    frame_cmd.add_argument("--indirection", choices=("gpu", "cpu"), default="gpu",
+                           help="Diagnostic CPU table upload after GPU check; cpu enables render-debug")
     args = parser.parse_args()
     try:
         if args.command == "build":

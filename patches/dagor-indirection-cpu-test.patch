@@ -1,0 +1,102 @@
+--- a/prog/gameLibs/landMesh/virtualtexture.cpp
++++ b/prog/gameLibs/landMesh/virtualtexture.cpp
+@@ -45,6 +45,7 @@
+ #include <shaders/dag_dynShaderBuf.h>
+ #include <shaders/dag_computeShaders.h>
+ #include <drv/3d/dag_rwResource.h>
++#include <drv/3d/dag_resUpdateBuffer.h>
+ #include <drv/3d/dag_viewScissor.h>
+ #include <drv/3d/dag_renderTarget.h>
+ #include <drv/3d/dag_draw.h>
+@@ -3061,32 +3062,67 @@
+   if (diagnose)
+   {
+     d3d::set_render_target({}, DepthAccess::RW, {});
+-    const auto pixels = lock_texture<const ImageRawBytes>(currentContext->indirection.getTex2D(), 0, TEXLOCK_READ);
+-    const int bytesPerEntry = enable18bitTags ? 4 : 2;
+-    if (pixels && pixels.getBytesPerElement() != bytesPerEntry)
+-      debug("[KE] INDIRECTION_CHECK format_mismatch expected_bytes=%d actual_bytes=%d", bytesPerEntry,
+-        pixels.getBytesPerElement());
+-    else if (pixels)
+-    {
+-      int mismatches = 0;
+-      for (int y = 0; y < debugHeight; ++y)
+-        for (int x = 0; x < debugWidth; ++x)
++    const auto checkIndirection = [&](const char *source) {
++      const auto pixels = lock_texture<const ImageRawBytes>(currentContext->indirection.getTex2D(), 0, TEXLOCK_READ);
++      const int bytesPerEntry = enable18bitTags ? 4 : 2;
++      if (pixels && pixels.getBytesPerElement() != bytesPerEntry)
++        debug("[KE] INDIRECTION_CHECK format_mismatch expected_bytes=%d actual_bytes=%d", bytesPerEntry,
++          pixels.getBytesPerElement());
++      else if (pixels)
++      {
++        int mismatches = 0;
++        int zeroEntries = 0;
++        for (int y = 0; y < debugHeight; ++y)
++          for (int x = 0; x < debugWidth; ++x)
++          {
++            uint32_t actual = 0;
++            memcpy(&actual, reinterpret_cast<const uint8_t *>(pixels.get()) + y * pixels.getByteStride() + x * bytesPerEntry,
++              bytesPerEntry);
++            zeroEntries += actual == 0;
++            const uint32_t wanted = expected[y * debugWidth + x];
++            if (actual != wanted)
++            {
++              if (mismatches < 8)
++                debug("[KE] INDIRECTION_MISMATCH source=%s x=%d y=%d expected=0x%08x actual=0x%08x", source, x, y, wanted, actual);
++              ++mismatches;
++            }
++          }
++        debug("[KE] INDIRECTION_CHECK source=%s entries=%d mismatches=%d zeros=%d tiles=%d", source,
++          debugWidth * debugHeight, mismatches, zeroEntries, totalUpdated);
++      }
++      else
++        debug("[KE] INDIRECTION_CHECK readback_failed");
++    };
++    checkIndirection("gpu");
++    // Explicit diagnostic override: replay the same rectangles without the CDK filler shader.
++    if (dgs_get_argv("ke-indirection-cpu"))
++    {
++      auto *tex = currentContext->indirection.getTex2D();
++      auto *upload = d3d::allocate_update_buffer_for_tex(tex, 0, 0);
++      bool uploaded = false;
++      if (upload)
++      {
++        char *dst = d3d::get_update_buffer_addr_for_write(upload);
++        const size_t pitch = d3d::get_update_buffer_pitch(upload);
++        const size_t bytes = enable18bitTags ? 4 : 2;
++        const size_t rowBytes = size_t(debugWidth) * bytes;
++        if (dst && pitch >= rowBytes && d3d::get_update_buffer_size(upload) >= pitch * size_t(debugHeight))
+         {
+-          uint32_t actual = 0;
+-          memcpy(&actual, reinterpret_cast<const uint8_t *>(pixels.get()) + y * pixels.getByteStride() + x * bytesPerEntry,
+-            bytesPerEntry);
+-          const uint32_t wanted = expected[y * debugWidth + x];
+-          if (actual != wanted)
+-          {
+-            if (mismatches < 8)
+-              debug("[KE] INDIRECTION_MISMATCH x=%d y=%d expected=0x%08x actual=0x%08x", x, y, wanted, actual);
+-            ++mismatches;
+-          }
++          for (int y = 0; y < debugHeight; ++y)
++            for (int x = 0; x < debugWidth; ++x)
++              memcpy(dst + size_t(y) * pitch + size_t(x) * bytes, &expected[y * debugWidth + x], bytes);
++          uploaded = d3d::update_texture_and_release_update_buffer(upload);
+         }
+-      debug("[KE] INDIRECTION_CHECK entries=%d mismatches=%d tiles=%d", debugWidth * debugHeight, mismatches, totalUpdated);
+-    }
+-    else
+-      debug("[KE] INDIRECTION_CHECK readback_failed");
++        else
++          d3d::release_update_buffer(upload);
++      }
++      debug("[KE] INDIRECTION_CPU_UPLOAD success=%d", uploaded);
++      d3d::resource_barrier({tex, RB_RO_SRV | RB_STAGE_PIXEL | RB_STAGE_COMPUTE, 0, 0});
++      if (uploaded)
++        checkIndirection("cpu_upload");
++      else
++        DAG_FATAL("[KE] Requested CPU indirection upload failed");
++    }
+   }
+ 
+   // static int fullId = 0;
