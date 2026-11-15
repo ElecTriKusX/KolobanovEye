@@ -151,6 +151,11 @@ def analyze(run, dagor=None, game=None):
     warmup = find_lines(text, 'WARMUP')
     add('warmup', ('ok' if 'settled=1' in warmup[-1] else 'warning') if warmup else 'unknown',
         'Warmup status as reported by the engine.', warmup[-1:])
+    native_draws = find_lines(text, '[KE] DX11_DRAW ')
+    native_scopes = find_lines(text, '[KE] DX11_SCOPE ')
+    add('dx11_draw_state', 'ok' if native_draws else ('warning' if native_scopes else 'unknown'),
+        'Native DX11 state for selected draws. Full binding and reflection lines are in the engine log.',
+        [*native_scopes[:12], *native_draws[:12]])
     pass_lines = find_lines(text, 'PASS_CAPTURE')
     add('resolve_passes', 'ok' if pass_lines and all('status=ok' in l for l in pass_lines) else ('warning' if pass_lines else 'unknown'),
         'Raw previews around resolve; channel meaning and color-space conversion are not verified.', pass_lines[-12:])
@@ -228,6 +233,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run', type=Path, required=True, help='Existing frame output directory, including failed runs')
     parser.add_argument('--renderdoc-cli', type=Path, help='renderdoccmd.exe; requires --capture --keep-open')
+    parser.add_argument('--dx11-trace', action='store_true', help='Capture native DX11 draw state; requires --capture')
     parser.add_argument('--keep-open', action='store_true', help='Keep editor open until manually closed (requires --capture)')
     parser.add_argument('--capture', action='store_true', help='Run a new frame first; --run must not exist')
     parser.add_argument('--model', default='pzkpfw_VI_ausf_h1_tiger')
@@ -244,6 +250,8 @@ def main():
         parser.error('Run and diagnostics must be outside the game directory')
     if args.renderdoc_cli and not (args.capture and args.keep_open):
         parser.error('--renderdoc-cli requires --capture --keep-open')
+    if args.dx11_trace and not args.capture:
+        parser.error('--dx11-trace requires --capture')
     if args.keep_open and not args.capture:
         parser.error('--keep-open requires --capture')
     capture_status = None
@@ -258,6 +266,8 @@ def main():
                '--indirection', args.indirection, '--render-debug']
         if args.keep_open:
             cmd.append('--keep-open')
+        if args.dx11_trace:
+            cmd.append('--dx11-trace')
         if args.renderdoc_cli:
             cmd.extend(['--renderdoc-cli', str(args.renderdoc_cli)])
         print('[KE] Starting diagnostic frame...', flush=True)

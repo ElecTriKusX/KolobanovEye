@@ -38,6 +38,7 @@ PATCHES = (
     HERE / "patches/dagor-terrain-bind-diagnostics.patch",
     RESOLVE_PASS_PATCH,
     RESOLVE_FLOAT_PATCH,
+    HERE / "patches/dagor-dx11-terrain-trace.patch",
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -564,6 +565,9 @@ def frame(args, game, cdk):
     if args.indirection == "cpu":
         args.render_debug = True
         command.insert(-2, "-ke-indirection-cpu")
+    if args.dx11_trace:
+        args.render_debug = True
+        command.insert(-2, "-ke-dx11-trace")
     if args.render_debug:
         debug_dir = out / "render-debug"
         debug_path = dagor_path(debug_dir)
@@ -630,6 +634,7 @@ def main():
     frame_cmd.add_argument("--renderdoc-cli", type=Path, help="renderdoccmd.exe; manual GPU capture requires --keep-open")
     frame_cmd.add_argument("--keep-open", action="store_true", help="Keep editor open until window is closed; no process timeout")
     frame_cmd.add_argument("--timeout", type=int, default=360)
+    frame_cmd.add_argument("--dx11-trace", action="store_true", help="Log native DX11 draw state for terrain and clipmap updates")
     frame_cmd.add_argument("--render-debug", action="store_true", help="Export terrain and static G-buffer diagnostics")
     frame_cmd.add_argument("--clipmap-feedback", choices=("hardware", "software"), default="hardware",
                            help="Compute terrain tile requests on the GPU or CPU")

@@ -1,0 +1,258 @@
+--- a/prog/engine/drv/drv3d_DX11/driver.h
++++ b/prog/engine/drv/drv3d_DX11/driver.h
+@@ -243,6 +243,10 @@
+ unsigned get_cached_texformat_uav_usage(uint32_t fmt);
+ // call only after the flush of a real draw or dispatch: other flushes see stale shader and UAV state
+ void check_draw_uav_formats(RenderState &rs);
++#if _TARGET_PC_WIN
++void ke_log_draw_state(RenderState &rs, const char *scope, int draw);
++void ke_trace_draw(RenderState &rs);
++#endif
+ void check_dispatch_uav_formats(RenderState &rs, bool async);
+ #else
+ inline void init_texformat_uav_usage_cache() {}
+--- a/prog/engine/drv/drv3d_DX11/drvmain.cpp
++++ b/prog/engine/drv/drv3d_DX11/drvmain.cpp
+@@ -2121,8 +2121,36 @@
+   s_hModD3D9 = NULL;
+ }
+ 
++#if _TARGET_PC_WIN
++namespace drv3d_dx11
++{
++static thread_local const char *keDrawScope = nullptr;
++static thread_local unsigned keDrawScopeDepth = 0;
++static thread_local int keDrawCount = 0;
++
++void ke_trace_draw(RenderState &rs)
++{
++  if (!keDrawScope)
++    return;
++  ++keDrawCount;
++  if (keDrawCount <= 8)
++    ke_log_draw_state(rs, keDrawScope, keDrawCount);
++}
++} // namespace drv3d_dx11
++#endif
++
+ void d3d::beginEvent(const char *s)
+ {
++#if _TARGET_PC_WIN
++  if (keDrawScope)
++    ++keDrawScopeDepth;
++  else if (strcmp(s, "KE Terrain draw") == 0 || strcmp(s, "KE Clipmap indirection fill") == 0)
++  {
++    keDrawScope = s;
++    keDrawScopeDepth = 1;
++    keDrawCount = 0;
++  }
++#endif
+   push_aftermath_context(s);
+   init_perf_analysis();
+   if (!annotation && !s_DynamicD3DPERF_BeginEvent)
+@@ -2142,6 +2170,13 @@
+ 
+ void d3d::endEvent()
+ {
++#if _TARGET_PC_WIN
++  if (keDrawScope && --keDrawScopeDepth == 0)
++  {
++    debug("[KE] DX11_SCOPE scope=%s draws=%d", keDrawScope, keDrawCount);
++    keDrawScope = nullptr;
++  }
++#endif
+   pop_aftermath_context();
+   if (!annotation && !s_DynamicD3DPERF_EndEvent)
+     return;
+--- a/prog/engine/drv/drv3d_DX11/buffers.cpp
++++ b/prog/engine/drv/drv3d_DX11/buffers.cpp
+@@ -486,6 +486,10 @@
+ 
+   ContextAutoLock contextLock;
+   set_primitive_type_unsafe(rs, prim_type);
++#if DAGOR_DBGLEVEL > 0 && _TARGET_PC_WIN
++  if (num_instances > 0 && numprim > 0)
++    ke_trace_draw(rs);
++#endif
+   if (num_instances > 1 || start_instance > 0)
+   {
+     dx_context->DrawInstanced(nprim_to_nverts(prim_type, numprim), num_instances, start_vertex, start_instance);
+@@ -518,6 +522,10 @@
+   base_vertex = max(0, base_vertex);
+   ContextAutoLock contextLock;
+   set_primitive_type_unsafe(rs, prim_type);
++#if DAGOR_DBGLEVEL > 0 && _TARGET_PC_WIN
++  if (num_instances > 0 && numprim > 0)
++    ke_trace_draw(rs);
++#endif
+   D3D_CONTRACT_ASSERT(num_instances > 0);
+   if (num_instances > 1 || start_instance > 0) // may be we need to render as instanced in some other cases?
+   {
+--- a/prog/engine/drv/drv3d_DX11/shaders.cpp
++++ b/prog/engine/drv/drv3d_DX11/shaders.cpp
+@@ -46,6 +46,10 @@
+ 
+ #include <debug/dag_except.h>
+ #include <d3d11_1.h>
++#if DAGOR_DBGLEVEL > 0 && _TARGET_PC_WIN
++#include <D3Dcompiler.h>
++#include <d3d11shader.h>
++#endif
+ 
+ #include "shaders.h"
+ #include "texture.h"
+@@ -945,6 +949,100 @@
+   }
+ }
+ 
++#if DAGOR_DBGLEVEL > 0 && _TARGET_PC_WIN
++void ke_log_draw_state(RenderState &rs, const char *scope, int draw)
++{
++  PixelShader *ps = rs.nextPixelShader == BAD_FSHADER ? nullptr : g_pixel_shaders[rs.nextPixelShader].obj;
++  const char *name = ps && ps->shaderDebugName ? ps->shaderDebugName.get() : "<unnamed>";
++  ID3D11PixelShader *boundPs = nullptr;
++  dx_context->PSGetShader(&boundPs, nullptr, nullptr);
++  D3D11_VIEWPORT view{};
++  UINT nView = 1;
++  dx_context->RSGetViewports(&nView, &view);
++  ID3D11RenderTargetView *target = nullptr;
++  dx_context->OMGetRenderTargets(1, &target, nullptr);
++  D3D11_RENDER_TARGET_VIEW_DESC rtDesc{};
++  if (target)
++  {
++    target->GetDesc(&rtDesc);
++    target->Release();
++  }
++  ID3D11BlendState *blend = nullptr;
++  dx_context->OMGetBlendState(&blend, nullptr, nullptr);
++  D3D11_BLEND_DESC blendDesc{};
++  if (blend)
++  {
++    blend->GetDesc(&blendDesc);
++    blend->Release();
++  }
++  debug("[KE] DX11_DRAW scope=%s draw=%d ps=%s handle=%d ps_bound=%d ps_matches=%d "
++        "rtv0_dxgi=%u viewport=(%g,%g,%g,%g) write_mask0=0x%x",
++    scope, draw, name, int(rs.nextPixelShader), boundPs != nullptr, ps && ps->shader == boundPs && boundPs != nullptr,
++    unsigned(rtDesc.Format), view.TopLeftX, view.TopLeftY, view.Width, view.Height,
++    blend ? unsigned(blendDesc.RenderTarget[0].RenderTargetWriteMask) : 0xfu);
++  if (boundPs)
++    boundPs->Release();
++
++  ID3D11ShaderResourceView *views[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
++  dx_context->PSGetShaderResources(0, countof(views), views);
++  for (unsigned slot = 0; slot < countof(views); ++slot)
++  {
++    if (!views[slot])
++      continue;
++    D3D11_SHADER_RESOURCE_VIEW_DESC desc{};
++    views[slot]->GetDesc(&desc);
++    char label[256] = {};
++    UINT length = sizeof(label) - 1;
++    if (FAILED(views[slot]->GetPrivateData(WKPDID_D3DDebugObjectName, &length, label)))
++      label[0] = 0;
++    debug("[KE] DX11_SRV scope=%s draw=%d t%u name=%s dxgi=%u dimension=%d", scope, draw, slot,
++      label[0] ? label : "<unnamed>", unsigned(desc.Format), int(desc.ViewDimension));
++    views[slot]->Release();
++  }
++
++  if (!ps)
++    return;
++  static HMODULE compiler = LoadLibraryExW(L"d3dcompiler_47.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
++  const auto reflect = compiler ? reinterpret_cast<decltype(&D3DReflect)>(
++    reinterpret_cast<void *>(GetProcAddress(compiler, "D3DReflect"))) : nullptr;
++  if (!reflect)
++  {
++    debug("[KE] DX11_REFLECT scope=%s draw=%d status=compiler_missing", scope, draw);
++    return;
++  }
++  Tab<uint8_t> scratch(tmpmem);
++  uint32_t byteCount = 0;
++  const void *bytecode = ps->getBytecode(scratch, byteCount, false);
++  ID3D11ShaderReflection *reflection = nullptr;
++  const HRESULT hr = bytecode && byteCount ? reflect(bytecode, byteCount, __uuidof(ID3D11ShaderReflection),
++    reinterpret_cast<void **>(&reflection)) : E_FAIL;
++  if (FAILED(hr) || !reflection)
++  {
++    debug("[KE] DX11_REFLECT scope=%s draw=%d status=unavailable hr=0x%08x", scope, draw, unsigned(hr));
++    return;
++  }
++  D3D11_SHADER_DESC shaderDesc{};
++  if (SUCCEEDED(reflection->GetDesc(&shaderDesc)))
++  {
++    for (UINT i = 0; i < shaderDesc.OutputParameters; ++i)
++    {
++      D3D11_SIGNATURE_PARAMETER_DESC output{};
++      if (SUCCEEDED(reflection->GetOutputParameterDesc(i, &output)))
++        debug("[KE] DX11_PS_OUTPUT scope=%s draw=%d semantic=%s%u register=%u component_type=%d mask=0x%x", scope, draw,
++          output.SemanticName, output.SemanticIndex, output.Register, int(output.ComponentType), unsigned(output.Mask));
++    }
++    for (UINT i = 0; i < shaderDesc.BoundResources; ++i)
++    {
++      D3D11_SHADER_INPUT_BIND_DESC resource{};
++      if (SUCCEEDED(reflection->GetResourceBindingDesc(i, &resource)) && resource.Type == D3D_SIT_TEXTURE)
++        debug("[KE] DX11_PS_INPUT scope=%s draw=%d name=%s t%u count=%u return_type=%d", scope, draw,
++          resource.Name, resource.BindPoint, resource.BindCount, int(resource.ReturnType));
++    }
++  }
++  reflection->Release();
++}
++#endif
++
+ #if DAGOR_DBGLEVEL > 0
+ void check_draw_uav_formats(RenderState &rs)
+ {
+--- a/prog/gameLibs/landMesh/virtualtexture.cpp
++++ b/prog/gameLibs/landMesh/virtualtexture.cpp
+@@ -3054,7 +3054,18 @@
+ 
+   d3d::set_render_target({}, DepthAccess::RW, {{currentContext->indirection.getTex2D(), 0, 0}});
+   d3d::clearview(DISCARD_TARGET, 0xFFFFFFFF, 1.f, 0);
++  static unsigned keFillSamples = 0;
++  const bool traceFill = diagnose && dgs_get_argv("ke-dx11-trace") && keFillSamples < 4;
++  if (traceFill)
++  {
++    ++keFillSamples;
++    debug("[KE] DX11_FILL_REQUEST camera_xz=(%.2f,%.2f) tiles=%d quads=%d",
++      viewerPosition.x, viewerPosition.z, totalUpdated, int((quad - basequad) / 4));
++    d3d::beginEvent("KE Clipmap indirection fill");
++  }
+   constantFillerBuf->unlockDataAndFlush((quad - basequad) / 4);
++  if (traceFill)
++    d3d::endEvent();
+ 
+   currentContext->invalidateIndirection = false;
+   d3d::resource_barrier({currentContext->indirection.getTex2D(), RB_RO_SRV | RB_STAGE_PIXEL | RB_STAGE_COMPUTE, 0, 0});
+--- a/prog/tools/sceneTools/daEditorX/binSceneView/strmLevel.cpp
++++ b/prog/tools/sceneTools/daEditorX/binSceneView/strmLevel.cpp
+@@ -51,6 +51,7 @@
+ #include <drv/3d/dag_renderTarget.h>
+ #include <drv/3d/dag_matricesAndPerspective.h>
+ #include <drv/3d/dag_driverDesc.h>
++#include <drv/3d/dag_driver.h>
+ #include <drv/3d/dag_info.h>
+ #include <drv/3d/dag_resetDevice.h>
+ #include <perfMon/dag_cpuFreq.h>
+@@ -1121,7 +1122,21 @@
+   {
+     LandMeshRenderDesc desc;
+     desc.invGeomLodDist = lmeshRenderer->getInvGeomLodDist();
+-    lmeshRenderer->render(*lmeshMgr, lmeshRenderer->RENDER_WITH_CLIPMAP, desc, ::grs_cur_view.pos, HmapOrigin(::grs_cur_view.pos));
++    static unsigned keTerrainSamples = 0;
++    static Point3 kePreviousCamera(0, 0, 0);
++    const Point3 camera = ::grs_cur_view.pos;
++    const bool traceTerrain = dgs_get_argv("ke-dx11-trace") && keTerrainSamples < 6 &&
++      (keTerrainSamples == 0 || lengthSq(camera - kePreviousCamera) >= 128.f * 128.f);
++    if (traceTerrain)
++    {
++      ++keTerrainSamples;
++      kePreviousCamera = camera;
++      debug("[KE] DX11_TERRAIN_REQUEST sample=%u camera=(%.2f,%.2f,%.2f)", keTerrainSamples, camera.x, camera.y, camera.z);
++      d3d::beginEvent("KE Terrain draw");
++    }
++    lmeshRenderer->render(*lmeshMgr, lmeshRenderer->RENDER_WITH_CLIPMAP, desc, camera, HmapOrigin(camera));
++    if (traceTerrain)
++      d3d::endEvent();
+   }
+   clipmap->endUAVFeedback();
+   clipmap->copyUAVFeedback();
