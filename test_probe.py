@@ -1,7 +1,11 @@
 import struct
+import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 from zlib import compress, crc32
 
 import kolobanoveye as probe
@@ -78,6 +82,42 @@ class ProbeTest(unittest.TestCase):
         result = probe.inspect(self.root, self.root / "WarThunderCDK")
         self.assertFalse(result["errors"])
         self.assertFalse(result["files"][str(self.root / probe.DXP)]["present"])
+
+    def test_large_oodle_quanta_report_restarts_and_tail(self):
+        fill_quantum = bytes.fromhex("8c0c07ffff2a")
+        size = 0x40000 + 32
+        self.assertEqual(probe.inspect_large_oodle_quanta(fill_quantum * 2, size), {
+            "count": 2, "packed_bytes_left": 0, "restart_offsets": [0, 6],
+        })
+        self.assertEqual(probe.inspect_large_oodle_quanta(fill_quantum * 2 + b"x", size)["packed_bytes_left"], 1)
+        self.assertEqual(probe.inspect_large_oodle_quanta(fill_quantum + fill_quantum[:-1], size), {
+            "error": "Truncated quantum payload", "packed_offset": 6,
+        })
+
+    def test_unoodle_requires_actual_decoded_byte_count(self):
+        exe = self.write("unoodle.exe", b"")
+        self.write(probe.LEVEL, b"")
+        payload = bytes.fromhex("8c0c07ffff2a")
+        meta = {"expected_bytes": 8, "first_stream_type": "Leviathan"}
+        for reported in (8, 4):
+            def run(command, **_):
+                self.assertEqual(command[0], exe)
+                self.assertEqual(command[2:4], ["--length", "8"])
+                self.assertEqual(command[1].read_bytes(), payload)
+                self.assertEqual(command[4], "--output")
+                command[5].write_bytes(b"*" * 8)
+                return subprocess.CompletedProcess(command, 0, f"Extracted {reported} bytes\n".encode(), b"")
+
+            output = StringIO()
+            with (self.subTest(reported=reported), redirect_stdout(output),
+                  patch.object(probe, "read_normandy_lightmap", side_effect=lambda _: (meta.copy(), payload)),
+                  patch.object(probe.subprocess, "run", side_effect=run)):
+                if reported == 8:
+                    probe.probe_ooz(self.root, exe, unoodle=True)
+                    self.assertIn("OOZ_LIGHTMAP_OK", output.getvalue())
+                else:
+                    with self.assertRaisesRegex(ValueError, "expected decoded byte count"):
+                        probe.probe_ooz(self.root, exe, unoodle=True)
 
     def test_incompatible_shader_version_is_reported(self):
         path = self.write("tools.ps50.shdump.bin", b"VSPSdump10.2")

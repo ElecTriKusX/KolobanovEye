@@ -127,6 +127,20 @@ python .\kolobanoveye.py probe-ooz --game D:\Games\WarThunder --ooz-exe D:\Proje
 удаляются, карта открывается только для чтения. Контрольная сумма позволяет
 сравнить результаты повторных запусков. Успешный тест покрывает одну lightmap.
 
+Если `ooz.exe` возвращает `decompress error` для Leviathan, можно проверить
+тот же поток через CLI Rust-декодера `oozextract` 0.5.7. При установленном
+Rust/Cargo выполните в PowerShell:
+
+```powershell
+cargo install oozextract --version 0.5.7 --locked --features cli,verbose_errors --root D:\Projects\ke-decoders
+python .\kolobanoveye.py probe-ooz --game D:\Games\WarThunder --unoodle-exe D:\Projects\ke-decoders\bin\unoodle.exe
+```
+
+JSON содержит число крупных квантов и смещения перезапуска декодера
+относительно начала Oodle-потока. `decoder=unoodle` в `OOZ_LIGHTMAP_OK`
+подтверждает распаковку Rust-декодером. Для запуска кадра с этим декодером
+понадобится отдельная интеграция с Dagor. `build --ooz` выбирает C++ `ooz`.
+
 Если `rev-parse` вернул ошибку или другой коммит, подготовьте отдельный checkout
 и передайте `--ooz D:\Projects\ooz-src` в команду сборки ниже. Для
 `probe-ooz` можно использовать уже собранный `ooz.exe`.

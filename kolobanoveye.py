@@ -268,31 +268,80 @@ def read_normandy_lightmap(path):
     raise ValueError("Embedded avg_normandy_lightmap DDSx not found")
 
 
-def probe_ooz(game, ooz_exe):
-    executable = require_file(ooz_exe.resolve())
+def inspect_large_oodle_quanta(data, decoded_size):
+    """Inspect framing for Kraken, Mermaid/Selkie and Leviathan without decoding."""
+    stride = 0x40000
+    offset = 0
+    restarts = []
+    for output_offset in range(0, decoded_size, stride):
+        block_offset = offset
+        size = min(stride, decoded_size - output_offset)
+        if offset + 2 > len(data):
+            return {"error": "Truncated block header", "packed_offset": block_offset}
+        mode, codec = data[offset:offset + 2]
+        if mode & 0x3F != 0x0C or codec & 0x7F not in (6, 10, 12):
+            return {"error": "Expected a large-quantum Oodle header", "packed_offset": block_offset}
+        if mode & 0x80:
+            restarts.append(block_offset)
+        offset += 2
+        if not mode & 0x40:
+            if offset + 3 > len(data):
+                return {"error": "Truncated quantum header", "packed_offset": block_offset}
+            header = int.from_bytes(data[offset:offset + 3], "big")
+            offset += 3
+            packed_size = (header & 0x3FFFF) + 1
+            if packed_size == stride:
+                if header >> 18 != 1:
+                    return {"error": "Unsupported special quantum", "packed_offset": block_offset}
+                size = 1
+            elif packed_size > size:
+                return {"error": "Compressed quantum exceeds its output size", "packed_offset": block_offset}
+            else:
+                size = packed_size + (3 if codec & 0x80 else 0)
+        offset += size
+        if offset > len(data):
+            return {"error": "Truncated quantum payload", "packed_offset": block_offset}
+    return {"count": (decoded_size + stride - 1) // stride, "packed_bytes_left": len(data) - offset,
+            "restart_offsets": restarts}
+
+
+def probe_ooz(game, executable, unoodle=False):
+    executable = require_file(executable.resolve())
     meta, data = read_normandy_lightmap(require_file(game / LEVEL))
+    if data[1] & 0x7F in (6, 10, 12):
+        meta["large_quanta"] = inspect_large_oodle_quanta(data, meta["expected_bytes"])
     print(json.dumps(meta, ensure_ascii=False), flush=True)
     if data[0] & 0x3F != 0x0C or meta["first_stream_type"] == "unsupported":
         raise ValueError("Unsupported Oodle stream header")
     if data[1] & 0x80:
-        raise ValueError("ooz does not implement Oodle quantum checksums")
+        raise ValueError("These CLI decoders do not implement Oodle quantum checksums")
+    decoder = "unoodle" if unoodle else "ooz"
     with tempfile.TemporaryDirectory(prefix="ke-ooz-probe-") as temporary:
         work = Path(temporary)
         packed = work / "lightmap.ooz"
         unpacked = work / "lightmap.raw"
-        packed.write_bytes(struct.pack("<Q", meta["expected_bytes"]) + data)
-        run = subprocess.run([executable, "-d", packed, unpacked], cwd=work, capture_output=True, timeout=60)
+        if unoodle:
+            packed.write_bytes(data)
+            command = [executable, packed, "--length", str(meta["expected_bytes"]), "--output", unpacked, "--verbose"]
+        else:
+            packed.write_bytes(struct.pack("<Q", meta["expected_bytes"]) + data)
+            command = [executable, "-d", packed, unpacked]
+        run = subprocess.run(command, cwd=work, capture_output=True, timeout=60)
+        detail = (run.stdout + run.stderr).decode(errors="replace").strip()
         if run.returncode:
-            detail = (run.stdout + run.stderr).decode(errors="replace").strip()
-            raise ValueError(f"ooz exited with {run.returncode} while decoding the lightmap: {detail}")
+            raise ValueError(f"{decoder} exited with {run.returncode} while decoding the lightmap: {detail}")
+        if unoodle and f'Extracted {meta["expected_bytes"]} bytes' not in detail.splitlines():
+            raise ValueError(f"unoodle did not report the expected decoded byte count: {detail}")
+        if meta.get("large_quanta", {}).get("packed_bytes_left", 0):
+            raise ValueError("Oodle stream contains bytes after the last declared quantum")
         size = unpacked.stat().st_size
         if size != meta["expected_bytes"]:
-            raise ValueError(f"ooz produced {size} bytes, expected {meta['expected_bytes']}")
+            raise ValueError(f"{decoder} produced {size} bytes, expected {meta['expected_bytes']}")
         with unpacked.open("rb") as decoded:
             digest = hashlib.sha256()
             for chunk in iter(lambda: decoded.read(1024 * 1024), b""):
                 digest.update(chunk)
-    print(f"[KE] OOZ_LIGHTMAP_OK {size} bytes sha256={digest.hexdigest()}")
+    print(f"[KE] OOZ_LIGHTMAP_OK {size} bytes sha256={digest.hexdigest()} decoder={decoder}")
 
 
 def stage_ooz_sources(ooz, work):
@@ -463,9 +512,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     build_cmd, inspect_cmd, frame_cmd = (commands.add_parser(name) for name in ("build", "inspect", "frame"))
-    ooz_cmd = commands.add_parser("probe-ooz", help="Decode Normandy's embedded lightmap with the local ooz.exe")
+    ooz_cmd = commands.add_parser("probe-ooz", help="Decode Normandy's embedded lightmap with a local decoder")
     ooz_cmd.add_argument("--game", type=Path, default=Path(r"D:\Games\WarThunder"))
-    ooz_cmd.add_argument("--ooz-exe", type=Path, required=True)
+    decoders = ooz_cmd.add_mutually_exclusive_group(required=True)
+    decoders.add_argument("--ooz-exe", type=Path, help="powzix/ooz executable")
+    decoders.add_argument("--unoodle-exe", type=Path, help="oozextract unoodle executable")
     build_cmd.add_argument("--ooz", type=lambda path: Path(path).resolve(), help="Local powzix/ooz checkout for decode-only daKernel")
     for command in (build_cmd, frame_cmd):
         command.add_argument("--dagor", type=lambda path: Path(path).resolve(), required=True)
@@ -488,7 +539,7 @@ def main():
         if args.command == "build":
             build(args.dagor, args.ooz)
         elif args.command == "probe-ooz":
-            probe_ooz(args.game.resolve(), args.ooz_exe)
+            probe_ooz(args.game.resolve(), args.unoodle_exe or args.ooz_exe, unoodle=args.unoodle_exe is not None)
         else:
             game = args.game.resolve()
             cdk = args.cdk.resolve() if args.cdk else (game / "WarThunderCDK").resolve()
