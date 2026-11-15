@@ -1,0 +1,41 @@
+--- a/prog/tools/sceneTools/daEditorX/services/dynRenderSrv/dynRender.cpp
++++ b/prog/tools/sceneTools/daEditorX/services/dynRenderSrv/dynRender.cpp
+@@ -838,6 +838,18 @@
+     curView.itm = orthonormalized_inverse(curView.tm);
+     curView.pos = curView.itm.getcol(3);
+ 
++    // Offscreen capture can run without the viewport's beforeDrawScene callback.
++    unsigned int pendingTexCount = 0;
++    if (isEnviProbeUpdatePending() && isDaSkiesTexReady() &&
++        (!EDITORCORE->getPendingTextureLoadTotalCount(pendingTexCount) || pendingTexCount == 0))
++    {
++      ScopeViewProjMatrix scopeViewProj;
++      updateEnviProbe();
++      reqEnviProbeUpdate = false;
++      d3d::set_render_target(rt);
++      d3d::setview(viewportX, viewportY, viewportW, viewportH, viewportMinZ, viewportMaxZ);
++    }
++
+     bool rt_ready = (sceneRt && viewportW == targetW && viewportH == targetH && sceneFmt == hdr_render_format);
+     updateBackBufSize(viewportW, viewportH);
+ 
+@@ -901,11 +913,14 @@
+ 
+       IEditorCoreEngine::get()->renderObjects();
+       IEditorCoreEngine::get()->renderTransObjects(rt.getColor(0).tex);
+-      ec_camera_elem::freeCameraElem->render();
+-      ec_camera_elem::maxCameraElem->render();
+-      ec_camera_elem::fpsCameraElem->render();
+-      ec_camera_elem::tpsCameraElem->render();
+-      ec_camera_elem::carCameraElem->render();
++      if (!force_disable_wireframe)
++      {
++        ec_camera_elem::freeCameraElem->render();
++        ec_camera_elem::maxCameraElem->render();
++        ec_camera_elem::fpsCameraElem->render();
++        ec_camera_elem::tpsCameraElem->render();
++        ec_camera_elem::carCameraElem->render();
++      }
+     }
+ 
+     d3d_err(d3d::set_render_target(rt));

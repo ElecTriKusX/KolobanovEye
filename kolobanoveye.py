@@ -18,6 +18,7 @@ PATCHES = (
     HERE / "patches/dagor-phase0.patch",
     HERE / "patches/dagor-editor-unused-parameters.patch",
     HERE / "patches/dagor-clipmap-render-mask.patch",
+    HERE / "patches/dagor-screenshot-lighting.patch",
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
