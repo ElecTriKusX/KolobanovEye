@@ -58,6 +58,7 @@ class App:
         ttk.Button(buttons, text='Сохранить настройки', command=self.save_config).pack(side='left')
         ttk.Button(buttons, text='Проверить серию', command=self.check_run).pack(side='left', padx=5)
         ttk.Button(buttons, text='Рамки', command=self.preview_run).pack(side='left')
+        ttk.Button(buttons, text='COCO', command=self.coco_run).pack(side='left', padx=5)
         self.state = tk.StringVar(value='Готово')
         ttk.Label(main, textvariable=self.state).pack(anchor='w')
         self.log = tk.Text(main, height=12, wrap='word', state='disabled')
@@ -124,6 +125,15 @@ class App:
         out = filedialog.asksaveasfilename(title='Укажите новую папку для копий с рамками')
         if out:
             self.start_tool('ke_review.py', ['--run', run, '--out', out])
+
+    def coco_run(self):
+        run = self.values['output'].get().strip()
+        if not run:
+            messagebox.showerror('Ошибка', 'Укажите папку серии.'); return
+        out = filedialog.asksaveasfilename(title='Укажите новую папку для COCO JSON')
+        if out:
+            messagebox.showinfo('COCO', 'Будет экспортирован приблизительный bbox. Видимость не проверена. Исходные кадры не копируются.')
+            self.start_tool('ke_coco.py', ['--runs', run, '--out', out])
 
     def start_tool(self, script, arguments):
         if self.running: return
