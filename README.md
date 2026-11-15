@@ -231,3 +231,19 @@ python .\kolobanoveye.py frame --dagor D:\Projects\DagorEngine --game D:\Games\W
 `daKernel-dev.dll` остаются у пользователя. При распространении сборки с
 `ooz` нужно выполнить условия GPL для распространяемого результата.
 [Исходники и лицензия ooz](https://github.com/powzix/ooz/blob/05038060aa68f9187ae9923b2388ca8db40e58d1/kraken.cpp)
+
+## Диагностика рендера
+
+`ke_diagnose.py` запускает кадр с диагностикой или анализирует существующий каталог, в том числе после неудачного запуска. Дополнительные пакеты Python не требуются. Игра используется только для чтения. Для нового запуска требуется новая папка `--run`.
+
+```powershell
+python .\ke_diagnose.py --capture `
+  --run D:\Projects\ke-diagnostic-01 `
+  --dagor D:\Projects\DagorEngine `
+  --game D:\Games\WarThunder `
+  --ooz-exe D:\Projects\ooz\x64\Release\ooz.exe
+```
+
+Без `--capture` анализируется предыдущий каталог. Пример: `python .\ke_diagnose.py --run D:\Projects\ke-run-15 --dagor D:\Projects\DagorEngine --game D:\Games\WarThunder`. Для другой позиции добавьте `--tank-xz 128 64`; `--indirection gpu` отключает экспериментальную CPU-запись. `--ooz-exe` запускает отдельную проверку одного блока lightmap и является необязательным.
+
+Результат: `diagnostics\report.md`, `report.json` и `diagnostics.zip`. Архив содержит логи, параметры и изображения, но не содержит игровых архивов. В нём могут присутствовать локальные пути и сведения о системе; просмотрите перед отправкой. Анализ показателей пикселей охватывает весь кадр, а не маску земли. Успешное чтение глобальных shader variables не подтверждает фактическое состояние GPU-регистров или совместимость шейдеров. Для GPU-захвата нужен отдельный графический отладчик.
