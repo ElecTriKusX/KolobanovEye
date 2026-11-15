@@ -14,13 +14,16 @@ import tempfile
 
 REV = "9639942de5a8e5b01d91977f60ed82cda22d5f41"
 HERE = Path(__file__).resolve().parent
+RENDER_DEBUG_PATCH = HERE / "patches/dagor-render-debug.patch"
+DIRECT_DEPTH_PATCH = HERE / "patches/dagor-direct-debug-depth.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
     HERE / "patches/dagor-editor-unused-parameters.patch",
     HERE / "patches/dagor-clipmap-render-mask.patch",
     HERE / "patches/dagor-screenshot-lighting.patch",
     HERE / "patches/dagor-terrain-draw.patch",
-    HERE / "patches/dagor-render-debug.patch",
+    RENDER_DEBUG_PATCH,
+    DIRECT_DEPTH_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -413,7 +416,13 @@ def build(dagor, ooz=None):
         raise ValueError("jam.exe missing from PATH. Run Dagor make_devtools.py first.")
     apply = ["git", "apply", "--whitespace=error-all"]
     patches = (*PATCHES, OOZ_PATCH) if ooz else PATCHES
+    direct_depth_diff = DIRECT_DEPTH_PATCH.read_bytes().replace(b"\r\n", b"\n")
+    direct_depth_applied = subprocess.run([*apply, "--reverse", "--check"], input=direct_depth_diff, cwd=dagor,
+                                          capture_output=True).returncode == 0
     for patch in patches:
+        # The follow-up edits lines inserted by the original render diagnostics patch.
+        if direct_depth_applied and patch in (RENDER_DEBUG_PATCH, DIRECT_DEPTH_PATCH):
+            continue
         # Git for Windows may have checked out the patch as CRLF. Keep strict
         # whitespace validation and pass the original diff with LF endings.
         diff = patch.read_bytes().replace(b"\r\n", b"\n")

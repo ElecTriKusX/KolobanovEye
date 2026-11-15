@@ -1,0 +1,85 @@
+--- a/prog/tools/sceneTools/daEditorX/services/dynRenderSrv/dynRender.cpp
++++ b/prog/tools/sceneTools/daEditorX/services/dynRenderSrv/dynRender.cpp
+@@ -1390,7 +1390,7 @@
+     if (!renderMatrixOk)
+       return;
+ 
+-    renderGeomOpaque(render_debug_dir, deferredTarget, resolvedDepth.getTex2D());
++    renderGeomOpaque(render_debug_dir, deferredTarget);
+ 
+     deferredTarget->setRt(DepthAccess::SampledRO);
+     renderGeomDeferredDecals();
+@@ -1673,29 +1673,18 @@
+     if (thermalOn)
+       ShaderGlobal::set_float4(earthColorVarId, oldEarthColor);
+   }
+-  void dumpStaticGeometry(const char *dir, DeferredRenderTarget &target, Texture *depthCopy)
++  void dumpStaticGeometry(const char *dir, DeferredRenderTarget &target)
+   {
+-    static int depthVar = get_shader_variable_id("intz_depth_tex", true);
+-    if (!depthCopy || !VariableMap::isGlobVariablePresent(depthVar))
+-    {
+-      debug("[KE] RENDER_DEBUG static depth unavailable");
+-      return;
+-    }
+-
+     int x, y, width, height;
+     float minZ, maxZ;
+     d3d::getview(x, y, width, height, minZ, maxZ);
+-    const TEXTUREID oldDepth = ShaderGlobal::get_tex(depthVar);
+-    d3d::set_render_target({}, DepthAccess::RW, {{depthCopy, 0, 0}});
+-    ShaderGlobal::set_texture(depthVar, target.getDepthId());
+-    resolvedDepthRenderer.render();
+-    ShaderGlobal::set_texture(depthVar, oldDepth);
+     d3d::set_render_target();
+ 
+     Texture *albedo = target.getRt(0);
+-    TextureInfo albedoInfo;
++    TextureInfo albedoInfo{};
++    const bool hasAlbedo = albedo && albedo->getinfo(albedoInfo);
+     bool colorSaved = false;
+-    if (albedo && albedo->getinfo(albedoInfo) && (albedoInfo.cflg & TEXFMT_MASK) == TEXFMT_A8R8G8B8)
++    if (hasAlbedo && (albedoInfo.cflg & TEXFMT_MASK) == TEXFMT_A8R8G8B8)
+     {
+       const auto color = lock_texture<const TexPixel32>(albedo, 0, TEXLOCK_READ);
+       if (color)
+@@ -1705,8 +1694,13 @@
+ 
+     bool depthSaved = false;
+     unsigned covered = 0, total = 0;
++    Texture *depthTarget = target.getDepth();
++    TextureInfo depthInfo{};
++    const bool hasDepth = depthTarget && depthTarget->getinfo(depthInfo);
++    if (hasDepth && (depthInfo.cflg & TEXFMT_MASK) == TEXFMT_DEPTH32)
+     {
+-      const auto depth = lock_texture<const float>(depthCopy, 0, TEXLOCK_READ);
++      // DX11 supports reading D32 directly, as used by PixelPerfectSelection.
++      const auto depth = lock_texture<const float>(depthTarget, 0, TEXLOCK_READ);
+       if (depth)
+       {
+         const unsigned w = depth.getWidthInElems(), h = depth.getHeightInElems();
+@@ -1731,11 +1725,12 @@
+     }
+     target.setRt();
+     d3d::setview(x, y, width, height, minZ, maxZ);
+-    debug("[KE] RENDER_DEBUG static_albedo=%d static_depth_mask=%d covered=%u/%u", colorSaved, depthSaved, covered, total);
++    debug("[KE] RENDER_DEBUG static_albedo=%d static_depth_mask=%d covered=%u/%u albedo_fmt=%d depth_fmt=%d",
++      colorSaved, depthSaved, covered, total, hasAlbedo ? int(albedoInfo.cflg & TEXFMT_MASK) : -1,
++      hasDepth ? int(depthInfo.cflg & TEXFMT_MASK) : -1);
+   }
+ 
+-  void renderGeomOpaque(const char *render_debug_dir = nullptr, DeferredRenderTarget *debug_target = nullptr,
+-    Texture *debug_depth = nullptr)
++  void renderGeomOpaque(const char *render_debug_dir = nullptr, DeferredRenderTarget *debug_target = nullptr)
+   {
+     TIME_D3D_PROFILE_NAME(render_vsm, "render_opaque");
+     windEffect.setShaderVars(curView.itm);
+@@ -1743,7 +1738,7 @@
+     for (int i = 0; i < rendSrv.size(); i++)
+       rendSrv[i]->renderGeometry(IRenderingService::STG_RENDER_STATIC_OPAQUE);
+     if (render_debug_dir && *render_debug_dir && debug_target)
+-      dumpStaticGeometry(render_debug_dir, *debug_target, debug_depth);
++      dumpStaticGeometry(render_debug_dir, *debug_target);
+     for (int i = 0; i < rendSrv.size(); i++)
+       rendSrv[i]->renderGeometry(IRenderingService::STG_RENDER_DYNAMIC_OPAQUE);
+ 
