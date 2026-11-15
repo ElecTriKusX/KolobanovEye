@@ -20,6 +20,7 @@ INDIRECTION_PATCH = HERE / "patches/dagor-indirection-check.patch"
 INDIRECTION_FIX_PATCH = HERE / "patches/dagor-indirection-readback-fix.patch"
 INDIRECTION_CPU_PATCH = HERE / "patches/dagor-indirection-cpu-test.patch"
 RESOLVE_PASS_PATCH = HERE / "patches/dagor-resolve-pass-capture.patch"
+RESOLVE_FLOAT_PATCH = HERE / "patches/dagor-resolve-float-capture.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
     HERE / "patches/dagor-editor-unused-parameters.patch",
@@ -36,6 +37,7 @@ PATCHES = (
     INDIRECTION_CPU_PATCH,
     HERE / "patches/dagor-terrain-bind-diagnostics.patch",
     RESOLVE_PASS_PATCH,
+    RESOLVE_FLOAT_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -440,7 +442,12 @@ def build(dagor, ooz=None):
     resolve_pass_applied = subprocess.run([*apply, "--reverse", "--check"],
         input=RESOLVE_PASS_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor,
         capture_output=True).returncode == 0
+    resolve_float_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=RESOLVE_FLOAT_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor,
+        capture_output=True).returncode == 0
     for patch in patches:
+        if resolve_float_applied and patch in (RENDER_DEBUG_PATCH, DIRECT_DEPTH_PATCH, RESOLVE_PASS_PATCH, RESOLVE_FLOAT_PATCH):
+            continue
         if resolve_pass_applied and patch in (RENDER_DEBUG_PATCH, DIRECT_DEPTH_PATCH, RESOLVE_PASS_PATCH):
             continue
         if indirection_cpu_applied and patch in (INDIRECTION_PATCH, INDIRECTION_FIX_PATCH, INDIRECTION_CPU_PATCH):
@@ -531,7 +538,7 @@ def frame(args, game, cdk):
         entries.append(f'eye:p3={numbers(args.eye)}')
     config.write_text("\n".join(entries) + "\n", encoding="ascii")
     batch = out / "probe.dcmd"
-    batch.write_text(f"wait.frame 8\nkolobanoveye.frame {dagor_path(config)}\nexit no\n", encoding="ascii")
+    batch.write_text(f"wait.frame 8\nkolobanoveye.frame {dagor_path(config)}\n" + ("" if args.keep_open else "exit no\n"), encoding="ascii")
 
     # Use a named workspace to avoid duplicate matches for the same application.blk.
     local = editor.parent.parent / ".local"
@@ -549,6 +556,9 @@ def frame(args, game, cdk):
                f"-rootdir:{dagor_path(out)}", f"-addpath:{dagor_path(game)}", f"-addpath:{dagor_path(cdk)}",
                "-enable:Scene view", "-disable:Landscape", r"-exclude_dll_re:heightmapLand-aces-dev\.dll$",
                f"-ws:{workspace_name}", project, batch]
+    if args.keep_open:
+        command.remove("-quiet")
+        print("[KE] Editor remains open. Close its window to finalize the frame and report.", flush=True)
     if args.clipmap_feedback == "software":
         command.insert(-2, "-ke-clipmap-software")
     if args.indirection == "cpu":
@@ -559,14 +569,24 @@ def frame(args, game, cdk):
         debug_path = dagor_path(debug_dir)
         debug_dir.mkdir()
         command.insert(-2, f"-ke-render-debug:{debug_path}")
+    if args.renderdoc_cli:
+        if not args.keep_open:
+            raise ValueError("--renderdoc-cli requires --keep-open")
+        cli = require_file(args.renderdoc_cli.resolve())
+        command = [cli, "capture", "--wait-for-exit", "--capture-file", str(out / "gpu-capture"), *command]
+        print("[KE] RenderDoc active: focus the editor and press its configured capture hotkey; close the editor afterward.", flush=True)
     try:
-        run_logged(command, out / "host-stdout.log", out, args.timeout)
+        run_logged(command, out / "host-stdout.log", out, None if args.keep_open else args.timeout)
     except (ValueError, subprocess.TimeoutExpired) as exc:
         raise ValueError(editor_failure(out, str(exc))) from exc
     error_log = out / "probe.dcmd.err"
     if error_log.is_file():
         raise ValueError(editor_failure(out, f"Dagor reported errors. See {error_log}."))
-    log = require_file(out / "probe.dcmd.log").read_text(encoding="utf-8", errors="replace")
+    log_path = out / "probe.dcmd.log"
+    if args.keep_open and not log_path.is_file():
+        debug_logs = sorted((out / ".logs").glob("daEditor3x-dev.exe-*/debug"), key=lambda p: p.stat().st_mtime)
+        log_path = debug_logs[-1] if debug_logs else log_path
+    log = require_file(log_path).read_text(encoding="utf-8", errors="replace")
     for marker in ("MAP_OK", "MODEL_OK", "CAMERA_OK", "FRAME_OK"):
         if f"[KE] {marker}" not in log:
             raise ValueError(f"{marker} missing from probe.dcmd.log")
@@ -607,6 +627,8 @@ def main():
     frame_cmd.add_argument("--fov", type=float, default=55)
     frame_cmd.add_argument("--width", type=int, default=1280)
     frame_cmd.add_argument("--height", type=int, default=720)
+    frame_cmd.add_argument("--renderdoc-cli", type=Path, help="renderdoccmd.exe; manual GPU capture requires --keep-open")
+    frame_cmd.add_argument("--keep-open", action="store_true", help="Keep editor open until window is closed; no process timeout")
     frame_cmd.add_argument("--timeout", type=int, default=360)
     frame_cmd.add_argument("--render-debug", action="store_true", help="Export terrain and static G-buffer diagnostics")
     frame_cmd.add_argument("--clipmap-feedback", choices=("hardware", "software"), default="hardware",

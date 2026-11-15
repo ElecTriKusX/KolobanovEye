@@ -1,0 +1,52 @@
+--- a/prog/tools/sceneTools/daEditorX/services/dynRenderSrv/dynRender.cpp
++++ b/prog/tools/sceneTools/daEditorX/services/dynRenderSrv/dynRender.cpp
+@@ -1,5 +1,6 @@
+ // Copyright (C) Gaijin Games KFT.  All rights reserved.
+ 
++#include <cmath>
+ #include <de3_dynRenderService.h>
+ #include <de3_skiesService.h>
+ #include <EditorCore/ec_imguiInitialization.h>
+@@ -1701,7 +1702,7 @@
+       return;
+     }
+     const unsigned fmt = info.cflg & TEXFMT_MASK;
+-    if (fmt != TEXFMT_A8R8G8B8 && fmt != TEXFMT_A2B10G10R10)
++    if (fmt != TEXFMT_A8R8G8B8 && fmt != TEXFMT_A2B10G10R10 && fmt != TEXFMT_R11G11B10F)
+     {
+       debug("[KE] PASS_CAPTURE name=%s status=unsupported format=0x%08x", name, fmt);
+       return;
+@@ -1722,6 +1723,24 @@
+       {
+         if (fmt == TEXFMT_A8R8G8B8)
+           out[y*w+x].u = row[x] | 0xff000000u;
++        else if (fmt == TEXFMT_R11G11B10F)
++        {
++          const uint32_t v = row[x];
++          const auto unpack = [](uint32_t bits, int mantissaBits) -> unsigned char {
++            const uint32_t exponent = bits >> mantissaBits;
++            const uint32_t mantissa = bits & ((1u << mantissaBits) - 1u);
++            if (exponent == 31u)
++              return mantissa ? 0 : 255; // NaN = 0, +Inf = 1 for this clamped preview.
++            const float value = exponent == 0u ? std::ldexp(float(mantissa), 1 - 15 - mantissaBits)
++                                              : std::ldexp(float((1u << mantissaBits) + mantissa), int(exponent) - 15 - mantissaBits);
++            return (unsigned char)(min(1.f, max(0.f, value)) * 255.f + 0.5f);
++          };
++          TexPixel32 &p = out[y*w+x];
++          p.r = unpack(v & 0x7ffu, 6);
++          p.g = unpack((v >> 11) & 0x7ffu, 6);
++          p.b = unpack((v >> 22) & 0x3ffu, 5);
++          p.a = 255;
++        }
+         else
+         {
+           const uint32_t v = row[x];
+@@ -1734,7 +1753,7 @@
+       }
+     }
+     const bool saved = save_png32(String(0, "%s/%s.png", dir, name), out.data(), w, h, w * sizeof(TexPixel32), nullptr, 0, false);
+-    debug("[KE] PASS_CAPTURE name=%s status=%s format=0x%08x size=%dx%d raw_preview=1", name, saved ? "ok" : "save_failed", fmt, w, h);
++    debug("[KE] PASS_CAPTURE name=%s status=%s format=0x%08x size=%dx%d raw_preview=1 float_clamped=%d", name, saved ? "ok" : "save_failed", fmt, w, h, fmt == TEXFMT_R11G11B10F);
+   }
+ 
+   void dumpStaticGeometry(const char *dir, DeferredRenderTarget &target)

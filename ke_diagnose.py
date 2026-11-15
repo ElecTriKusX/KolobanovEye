@@ -121,7 +121,7 @@ def analyze(run, dagor=None, game=None):
     batch = run / 'probe.dcmd.log'
     batch_text = batch.read_text(encoding='utf-8', errors='replace') if batch.is_file() and batch.stat().st_size <= LOG_LIMIT else ''
     for marker in ('MAP_OK', 'MODEL_OK', 'CAMERA_OK', 'FRAME_OK'):
-        lines = find_lines(batch_text, '[KE] ' + marker)
+        lines = find_lines(batch_text, '[KE] ' + marker) or find_lines(text, '[KE] ' + marker)
         add(marker.lower(), 'ok' if lines else 'unknown', 'Marker found.' if lines else 'Marker missing; inspect host and batch logs.', lines[:2])
     frame = run / 'frame.png'
     add('frame_file', 'ok' if frame.is_file() else 'unknown', 'Frame file exists; image validity is checked separately.' if frame.is_file() else 'No completed frame found.')
@@ -227,6 +227,8 @@ def write_outputs(run, report):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run', type=Path, required=True, help='Existing frame output directory, including failed runs')
+    parser.add_argument('--renderdoc-cli', type=Path, help='renderdoccmd.exe; requires --capture --keep-open')
+    parser.add_argument('--keep-open', action='store_true', help='Keep editor open until manually closed (requires --capture)')
     parser.add_argument('--capture', action='store_true', help='Run a new frame first; --run must not exist')
     parser.add_argument('--model', default='pzkpfw_VI_ausf_h1_tiger')
     parser.add_argument('--skeleton', default='pzkpfw_VI_ausf_h1_tiger_skeleton')
@@ -240,6 +242,10 @@ def main():
     run = args.run.resolve()
     if args.game and (run == args.game.resolve() or run.is_relative_to(args.game.resolve())):
         parser.error('Run and diagnostics must be outside the game directory')
+    if args.renderdoc_cli and not (args.capture and args.keep_open):
+        parser.error('--renderdoc-cli requires --capture --keep-open')
+    if args.keep_open and not args.capture:
+        parser.error('--keep-open requires --capture')
     capture_status = None
     if args.capture:
         if not args.dagor or not args.game:
@@ -250,6 +256,10 @@ def main():
                '--game', str(args.game), '--out', str(run), '--model', args.model, '--skeleton', args.skeleton,
                '--tank-xz', str(args.tank_xz[0]), str(args.tank_xz[1]), '--clipmap-feedback', args.clipmap_feedback,
                '--indirection', args.indirection, '--render-debug']
+        if args.keep_open:
+            cmd.append('--keep-open')
+        if args.renderdoc_cli:
+            cmd.extend(['--renderdoc-cli', str(args.renderdoc_cli)])
         print('[KE] Starting diagnostic frame...', flush=True)
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace')
         capture_lines = []
@@ -289,6 +299,8 @@ def main():
         print(f"[KE] {c['status'].upper():7} {c['name']}: {c['detail']}")
     print(f'[KE] REPORT {dest / "report.md"}')
     print(f'[KE] BUNDLE {archive}')
+    for capture in sorted(run.glob('gpu-capture*.rdc')):
+        print(f'[KE] GPU_CAPTURE {capture} (not included in diagnostics.zip)')
     print('[KE] Bundle contains local paths, logs and screenshots; review before sharing.')
     return capture_status if capture_status is not None else 0
 
