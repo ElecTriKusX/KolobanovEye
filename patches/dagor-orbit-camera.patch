@@ -1,0 +1,16 @@
+diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+--- a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
++++ b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+@@ -226,7 +226,11 @@
+     }
+ 
+   const Point3 aim = world * ((bounds[0] + bounds[1]) * 0.5f);
+-  const Point3 eye = config.getPoint3("eye", aim + Point3(12, 5, 16));
++  char offsetKey[32];
++  snprintf(offsetKey, sizeof(offsetKey), "camera_offset_%d", frameIndex);
++  const Point3 eye = config.getPoint3(offsetKey, config.getPoint3("eye", aim + Point3(12, 5, 16)) - aim) + aim;
++  if (frameCount > 1)
++    console->addMessage(ILogWriter::NOTE, "[KE] ORBIT_FRAME index=%d eye=(%.3f,%.3f,%.3f)", frameIndex, eye.x, eye.y, eye.z);
+   if (!finite_point(eye) || lengthSq(aim - eye) < 0.01f || lengthSq(Point3(0, 1, 0) % (aim - eye)) < 0.01f)
+     return fail("CAMERA", "Eye must be finite and offset horizontally from the target");
+   const Point3 forward = normalize(aim - eye);

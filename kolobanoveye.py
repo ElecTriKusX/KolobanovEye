@@ -27,6 +27,7 @@ RESOLVE_FLOAT_PATCH = HERE / "patches/dagor-resolve-float-capture.patch"
 DX11_TRACE_PATCH = HERE / "patches/dagor-dx11-terrain-trace.patch"
 CLIPMAP_LEGACY_PATCH = HERE / "patches/dagor-clipmap-legacy-color.patch"
 SEQUENCE_PATCH = HERE / "patches/dagor-sequence.patch"
+ORBIT_PATCH = HERE / "patches/dagor-orbit-camera.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
     HERE / "patches/dagor-editor-unused-parameters.patch",
@@ -47,6 +48,7 @@ PATCHES = (
     DX11_TRACE_PATCH,
     CLIPMAP_LEGACY_PATCH,
     SEQUENCE_PATCH,
+    ORBIT_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -503,6 +505,12 @@ def build(dagor, ooz=None):
     print(f"[KE] BUILD_OK {require_file(dagor / BIN / 'daEditor3x-dev.exe')}")
 
 
+def camera_orbit_offset(azimuth_deg, horizontal_distance=20.0, height=5.0):
+    """Offset relative to the actual world-space model center (Y is up)."""
+    a = math.radians(azimuth_deg)
+    return (round(horizontal_distance * math.sin(a), 6), height, round(horizontal_distance * math.cos(a), 6))
+
+
 def frame(args, game, cdk):
     if os.name != "nt":
         raise ValueError("DX11 capture requires Windows x64")
@@ -510,6 +518,8 @@ def frame(args, game, cdk):
         raise ValueError("Frame sides must be 64–4096 pixels and horizontal FOV 15–100 degrees")
     if not 1 <= args.count <= 1000 or (args.count > 1 and args.seed is None):
         raise ValueError("Sequence count must be 1–1000 and requires --seed for multiple frames")
+    if args.count > 1 and args.eye:
+        raise ValueError("--eye is for a single frame; sequences choose camera offsets around the tank")
     if args.timeout <= 0:
         raise ValueError("Timeout must be positive")
     out = args.out.resolve()
@@ -560,10 +570,11 @@ def frame(args, game, cdk):
         images.mkdir()
         rng = random.Random(args.seed)
         angles = [round(rng.uniform(-180, 180), 4) for _ in range(args.count)]
-        (out / "plan.json").write_text(json.dumps({"seed": args.seed, "yaw_degrees": angles}, indent=2) + "\n", encoding="utf-8")
+        offsets = [camera_orbit_offset(angle) for angle in angles]
+        (out / "plan.json").write_text(json.dumps({"seed": args.seed, "tank_yaw_deg": args.yaw, "camera_azimuth_degrees": angles, "camera_offsets": offsets}, indent=2) + "\n", encoding="utf-8")
         entries.append(f"frame_count:i={args.count}")
         for i, angle in enumerate(angles):
-            entries.extend((f"yaw_{i}:r={numbers([angle])}",
+            entries.extend((f"camera_offset_{i}:p3={numbers(offsets[i])}",
                 f'output_{i}:t="{dagor_path(images / f"{i:06d}.png")}"',
                 f'metadata_{i}:t="{dagor_path(out / f"frame-{i:06d}.pending.blk")}"'))
     if args.eye:
@@ -628,7 +639,7 @@ def frame(args, game, cdk):
         if f"[KE] {marker}" not in log:
             raise ValueError(f"{marker} missing from probe.dcmd.log")
     if args.count > 1:
-        if f"[KE] SEQUENCE_OK frames={args.count}" not in log or log.count("[KE] FRAME_OK ") != args.count:
+        if f"[KE] SEQUENCE_OK frames={args.count}" not in log or log.count("[KE] FRAME_OK ") != args.count or log.count("[KE] ORBIT_FRAME ") != args.count:
             raise ValueError("Sequence incomplete or old editor build: check SEQUENCE_OK and FRAME_OK in logs")
         from ke_annotation import read_annotation
         records = []
@@ -637,7 +648,8 @@ def frame(args, game, cdk):
             source = out / f"frame-{i:06d}.pending.blk"
             verify_png(image_path, args.width, args.height)
             annotation = read_annotation(require_file(source))
-            records.append({"seed": args.seed, "frame_index": i, "yaw_deg": angle,
+            records.append({"seed": args.seed, "frame_index": i, "tank_yaw_deg": args.yaw,
+                "camera_azimuth_deg": angle, "camera_offset": offsets[i],
                 "image": f"images/{i:06d}.png", "annotation": annotation["annotations"][0],
                 "dagor_frame_metadata_blk": source.read_text(encoding="utf-8")})
         (out / "metadata.jsonl").write_text("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in records), encoding="utf-8")
