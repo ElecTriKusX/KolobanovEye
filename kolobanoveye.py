@@ -19,6 +19,7 @@ DIRECT_DEPTH_PATCH = HERE / "patches/dagor-direct-debug-depth.patch"
 INDIRECTION_PATCH = HERE / "patches/dagor-indirection-check.patch"
 INDIRECTION_FIX_PATCH = HERE / "patches/dagor-indirection-readback-fix.patch"
 INDIRECTION_CPU_PATCH = HERE / "patches/dagor-indirection-cpu-test.patch"
+RESOLVE_PASS_PATCH = HERE / "patches/dagor-resolve-pass-capture.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
     HERE / "patches/dagor-editor-unused-parameters.patch",
@@ -34,6 +35,7 @@ PATCHES = (
     INDIRECTION_FIX_PATCH,
     INDIRECTION_CPU_PATCH,
     HERE / "patches/dagor-terrain-bind-diagnostics.patch",
+    RESOLVE_PASS_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -435,7 +437,12 @@ def build(dagor, ooz=None):
     indirection_cpu_applied = subprocess.run([*apply, "--reverse", "--check"],
         input=INDIRECTION_CPU_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor,
         capture_output=True).returncode == 0
+    resolve_pass_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=RESOLVE_PASS_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor,
+        capture_output=True).returncode == 0
     for patch in patches:
+        if resolve_pass_applied and patch in (RENDER_DEBUG_PATCH, DIRECT_DEPTH_PATCH, RESOLVE_PASS_PATCH):
+            continue
         if indirection_cpu_applied and patch in (INDIRECTION_PATCH, INDIRECTION_FIX_PATCH, INDIRECTION_CPU_PATCH):
             continue
         if indirection_fixed and patch in (INDIRECTION_PATCH, INDIRECTION_FIX_PATCH):

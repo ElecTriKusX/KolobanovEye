@@ -1,0 +1,81 @@
+--- a/prog/tools/sceneTools/daEditorX/services/dynRenderSrv/dynRender.cpp
++++ b/prog/tools/sceneTools/daEditorX/services/dynRenderSrv/dynRender.cpp
+@@ -1493,10 +1493,25 @@
+     if (effects_depth_texVarId != -1)
+       ShaderGlobal::set_texture(effects_depth_texVarId, deferredTarget->getDepthId());
+ 
++    if (render_debug_dir && *render_debug_dir)
++    {
++      SCOPE_RENDER_TARGET;
++      d3d::set_render_target();
++      for (unsigned i = 0; i < deferredTarget->getRtNum(); ++i)
++        dumpDebugSurface(render_debug_dir, String(0, "resolve-input-mrt%u", i), deferredTarget->getRt(i, true));
++    }
++
+     if (isThermalVisionActive())
+       thermalVision.resolve(*deferredTarget, sceneRt, view_tm, proj_tm);
+     else
+       deferredTarget->resolve(sceneRt, view_tm, proj_tm);
++
++    if (render_debug_dir && *render_debug_dir)
++    {
++      SCOPE_RENDER_TARGET;
++      d3d::set_render_target();
++      dumpDebugSurface(render_debug_dir, "resolve-output", sceneRt);
++    }
+ 
+     d3d::set_render_target({deferredTarget->getDepth(), 0, 0}, DepthAccess::SampledRO, {{sceneRt, 0, 0}});
+ 
+@@ -1676,6 +1691,52 @@
+     if (thermalOn)
+       ShaderGlobal::set_float4(earthColorVarId, oldEarthColor);
+   }
++  // Raw 8-bit preview of packed G-buffer/resolve values; no normal decoding or color-space conversion.
++  void dumpDebugSurface(const char *dir, const char *name, BaseTexture *tex)
++  {
++    TextureInfo info{};
++    if (!tex || !tex->getinfo(info))
++    {
++      debug("[KE] PASS_CAPTURE name=%s status=missing", name);
++      return;
++    }
++    const unsigned fmt = info.cflg & TEXFMT_MASK;
++    if (fmt != TEXFMT_A8R8G8B8 && fmt != TEXFMT_A2B10G10R10)
++    {
++      debug("[KE] PASS_CAPTURE name=%s status=unsupported format=0x%08x", name, fmt);
++      return;
++    }
++    const auto src = lock_texture<const uint32_t>(tex, 0, TEXLOCK_READ);
++    if (!src)
++    {
++      debug("[KE] PASS_CAPTURE name=%s status=lock_failed format=0x%08x", name, fmt);
++      return;
++    }
++    const int w = src.getWidthInElems(), h = src.getHeightInElems();
++    Tab<TexPixel32> out(tmpmem);
++    out.resize(w * h);
++    for (int y = 0; y < h; ++y)
++    {
++      const uint32_t *row = reinterpret_cast<const uint32_t *>(reinterpret_cast<const char *>(src.get()) + y * src.getByteStride());
++      for (int x = 0; x < w; ++x)
++      {
++        if (fmt == TEXFMT_A8R8G8B8)
++          out[y*w+x].u = row[x] | 0xff000000u;
++        else
++        {
++          const uint32_t v = row[x];
++          TexPixel32 &p = out[y*w+x];
++          p.r = ((v & 1023u) * 255u + 511u) / 1023u;
++          p.g = (((v >> 10) & 1023u) * 255u + 511u) / 1023u;
++          p.b = (((v >> 20) & 1023u) * 255u + 511u) / 1023u;
++          p.a = 255;
++        }
++      }
++    }
++    const bool saved = save_png32(String(0, "%s/%s.png", dir, name), out.data(), w, h, w * sizeof(TexPixel32), nullptr, 0, false);
++    debug("[KE] PASS_CAPTURE name=%s status=%s format=0x%08x size=%dx%d raw_preview=1", name, saved ? "ok" : "save_failed", fmt, w, h);
++  }
++
+   void dumpStaticGeometry(const char *dir, DeferredRenderTarget &target)
+   {
+     int x, y, width, height;

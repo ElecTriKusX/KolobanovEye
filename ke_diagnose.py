@@ -151,6 +151,9 @@ def analyze(run, dagor=None, game=None):
     warmup = find_lines(text, 'WARMUP')
     add('warmup', ('ok' if 'settled=1' in warmup[-1] else 'warning') if warmup else 'unknown',
         'Warmup status as reported by the engine.', warmup[-1:])
+    pass_lines = find_lines(text, 'PASS_CAPTURE')
+    add('resolve_passes', 'ok' if pass_lines and all('status=ok' in l for l in pass_lines) else ('warning' if pass_lines else 'unknown'),
+        'Raw previews around resolve; channel meaning and color-space conversion are not verified.', pass_lines[-12:])
     lines = find_lines(text, 'TERRAIN_DRAW')
     add('terrain_draw', ('ok' if 'renderer=1' in lines[-1] else 'warning') if lines else 'unknown',
         'Requested terrain draw; not proof of correct pixel output.', lines[-1:])
@@ -160,7 +163,7 @@ def analyze(run, dagor=None, game=None):
         add(category, 'warning' if lines else ('ok' if debug else 'unknown'),
             'Reported log messages are leads, not established causes.' if lines else 'No matching messages in analyzed log.', lines[:30])
     files = {}
-    for rel in ('frame.png', 'render-debug/static-albedo.png', 'render-debug/static-depth-mask.png', 'render-debug/terrain-last-clip.png'):
+    for rel in ('frame.png', 'render-debug/static-albedo.png', 'render-debug/static-depth-mask.png', 'render-debug/terrain-last-clip.png', 'render-debug/resolve-input-mrt0.png', 'render-debug/resolve-input-mrt1.png', 'render-debug/resolve-input-mrt2.png', 'render-debug/resolve-output.png'):
         p = run / rel
         if not p.is_file():
             continue
@@ -208,7 +211,7 @@ def write_outputs(run, report):
     archive = dest / 'diagnostics.zip'
     allowed = {'frame.png', 'frame.blk', 'capture.blk', 'inventory.json', 'host-stdout.log', 'grp.txt',
                'probe.dcmd', 'probe.dcmd.log', 'probe.dcmd.err', 'diagnostic-capture.log', 'diagnostic-ooz.log', 'terrain-last-clip.png', 'static-albedo.png',
-               'static-depth-mask.png', 'debug', 'logerr', 'logwarn', 'last_debug'}
+               'static-depth-mask.png', 'resolve-input-mrt0.png', 'resolve-input-mrt1.png', 'resolve-input-mrt2.png', 'resolve-output.png', 'debug', 'logerr', 'logwarn', 'last_debug'}
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as z:
         z.write(dest / 'report.json', 'diagnostics/report.json')
         z.write(dest / 'report.md', 'diagnostics/report.md')

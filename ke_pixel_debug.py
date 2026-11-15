@@ -81,12 +81,18 @@ def compare(albedo, frame, cols=16, rows=9):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--run',required=True,type=Path)
+    p.add_argument('--resolve', action='store_true', help='Compare G-buffer MRT0 immediately before resolve with its output')
     p.add_argument('--point',nargs=2,type=int,action='append',metavar=('X','Y'),default=[])
     args=p.parse_args(); run=args.run.resolve()
     if not run.is_dir(): p.error('Run directory does not exist')
     paths={'albedo':run/'render-debug/static-albedo.png','frame':run/'frame.png',
            'depth_mask':run/'render-debug/static-depth-mask.png',
            'normal':run/'render-debug/static-normal.png','lighting':run/'render-debug/static-lighting.png'}
+    if args.resolve:
+        paths['albedo'] = run/'render-debug/resolve-input-mrt0.png'
+        paths['frame'] = run/'render-debug/resolve-output.png'
+        paths.pop('normal')
+        paths['mrt1_packed'] = run/'render-debug/resolve-input-mrt1.png'
     images={}; missing=[]
     for name,path in paths.items():
         if path.exists(): images[name]=load_png(path)
@@ -99,12 +105,13 @@ def main():
         for name,(iw,ih,rgb) in images.items():
             if (iw,ih)==(w,h): values[name]=list(rgb[(y*w+x)*3:(y*w+x+1)*3])
         points.append({'x':x,'y':y,'rgb':values})
-    result={'resolution':[w,h], 'missing_passes':missing,'points':points,'grid':cells,
+    result={'resolution':[w,h], 'mode':'resolve' if args.resolve else 'static_vs_final', 'missing_passes':missing,'points':points,'grid':cells,
         'limitations':['Albedo and frame are separate captures: dynamic objects, overlays, temporal effects and timing may differ.',
           'PNG RGB values may use different color spaces and exposure; comparison is descriptive, not a lighting calculation.',
           'No object/terrain segmentation; cells can include sky, trees, tank and editor overlays.',
           'Depth mask encoding and meaning must be checked separately; it is not a calibrated depth map.',
-          'Normals, lighting and GPU shader registers cannot be reconstructed from the existing files.']}
+          'MRT1 is a raw packed buffer, not decoded normals; resolve output is lit color, not an isolated lighting term.',
+          'Actual GPU shader registers and individual shader execution are not captured.']}
     out=run/'diagnostics'; out.mkdir(exist_ok=True)
     (out/'pixel-report.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
     with (out/'pixel-grid.csv').open('w',encoding='utf-8',newline='') as f:
