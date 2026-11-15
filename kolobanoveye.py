@@ -28,6 +28,7 @@ DX11_TRACE_PATCH = HERE / "patches/dagor-dx11-terrain-trace.patch"
 CLIPMAP_LEGACY_PATCH = HERE / "patches/dagor-clipmap-legacy-color.patch"
 SEQUENCE_PATCH = HERE / "patches/dagor-sequence.patch"
 ORBIT_PATCH = HERE / "patches/dagor-orbit-camera.patch"
+CLEAN_CAPTURE_PATCH = HERE / "patches/dagor-clean-capture.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
     HERE / "patches/dagor-editor-unused-parameters.patch",
@@ -49,6 +50,7 @@ PATCHES = (
     CLIPMAP_LEGACY_PATCH,
     SEQUENCE_PATCH,
     ORBIT_PATCH,
+    CLEAN_CAPTURE_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"

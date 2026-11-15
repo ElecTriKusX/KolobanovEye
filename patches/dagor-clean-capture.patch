@@ -1,0 +1,16 @@
+diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+--- a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
++++ b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+@@ -298,7 +298,12 @@
+     if (skies)
+       skies->updateSkies(1.f / 60.f);
+     plugin->setKolobanovEyeModel(&model);
++    // renderObjects/renderTransObjects are editor overlays, including renderGrid().
++    // Preserve the previous setting; scene geometry is rendered in the deferred pass.
++    const bool previousSkipRenderObjects = skipRenderObjects;
++    skipRenderObjects = true;
+     frame = renderInTex(width, height, nullptr, true);
++    skipRenderObjects = previousSkipRenderObjects;
+     if (!frame)
+       return fail("RENDER", "Offscreen texture creation or render failed");
+     if (frames >= 7 && (!scene.getSsm() || !scene.getSsm()->isLoading()) &&
