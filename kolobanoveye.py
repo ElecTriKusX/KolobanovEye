@@ -16,6 +16,8 @@ REV = "9639942de5a8e5b01d91977f60ed82cda22d5f41"
 HERE = Path(__file__).resolve().parent
 RENDER_DEBUG_PATCH = HERE / "patches/dagor-render-debug.patch"
 DIRECT_DEPTH_PATCH = HERE / "patches/dagor-direct-debug-depth.patch"
+INDIRECTION_PATCH = HERE / "patches/dagor-indirection-check.patch"
+INDIRECTION_FIX_PATCH = HERE / "patches/dagor-indirection-readback-fix.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
     HERE / "patches/dagor-editor-unused-parameters.patch",
@@ -27,7 +29,8 @@ PATCHES = (
     HERE / "patches/dagor-clipmap-software-feedback.patch",
     HERE / "patches/dagor-clipmap-tile-readback.patch",
     HERE / "patches/dagor-deferred-terrain-view-rays.patch",
-    HERE / "patches/dagor-indirection-check.patch",
+    INDIRECTION_PATCH,
+    INDIRECTION_FIX_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -423,7 +426,12 @@ def build(dagor, ooz=None):
     direct_depth_diff = DIRECT_DEPTH_PATCH.read_bytes().replace(b"\r\n", b"\n")
     direct_depth_applied = subprocess.run([*apply, "--reverse", "--check"], input=direct_depth_diff, cwd=dagor,
                                           capture_output=True).returncode == 0
+    indirection_fixed = subprocess.run([*apply, "--reverse", "--check"],
+        input=INDIRECTION_FIX_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor,
+        capture_output=True).returncode == 0
     for patch in patches:
+        if indirection_fixed and patch in (INDIRECTION_PATCH, INDIRECTION_FIX_PATCH):
+            continue
         # The follow-up edits lines inserted by the original render diagnostics patch.
         if direct_depth_applied and patch in (RENDER_DEBUG_PATCH, DIRECT_DEPTH_PATCH):
             continue

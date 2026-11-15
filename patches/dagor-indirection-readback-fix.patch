@@ -1,0 +1,29 @@
+--- a/prog/gameLibs/landMesh/virtualtexture.cpp
++++ b/prog/gameLibs/landMesh/virtualtexture.cpp
+@@ -3043,7 +3043,7 @@
+   eastl::vector<uint32_t> expected;
+   if (diagnose)
+   {
+-    expected.resize(debugWidth * debugHeight, 0xffffffffu);
++    expected.resize(debugWidth * debugHeight, enable18bitTags ? 0xffffffffu : 0xffffu);
+     // Replay the submitted rectangles on CPU, including coarse-to-fine overwrites.
+     for (const ConstantVert *q = basequad; q < quad; q += 4)
+       for (int y = max(0, int(q[0].pos_wh.y)); y < min(debugHeight, int(q[2].pos_wh.y)); ++y)
+@@ -3061,11 +3061,14 @@
+   if (diagnose)
+   {
+     d3d::set_render_target({}, DepthAccess::RW, {});
+-    const auto pixels = lock_texture<const uint8_t>(currentContext->indirection.getTex2D(), 0, TEXLOCK_READ);
+-    if (pixels)
++    const auto pixels = lock_texture<const ImageRawBytes>(currentContext->indirection.getTex2D(), 0, TEXLOCK_READ);
++    const int bytesPerEntry = enable18bitTags ? 4 : 2;
++    if (pixels && pixels.getBytesPerElement() != bytesPerEntry)
++      debug("[KE] INDIRECTION_CHECK format_mismatch expected_bytes=%d actual_bytes=%d", bytesPerEntry,
++        pixels.getBytesPerElement());
++    else if (pixels)
+     {
+       int mismatches = 0;
+-      const int bytesPerEntry = enable18bitTags ? 4 : 2;
+       for (int y = 0; y < debugHeight; ++y)
+         for (int x = 0; x < debugWidth; ++x)
+         {
