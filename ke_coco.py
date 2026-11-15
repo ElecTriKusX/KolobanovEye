@@ -48,8 +48,8 @@ def export(runs, out, tile_size=256, split=False, seed=42):
     out = out.resolve()
     if len(set(runs)) != len(runs): raise ValueError('Папки серий повторяются')
     if out.exists(): raise ValueError('Выходная папка уже существует')
-    if any(out == run or out.is_relative_to(run) for run in runs):
-        raise ValueError('Выходная папка должна быть вне папок серий')
+    if any(out == run or out.is_relative_to(run / 'images') for run in runs):
+        raise ValueError('Выходная папка не может быть серией или папкой изображений')
     data = []
     for run in runs:
         validate(run)

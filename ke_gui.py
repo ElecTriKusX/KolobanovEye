@@ -11,7 +11,7 @@ from pathlib import Path
 from ke_generate import DEFAULTS, INTS, FLOATS, validate_config, command
 
 FIELDS = [
- ('dagor', 'Папка Dagor Engine'), ('game', 'Папка War Thunder'), ('output', 'Новая папка результата'),
+ ('dagor', 'Папка Dagor Engine'), ('game', 'Папка War Thunder'), ('output', 'Родительская папка результатов'),
  ('count', 'Количество кадров (2–1000)'), ('seed', 'Seed'),
  ('width', 'Ширина'), ('height', 'Высота'), ('fov', 'Горизонтальный FOV, °'),
  ('tank_x', 'Позиция танка X'), ('tank_z', 'Позиция танка Z'), ('tank_yaw', 'Поворот танка, °'),
@@ -20,6 +20,17 @@ FIELDS = [
  ('elevation_min', 'Возвышение камеры, °: от'), ('elevation_max', 'Возвышение камеры, °: до'),
  ('clipmap_feedback', 'Обратная связь clipmap'), ('timeout', 'Таймаут, с'),
 ]
+
+
+def next_numbered_directory(parent, prefix='ke-generate-'):
+    parent = Path(parent)
+    if not parent.is_dir():
+        raise ValueError('Родительская папка результатов не существует')
+    for number in range(1, 1000000):
+        candidate = parent / f'{prefix}{number:02d}'
+        if not candidate.exists():
+            return candidate
+    raise ValueError('Не удалось подобрать свободное имя папки')
 
 
 class App:
@@ -31,11 +42,12 @@ class App:
         self.process = None
         self.running = False
         self.values = {k: tk.StringVar(value=str(DEFAULTS[k])) for k, _ in FIELDS}
-        self.vars = {}
+        self.values['output'].set(str(Path(DEFAULTS['output']).parent))
+        self.last_run = None
         main = ttk.Frame(root, padding=12)
         main.pack(fill='both', expand=True)
         ttk.Label(main, text='Карта: avg_normandy  |  Модель: Tiger H1  |  Класс: tank').pack(anchor='w')
-        ttk.Label(main, text='Выходная папка должна быть новой. Рендер выполняется локально.').pack(anchor='w', pady=(2, 8))
+        ttk.Label(main, text='Выберите папку результатов: ke-generate-01, 02… создаются автоматически.').pack(anchor='w', pady=(2, 8))
         form = ttk.Frame(main)
         form.pack(fill='x')
         for idx, (key, label) in enumerate(FIELDS):
@@ -52,13 +64,19 @@ class App:
                 ttk.Button(parent, text='…', width=3, command=lambda k=key: self.choose_directory(k)).pack(side='left')
         form.columnconfigure(0, weight=1); form.columnconfigure(1, weight=1)
         buttons = ttk.Frame(main); buttons.pack(fill='x', pady=8)
-        self.run_button = ttk.Button(buttons, text='Запустить генерацию', command=self.run)
+        self.run_button = ttk.Button(buttons, text='Создать и проверить датасет', command=self.run)
         self.run_button.pack(side='left')
-        ttk.Button(buttons, text='Открыть настройки', command=self.open_config).pack(side='left', padx=5)
-        ttk.Button(buttons, text='Сохранить настройки', command=self.save_config).pack(side='left')
-        ttk.Button(buttons, text='Проверить серию', command=self.check_run).pack(side='left', padx=5)
-        ttk.Button(buttons, text='Рамки', command=self.preview_run).pack(side='left')
-        ttk.Button(buttons, text='COCO', command=self.coco_run).pack(side='left', padx=5)
+        menu_button = ttk.Menubutton(buttons, text='Дополнительно')
+        menu = tk.Menu(menu_button, tearoff=False)
+        menu.add_command(label='Проверить существующую серию…', command=self.check_run)
+        menu.add_command(label='Показать рамки на копиях…', command=self.preview_run)
+        menu.add_command(label='Экспортировать COCO отдельно…', command=self.coco_run)
+        menu.add_separator()
+        menu.add_command(label='Открыть настройки…', command=self.open_config)
+        menu.add_command(label='Сохранить настройки…', command=self.save_config)
+        menu_button['menu'] = menu
+        menu_button.pack(side='left', padx=8)
+        ttk.Button(buttons, text='? Справка', command=self.show_help).pack(side='left')
         self.state = tk.StringVar(value='Готово')
         ttk.Label(main, textvariable=self.state).pack(anchor='w')
         self.log = tk.Text(main, height=12, wrap='word', state='disabled')
@@ -73,9 +91,9 @@ class App:
             self.root.destroy()
 
     def choose_directory(self, key):
-        path = filedialog.askdirectory(title='Выберите папку' + ('; для результата выберите родительскую' if key == 'output' else ''))
+        path = filedialog.askdirectory(title='Выберите папку')
         if path:
-            self.values[key].set(str(Path(path) / 'ke-run-new') if key == 'output' else path)
+            self.values[key].set(path)
 
     def get_config(self):
         data = {}
@@ -85,6 +103,9 @@ class App:
                 data[key] = int(value) if key in INTS else float(value.replace(',', '.')) if key in FLOATS else value
             except ValueError as exc:
                 raise ValueError(f'{key}: неверное число') from exc
+        if not data['output']:
+            raise ValueError('Укажите родительскую папку результатов')
+        data['output'] = str(next_numbered_directory(data['output']))
         return validate_config(data)
 
     def open_config(self):
@@ -92,7 +113,7 @@ class App:
         if not path: return
         try:
             data = validate_config(json.loads(Path(path).read_text(encoding='utf-8')))
-            for k, v in data.items(): self.values[k].set(str(v))
+            for k, v in data.items(): self.values[k].set(str(Path(v).parent) if k == 'output' else str(v))
         except (OSError, ValueError) as exc: messagebox.showerror('Ошибка настроек', str(exc))
 
     def save_config(self):
@@ -108,32 +129,43 @@ class App:
         if self.running: return
         try:
             data = self.get_config()
-            if Path(data['output']).exists(): raise ValueError('Выходная папка уже существует. Укажите новую папку.')
             cmd = command(data)
         except ValueError as exc:
             messagebox.showerror('Ошибка настроек', str(exc)); return
-        self.running = True; self.run_button.config(state='disabled'); self.state.set('Генерация выполняется…')
+        self.running = True; self.run_button.config(state='disabled'); self.state.set(f"Генерация: {data['output']}")
         threading.Thread(target=self.worker, args=(data, cmd), daemon=True).start()
 
+    def show_help(self):
+        messagebox.showinfo('Справка',
+            'Основная кнопка: создаёт новую папку ke-generate-XX, рендерит кадры, проверяет их и создаёт COCO в подпапке coco.\n\n'
+            'Проверить серию — проверяет файлы и границы рамок существующей серии.\n'
+            'Рамки — создаёт отдельные копии кадров с зелёной рамкой.\n'
+            'COCO — создаёт JSON-разметку для существующей серии без копирования изображений.\n\n'
+            'COCO — формат данных для обучения детектора; здесь рамка приблизительная, видимость не проверена. '
+            'Папку серии нельзя отделять от файлов coco: в JSON сохранены относительные пути к кадрам.\n\n'
+            'Seed определяет последовательность ракурсов. Вода, препятствия и маски пока не проверяются.')
+
+    def choose_run(self):
+        return filedialog.askdirectory(title='Выберите папку серии ke-generate-XX',
+                                       initialdir=str(self.last_run or self.values['output'].get().strip()))
+
     def check_run(self):
-        self.start_tool('ke_validate.py', ['--run', self.values['output'].get().strip()])
+        run = self.choose_run()
+        if run: self.start_tool('ke_validate.py', ['--run', run])
 
     def preview_run(self):
-        run = self.values['output'].get().strip()
-        if not run:
-            messagebox.showerror('Ошибка', 'Укажите папку серии.'); return
-        out = filedialog.asksaveasfilename(title='Укажите новую папку для копий с рамками')
-        if out:
-            self.start_tool('ke_review.py', ['--run', run, '--out', out])
+        run = self.choose_run()
+        if not run: return
+        try: out = next_numbered_directory(Path(run).parent, 'ke-review-')
+        except ValueError as exc: messagebox.showerror('Ошибка', str(exc)); return
+        self.start_tool('ke_review.py', ['--run', run, '--out', str(out)])
 
     def coco_run(self):
-        run = self.values['output'].get().strip()
-        if not run:
-            messagebox.showerror('Ошибка', 'Укажите папку серии.'); return
-        out = filedialog.asksaveasfilename(title='Укажите новую папку для COCO JSON')
-        if out:
-            messagebox.showinfo('COCO', 'Будет экспортирован приблизительный bbox. Видимость не проверена. Исходные кадры не копируются.')
-            self.start_tool('ke_coco.py', ['--runs', run, '--out', out])
+        run = self.choose_run()
+        if not run: return
+        try: out = next_numbered_directory(Path(run), 'coco-')
+        except ValueError as exc: messagebox.showerror('Ошибка', str(exc)); return
+        self.start_tool('ke_coco.py', ['--runs', run, '--out', str(out)])
 
     def start_tool(self, script, arguments):
         if self.running: return
@@ -151,17 +183,24 @@ class App:
 
     def worker(self, data, cmd):
         try:
-            proc = subprocess.Popen(cmd, cwd=Path(__file__).resolve().parent, stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace')
-            self.process = proc
-            for line in proc.stdout: self.events.put(('line', line))
-            code = proc.wait()
-            output = Path(data['output'])
-            if output.is_dir():
-                with (output / 'generation-config.json').open('x', encoding='utf-8') as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2); f.write('\n')
-            self.events.put(('done', code))
-        except (OSError, ValueError) as exc: self.events.put(('error', str(exc)))
+            run = Path(data['output'])
+            def execute(stage, args):
+                self.events.put(('line', f'\n[KE] {stage}\n'))
+                proc = subprocess.Popen(args, cwd=Path(__file__).resolve().parent, stdout=subprocess.PIPE,
+                                        stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace')
+                self.process = proc
+                for line in proc.stdout: self.events.put(('line', line))
+                code = proc.wait()
+                if code: raise RuntimeError(f'{stage}: код {code}. Результаты: {run}')
+            execute('1/3 Генерация', cmd)
+            with (run / 'generation-config.json').open('x', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2); f.write('\n')
+            script = Path(__file__).resolve().parent
+            execute('2/3 Проверка серии', [sys.executable, '-u', str(script / 'ke_validate.py'), '--run', str(run)])
+            execute('3/3 Экспорт COCO', [sys.executable, '-u', str(script / 'ke_coco.py'), '--runs', str(run), '--out', str(run / 'coco')])
+            self.events.put(('success', str(run)))
+        except (OSError, ValueError, RuntimeError) as exc:
+            self.events.put(('error', str(exc)))
 
     def poll(self):
         try:
@@ -171,7 +210,12 @@ class App:
                     self.log.config(state='normal'); self.log.insert('end', value); self.log.see('end'); self.log.config(state='disabled')
                 else:
                     self.running = False; self.run_button.config(state='normal')
-                    self.state.set('Завершено' if kind == 'done' and value == 0 else f'Ошибка: {value}. Проверьте журнал.')
+                    if kind == 'success':
+                        self.last_run = value
+                        self.state.set(f'Готово: {value}')
+                        messagebox.showinfo('Готово', f'Кадры и метаданные: {value}\nCOCO: {value}\\coco\\all.json\n\nРамка приблизительная; видимость не проверена.')
+                    else:
+                        self.state.set('Завершено' if kind == 'done' and value == 0 else f'Ошибка: {value}. Проверьте журнал.')
         except queue.Empty: pass
         self.root.after(100, self.poll)
 
