@@ -121,11 +121,12 @@ python .\kolobanoveye.py probe-ooz --game D:\Games\WarThunder --ooz-exe D:\Proje
 
 `probe-ooz` читает DDSx из вложенного блока `TEX` в `avg_normandy.bin`.
 Он выводит смещение, размеры, первый тип потока и параметры текстуры. Для обычной
-2D-текстуры PC сверяет сумму размеров mip-уровней с DDSx. Скрипт добавляет
-8-байтовую длину только для CLI, запускает его отдельным процессом, проверяет
-длину результата и печатает `OOZ_LIGHTMAP_OK` с SHA-256. Временные файлы
-удаляются, карта открывается только для чтения. Контрольная сумма позволяет
-сравнить результаты повторных запусков. Успешный тест покрывает одну lightmap.
+2D-текстуры PC сверяет сумму размеров mip-уровней с DDSx. Когда разбор квантов
+показывает, что Oodle-поток заканчивается раньше блока DDSx, тест передаёт
+декодеру только байты этого потока и выводит `decoder_input_bytes` и
+`tail_prefix_hex`. Скрипт проверяет длину результата и печатает
+`OOZ_LIGHTMAP_OK` с SHA-256. Временные файлы удаляются, карта открывается
+только для чтения. Успешный тест покрывает одну lightmap.
 
 Если `ooz.exe` возвращает `decompress error` для Leviathan, можно проверить
 тот же поток через CLI Rust-декодера `oozextract` 0.5.7. При установленном
@@ -150,7 +151,7 @@ git clone https://github.com/powzix/ooz.git D:\Projects\ooz-src
 git -C D:\Projects\ooz-src checkout --detach 05038060aa68f9187ae9923b2388ca8db40e58d1
 ```
 
-После `OOZ_LIGHTMAP_OK` выполните:
+После `OOZ_LIGHTMAP_OK … decoder=ooz` выполните:
 
 ```powershell
 python .\kolobanoveye.py build --dagor D:\Projects\DagorEngine --ooz D:\Projects\ooz
@@ -158,7 +159,10 @@ python .\kolobanoveye.py build --dagor D:\Projects\DagorEngine --ooz D:\Projects
 
 Скрипт применяет `patches/dagor-ooz.patch`, собирает локальную x64-библиотеку
 декодера и запускает Jam только для DaEditorX с его зависимостями, включая
-динамический `daKernel`. Журналы — `build-logs\ooz-compile.log`,
+динамический `daKernel`. Локальная сборка `ooz` завершает декодирование
+после получения объявленного числа распакованных байтов. Загрузчик Dagor
+потребляет весь объявленный сжатый блок, включая байты после потока, чтобы
+следующее чтение началось на границе блока. Журналы — `build-logs\ooz-compile.log`,
 `build-logs\ooz-lib.log` и `build-logs\editor-ooz.log`. В последнем должна быть
 строка `Building daKernel with the decode-only ooz backend`. Флаги Jam этого
 режима — `-sUseOoz=yes` и `-sOozLib=<абсолютный путь к ke-ooz.lib>`.

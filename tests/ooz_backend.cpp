@@ -95,6 +95,22 @@ int main(int argc, char **argv)
     reader.open(src, packed_size + 1, size);
     assert(reader.tryRead(sample, 1) == 0 && reader.decodedBytes() == 0);
     assert(reader.ceaseReading() && src.tell() == packed_size + 1);
+    if ((packed[1] & 0x7f) == 12)
+    {
+      const char tail[] = {0, 1, 2, 3, 4, 5};
+      packed.insert(packed.end(), tail, tail + sizeof(tail));
+      const int envelope_size = static_cast<int>(packed.size());
+      std::vector<char> with_tail(size);
+      assert(oodle_decompress(with_tail.data(), size, packed.data(), envelope_size) == size);
+      assert(with_tail == decoded);
+      packed.push_back('!');
+      Input padded_src(std::move(packed));
+      Output padded_output;
+      assert(oodle_decompress_data(padded_output, padded_src, envelope_size, size) == size);
+      assert(padded_output.data == decoded);
+      assert(padded_src.tell() == envelope_size);
+      assert(padded_src.tryRead(sample, 1) == 1 && sample[0] == '!');
+    }
     fprintf(stdout, "%s OK %d bytes\n", argv[i], size);
   }
   const unsigned char checksum_stream[] = {0x8C, 0x86, 0, 0};

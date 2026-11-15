@@ -309,7 +309,14 @@ def probe_ooz(game, executable, unoodle=False):
     executable = require_file(executable.resolve())
     meta, data = read_normandy_lightmap(require_file(game / LEVEL))
     if data[1] & 0x7F in (6, 10, 12):
-        meta["large_quanta"] = inspect_large_oodle_quanta(data, meta["expected_bytes"])
+        layout = inspect_large_oodle_quanta(data, meta["expected_bytes"])
+        meta["large_quanta"] = layout
+        remaining = layout.get("packed_bytes_left", 0)
+        if remaining:
+            stream_size = len(data) - remaining
+            layout["tail_prefix_hex"] = data[stream_size:stream_size + 32].hex()
+            meta["decoder_input_bytes"] = stream_size
+            data = data[:stream_size]
     print(json.dumps(meta, ensure_ascii=False), flush=True)
     if data[0] & 0x3F != 0x0C or meta["first_stream_type"] == "unsupported":
         raise ValueError("Unsupported Oodle stream header")
@@ -332,8 +339,6 @@ def probe_ooz(game, executable, unoodle=False):
             raise ValueError(f"{decoder} exited with {run.returncode} while decoding the lightmap: {detail}")
         if unoodle and f'Extracted {meta["expected_bytes"]} bytes' not in detail.splitlines():
             raise ValueError(f"unoodle did not report the expected decoded byte count: {detail}")
-        if meta.get("large_quanta", {}).get("packed_bytes_left", 0):
-            raise ValueError("Oodle stream contains bytes after the last declared quantum")
         size = unpacked.stat().st_size
         if size != meta["expected_bytes"]:
             raise ValueError(f"{decoder} produced {size} bytes, expected {meta['expected_bytes']}")
@@ -363,6 +368,15 @@ def stage_ooz_sources(ooz, work):
                             b"  KrakenDecoder *dec = Kraken_Create();\n  if (!dec) return -1;", 1)
     source = source.replace(b"src = Kraken_ParseHeader(&dec->hdr, src);\n    if (!src)",
                             b"src = Kraken_ParseHeader(&dec->hdr, src);\n    if (!src || dec->hdr.use_checksums)", 1)
+    # Oodle's compressed length is the available input span. The declared output length
+    # ends the decode, even when the containing DDSx block has unused bytes.
+    source = source.replace(
+        b"    if (dec->src_used == 0)\n      goto FAIL;",
+        b"    if (dec->src_used <= 0 || size_t(dec->src_used) > src_len ||\n"
+        b"        dec->dst_used <= 0 || size_t(dec->dst_used) > dst_len)\n      goto FAIL;",
+        1,
+    )
+    source = source.replace(b"  if (src_len != 0)\n    goto FAIL;\n", b"", 1)
     (work / "kraken.cpp").write_bytes(source)
 
 

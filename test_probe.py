@@ -110,11 +110,12 @@ class ProbeTest(unittest.TestCase):
 
             output = StringIO()
             with (self.subTest(reported=reported), redirect_stdout(output),
-                  patch.object(probe, "read_normandy_lightmap", side_effect=lambda _: (meta.copy(), payload)),
+                  patch.object(probe, "read_normandy_lightmap", side_effect=lambda _: (meta.copy(), payload + b"footer")),
                   patch.object(probe.subprocess, "run", side_effect=run)):
                 if reported == 8:
                     probe.probe_ooz(self.root, exe, unoodle=True)
                     self.assertIn("OOZ_LIGHTMAP_OK", output.getvalue())
+                    self.assertIn('"tail_prefix_hex": "666f6f746572"', output.getvalue())
                 else:
                     with self.assertRaisesRegex(ValueError, "expected decoded byte count"):
                         probe.probe_ooz(self.root, exe, unoodle=True)
