@@ -1,0 +1,58 @@
+--- a/prog/gameLibs/landMesh/virtualtexture.cpp
++++ b/prog/gameLibs/landMesh/virtualtexture.cpp
+@@ -3037,6 +3037,20 @@
+   if (::grs_draw_wire)
+     d3d::setwire(false);
+ 
++  const bool diagnose = dgs_get_argv("ke-render-debug") && d3d::get_driver_code().is(d3d::dx11);
++  const int debugWidth = TILE_WIDTH * maxTexMipCnt;
++  const int debugHeight = TILE_WIDTH * max_ri_offset;
++  eastl::vector<uint32_t> expected;
++  if (diagnose)
++  {
++    expected.resize(debugWidth * debugHeight, 0xffffffffu);
++    // Replay the submitted rectangles on CPU, including coarse-to-fine overwrites.
++    for (const ConstantVert *q = basequad; q < quad; q += 4)
++      for (int y = max(0, int(q[0].pos_wh.y)); y < min(debugHeight, int(q[2].pos_wh.y)); ++y)
++        for (int x = max(0, int(q[0].pos_wh.x)); x < min(debugWidth, int(q[2].pos_wh.x)); ++x)
++          expected[y * debugWidth + x] = q[0].tti.tilePacked & (enable18bitTags ? 0xffffffffu : 0xffffu);
++  }
++
+   d3d::set_render_target({}, DepthAccess::RW, {{currentContext->indirection.getTex2D(), 0, 0}});
+   d3d::clearview(DISCARD_TARGET, 0xFFFFFFFF, 1.f, 0);
+   constantFillerBuf->unlockDataAndFlush((quad - basequad) / 4);
+@@ -3044,6 +3058,34 @@
+   currentContext->invalidateIndirection = false;
+   d3d::resource_barrier({currentContext->indirection.getTex2D(), RB_RO_SRV | RB_STAGE_PIXEL | RB_STAGE_COMPUTE, 0, 0});
+ 
++  if (diagnose)
++  {
++    d3d::set_render_target({}, DepthAccess::RW, {});
++    const auto pixels = lock_texture<const uint8_t>(currentContext->indirection.getTex2D(), 0, TEXLOCK_READ);
++    if (pixels)
++    {
++      int mismatches = 0;
++      const int bytesPerEntry = enable18bitTags ? 4 : 2;
++      for (int y = 0; y < debugHeight; ++y)
++        for (int x = 0; x < debugWidth; ++x)
++        {
++          uint32_t actual = 0;
++          memcpy(&actual, reinterpret_cast<const uint8_t *>(pixels.get()) + y * pixels.getByteStride() + x * bytesPerEntry,
++            bytesPerEntry);
++          const uint32_t wanted = expected[y * debugWidth + x];
++          if (actual != wanted)
++          {
++            if (mismatches < 8)
++              debug("[KE] INDIRECTION_MISMATCH x=%d y=%d expected=0x%08x actual=0x%08x", x, y, wanted, actual);
++            ++mismatches;
++          }
++        }
++      debug("[KE] INDIRECTION_CHECK entries=%d mismatches=%d tiles=%d", debugWidth * debugHeight, mismatches, totalUpdated);
++    }
++    else
++      debug("[KE] INDIRECTION_CHECK readback_failed");
++  }
++
+   // static int fullId = 0;
+   // save_rt_image_as_tga(currentContext->indirection_tex,String(128, "indirection_full_%02d.tga", fullId));
+   // fullId++;
