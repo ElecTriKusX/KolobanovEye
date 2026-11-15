@@ -6,6 +6,7 @@ import math
 import os
 from pathlib import Path
 import re
+import random
 import shutil
 import struct
 import subprocess
@@ -25,6 +26,7 @@ RESOLVE_PASS_PATCH = HERE / "patches/dagor-resolve-pass-capture.patch"
 RESOLVE_FLOAT_PATCH = HERE / "patches/dagor-resolve-float-capture.patch"
 DX11_TRACE_PATCH = HERE / "patches/dagor-dx11-terrain-trace.patch"
 CLIPMAP_LEGACY_PATCH = HERE / "patches/dagor-clipmap-legacy-color.patch"
+SEQUENCE_PATCH = HERE / "patches/dagor-sequence.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
     HERE / "patches/dagor-editor-unused-parameters.patch",
@@ -44,6 +46,7 @@ PATCHES = (
     RESOLVE_FLOAT_PATCH,
     DX11_TRACE_PATCH,
     CLIPMAP_LEGACY_PATCH,
+    SEQUENCE_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -454,7 +457,11 @@ def build(dagor, ooz=None):
     legacy_clip_applied = subprocess.run([*apply, "--reverse", "--check"],
         input=CLIPMAP_LEGACY_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor,
         capture_output=True).returncode == 0
+    sequence_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=SEQUENCE_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     for patch in patches:
+        if sequence_applied and patch.name == "dagor-phase0.patch":
+            continue
         if legacy_clip_applied and patch in (INDIRECTION_PATCH, INDIRECTION_FIX_PATCH, INDIRECTION_CPU_PATCH, DX11_TRACE_PATCH,
                                              CLIPMAP_LEGACY_PATCH):
             continue
@@ -501,6 +508,8 @@ def frame(args, game, cdk):
         raise ValueError("DX11 capture requires Windows x64")
     if not (64 <= args.width <= 4096 and 64 <= args.height <= 4096 and 15 <= args.fov <= 100):
         raise ValueError("Frame sides must be 64–4096 pixels and horizontal FOV 15–100 degrees")
+    if not 1 <= args.count <= 1000 or (args.count > 1 and args.seed is None):
+        raise ValueError("Sequence count must be 1–1000 and requires --seed for multiple frames")
     if args.timeout <= 0:
         raise ValueError("Timeout must be positive")
     out = args.out.resolve()
@@ -546,6 +555,17 @@ def frame(args, game, cdk):
         f'yaw:r={numbers([args.yaw])}',
         f'tank:p3={numbers((args.tank_xz[0], args.ground_offset, args.tank_xz[1]))}',
     ]
+    if args.count > 1:
+        images = out / "images"
+        images.mkdir()
+        rng = random.Random(args.seed)
+        angles = [round(rng.uniform(-180, 180), 4) for _ in range(args.count)]
+        (out / "plan.json").write_text(json.dumps({"seed": args.seed, "yaw_degrees": angles}, indent=2) + "\n", encoding="utf-8")
+        entries.append(f"frame_count:i={args.count}")
+        for i, angle in enumerate(angles):
+            entries.extend((f"yaw_{i}:r={numbers([angle])}",
+                f'output_{i}:t="{dagor_path(images / f"{i:06d}.png")}"',
+                f'metadata_{i}:t="{dagor_path(out / f"frame-{i:06d}.pending.blk")}"'))
     if args.eye:
         entries.append(f'eye:p3={numbers(args.eye)}')
     config.write_text("\n".join(entries) + "\n", encoding="ascii")
@@ -607,6 +627,24 @@ def frame(args, game, cdk):
     for marker in ("MAP_OK", "MODEL_OK", "CAMERA_OK", "FRAME_OK"):
         if f"[KE] {marker}" not in log:
             raise ValueError(f"{marker} missing from probe.dcmd.log")
+    if args.count > 1:
+        if f"[KE] SEQUENCE_OK frames={args.count}" not in log or log.count("[KE] FRAME_OK ") != args.count:
+            raise ValueError("Sequence incomplete or old editor build: check SEQUENCE_OK and FRAME_OK in logs")
+        from ke_annotation import read_annotation
+        records = []
+        for i, angle in enumerate(angles):
+            image_path = images / f"{i:06d}.png"
+            source = out / f"frame-{i:06d}.pending.blk"
+            verify_png(image_path, args.width, args.height)
+            annotation = read_annotation(require_file(source))
+            records.append({"seed": args.seed, "frame_index": i, "yaw_deg": angle,
+                "image": f"images/{i:06d}.png", "annotation": annotation["annotations"][0],
+                "dagor_frame_metadata_blk": source.read_text(encoding="utf-8")})
+        (out / "metadata.jsonl").write_text("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in records), encoding="utf-8")
+        for i in range(args.count):
+            (out / f"frame-{i:06d}.pending.blk").unlink()
+        print(f"[KE] SEQUENCE_WRITTEN {len(records)} frames in {out}")
+        return
     verify_png(png, args.width, args.height)
     write_annotation(require_file(meta), out / "annotation.json")
     require_file(meta).rename(out / "frame.blk")
@@ -642,6 +680,8 @@ def main():
     frame_cmd.add_argument("--ground-offset", type=float, default=0.05)
     frame_cmd.add_argument("--eye", nargs=3, type=float)
     frame_cmd.add_argument("--yaw", type=float, default=20)
+    frame_cmd.add_argument("--count", type=int, default=1, help="Experimental single-process sequence count")
+    frame_cmd.add_argument("--seed", type=int, help="Seed for the sequence yaw angles")
     frame_cmd.add_argument("--fov", type=float, default=55)
     frame_cmd.add_argument("--width", type=int, default=1280)
     frame_cmd.add_argument("--height", type=int, default=720)
