@@ -24,6 +24,7 @@ PATCHES = (
     HERE / "patches/dagor-terrain-draw.patch",
     RENDER_DEBUG_PATCH,
     DIRECT_DEPTH_PATCH,
+    HERE / "patches/dagor-clipmap-software-feedback.patch",
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -522,6 +523,8 @@ def frame(args, game, cdk):
                f"-rootdir:{dagor_path(out)}", f"-addpath:{dagor_path(game)}", f"-addpath:{dagor_path(cdk)}",
                "-enable:Scene view", "-disable:Landscape", r"-exclude_dll_re:heightmapLand-aces-dev\.dll$",
                f"-ws:{workspace_name}", project, batch]
+    if args.clipmap_feedback == "software":
+        command.insert(-2, "-ke-clipmap-software")
     if args.render_debug:
         debug_dir = out / "render-debug"
         debug_path = dagor_path(debug_dir)
@@ -577,6 +580,8 @@ def main():
     frame_cmd.add_argument("--height", type=int, default=720)
     frame_cmd.add_argument("--timeout", type=int, default=360)
     frame_cmd.add_argument("--render-debug", action="store_true", help="Export terrain and static G-buffer diagnostics")
+    frame_cmd.add_argument("--clipmap-feedback", choices=("hardware", "software"), default="hardware",
+                           help="Compute terrain tile requests on the GPU or CPU")
     args = parser.parse_args()
     try:
         if args.command == "build":

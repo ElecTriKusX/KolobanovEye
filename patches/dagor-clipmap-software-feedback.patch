@@ -1,0 +1,43 @@
+--- a/prog/tools/sceneTools/daEditorX/binSceneView/strmLevel.cpp
++++ b/prog/tools/sceneTools/daEditorX/binSceneView/strmLevel.cpp
+@@ -326,9 +326,11 @@
+ 
+   bool useToroidalHeightmap = clipmapBlk.getBool("useToroidalHeightmap", false);
+ 
+-  clipmap = new Clipmap;
++  const bool softwareFeedback = dgs_get_argv("ke-clipmap-software") != nullptr;
++  clipmap = new Clipmap(!softwareFeedback);
+ 
+-  clipmap->init(texelSize, Clipmap::CPU_HW_FEEDBACK, Clipmap::getDefaultFeedbackProperties(), 7);
++  clipmap->init(texelSize, softwareFeedback ? Clipmap::SOFTWARE_FEEDBACK : Clipmap::CPU_HW_FEEDBACK,
++    Clipmap::getDefaultFeedbackProperties(), 7);
+   clipmap->initVirtualTexture(4096, 8192, 256, 1, 1, float(2 * 1920 * 1080), false);
+ 
+   carray<uint32_t, 4> bufFormats;
+@@ -999,11 +1001,25 @@
+   Driver3dPerspective persp;
+   d3d::getpersp(persp);
+   LandmeshCMRenderer landmeshCMRenderer(*lmeshRenderer, *lmeshMgr);
+-  clipmap->prepareFeedback(::grs_cur_view.pos, gtm, nullptr, {cameraHeight, persp.wk});
++  const SoftwareFeedbackParams softwareParams{::grs_cur_view.itm, 0.f, 0.f, cameraHeight};
++  clipmap->prepareFeedback(::grs_cur_view.pos, gtm, nullptr, {cameraHeight, persp.wk}, softwareParams);
+   clipmap->renderFallbackFeedback(landmeshCMRenderer, gtm);
+   clipmap->finalizeFeedback();
+   clipmap->prepareRender(landmeshCMRenderer);
+ 
++  if (dgs_get_argv("ke-render-debug"))
++  {
++    static int cacheVar = get_shader_variable_id("cache_tex0", true);
++    static int indirectionVar = get_shader_variable_id("indirection_tex", true);
++    BBox2 cacheBounds;
++    const bool hasBounds = clipmap->getBBox(cacheBounds);
++    debug("[KE] CLIPMAP feedback=%s cache_bounds=%d camera_xz=(%.2f,%.2f) cache0_bound=%d indirection_bound=%d",
++      clipmap->getFeedbackType() == Clipmap::SOFTWARE_FEEDBACK ? "software" : "hardware", hasBounds,
++      ::grs_cur_view.pos.x, ::grs_cur_view.pos.z,
++      VariableMap::isGlobVariablePresent(cacheVar) && ShaderGlobal::get_tex(cacheVar) != BAD_TEXTUREID,
++      VariableMap::isGlobVariablePresent(indirectionVar) && ShaderGlobal::get_tex(indirectionVar) != BAD_TEXTUREID);
++  }
++
+   setFixedClipToShader();
+ 
+   ShaderGlobal::set_int_fast(render_with_normalmapVarId, 2);
