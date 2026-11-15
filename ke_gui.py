@@ -70,6 +70,7 @@ class App:
         menu_button = ttk.Menubutton(buttons, text='Дополнительно')
         menu = tk.Menu(menu_button, tearoff=False)
         menu.add_command(label='Проверить существующую серию…', command=self.check_run)
+        menu.add_command(label='Проверить рельеф серии…', command=self.check_terrain)
         menu.add_command(label='Показать рамки на копиях…', command=self.preview_run)
         menu.add_command(label='Экспортировать COCO отдельно…', command=self.coco_run)
         menu.add_separator()
@@ -165,6 +166,7 @@ class App:
             'Открыть папку — показывает последний успешный результат в Проводнике. Копировать журнал — копирует выделенный текст или весь журнал.\n\n'
             'Основная кнопка: создаёт новую папку ke-generate-XX, рендерит кадры, проверяет их и создаёт COCO в подпапке coco.\n\n'
             'Проверить серию — проверяет файлы и границы рамок существующей серии.\n'
+            'Проверить рельеф — оценивает перепад heightmap под углами габарита; воду и препятствия не проверяет.\n'
             'Рамки — создаёт отдельные копии кадров с зелёной рамкой.\n'
             'COCO — создаёт JSON-разметку для существующей серии без копирования изображений.\n\n'
             'COCO — формат данных для обучения детектора; здесь рамка приблизительная, видимость не проверена. '
@@ -178,6 +180,10 @@ class App:
     def check_run(self):
         run = self.choose_run()
         if run: self.start_tool('ke_validate.py', ['--run', run])
+
+    def check_terrain(self):
+        run = self.choose_run()
+        if run: self.start_tool('ke_terrain_audit.py', ['--run', run])
 
     def preview_run(self):
         run = self.choose_run()
@@ -220,12 +226,13 @@ class App:
                 for line in proc.stdout: self.events.put(('line', line))
                 code = proc.wait()
                 if code: raise RuntimeError(f'{stage}: код {code}. Результаты: {run}')
-            execute('1/3 Генерация', cmd)
+            execute('1/4 Генерация', cmd)
             with (run / 'generation-config.json').open('x', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2); f.write('\n')
             script = Path(__file__).resolve().parent
-            execute('2/3 Проверка серии', [sys.executable, '-u', str(script / 'ke_validate.py'), '--run', str(run)])
-            execute('3/3 Экспорт COCO', [sys.executable, '-u', str(script / 'ke_coco.py'), '--runs', str(run), '--out', str(run / 'coco')])
+            execute('2/4 Проверка серии', [sys.executable, '-u', str(script / 'ke_validate.py'), '--run', str(run)])
+            execute('3/4 Диагностика рельефа', [sys.executable, '-u', str(script / 'ke_terrain_audit.py'), '--run', str(run), '--write'])
+            execute('4/4 Экспорт COCO', [sys.executable, '-u', str(script / 'ke_coco.py'), '--runs', str(run), '--out', str(run / 'coco')])
             self.events.put(('success', str(run)))
         except (OSError, ValueError, RuntimeError) as exc:
             self.events.put(('error', str(exc)))

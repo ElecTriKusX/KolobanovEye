@@ -37,11 +37,12 @@ class WorkflowTest(unittest.TestCase):
                 events=[]
                 while not app.events.empty(): events.append(app.events.get_nowait())
                 if failure is None:
-                    self.assertEqual(len(calls), 3)
+                    self.assertEqual(len(calls), 4)
                     self.assertEqual(events[-1], ('success', str(run)))
                     self.assertTrue((run/'generation-config.json').exists())
                     self.assertIn('ke_validate.py', calls[1][2])
-                    self.assertIn('ke_coco.py', calls[2][2])
+                    self.assertIn('ke_terrain_audit.py', calls[2][2])
+                    self.assertIn('ke_coco.py', calls[3][2])
                 else:
                     self.assertEqual(len(calls), 2)
                     self.assertEqual(events[-1][0], 'error')
@@ -67,7 +68,7 @@ class WorkflowTest(unittest.TestCase):
             app = SimpleNamespace(events=queue.Queue(), process=None)
             with patch('ke_gui.subprocess.Popen', Process):
                 App.worker(app, {'output': str(run)}, ['renderer'])
-            self.assertEqual(len(environments), 3)
+            self.assertEqual(len(environments), 4)
             self.assertTrue(all(e['PYTHONIOENCODING'] == 'utf-8' for e in environments))
 
     def test_copy_selected_or_entire_log(self):
