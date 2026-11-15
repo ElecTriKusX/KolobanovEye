@@ -29,6 +29,7 @@ CLIPMAP_LEGACY_PATCH = HERE / "patches/dagor-clipmap-legacy-color.patch"
 SEQUENCE_PATCH = HERE / "patches/dagor-sequence.patch"
 ORBIT_PATCH = HERE / "patches/dagor-orbit-camera.patch"
 CLEAN_CAPTURE_PATCH = HERE / "patches/dagor-clean-capture.patch"
+CAMERA_TERRAIN_PATCH = HERE / "patches/dagor-camera-terrain.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
     HERE / "patches/dagor-editor-unused-parameters.patch",
@@ -51,6 +52,7 @@ PATCHES = (
     SEQUENCE_PATCH,
     ORBIT_PATCH,
     CLEAN_CAPTURE_PATCH,
+    CAMERA_TERRAIN_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -463,7 +465,11 @@ def build(dagor, ooz=None):
         capture_output=True).returncode == 0
     sequence_applied = subprocess.run([*apply, "--reverse", "--check"],
         input=SEQUENCE_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    terrain_patch_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=CAMERA_TERRAIN_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     for patch in patches:
+        if terrain_patch_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH)):
+            continue
         if sequence_applied and patch.name == "dagor-phase0.patch":
             continue
         if legacy_clip_applied and patch in (INDIRECTION_PATCH, INDIRECTION_FIX_PATCH, INDIRECTION_CPU_PATCH, DX11_TRACE_PATCH,
@@ -522,6 +528,8 @@ def frame(args, game, cdk):
         raise ValueError("Sequence count must be 1–1000 and requires --seed for multiple frames")
     if args.count > 1 and args.eye:
         raise ValueError("--eye is for a single frame; sequences choose camera offsets around the tank")
+    if not math.isfinite(args.camera_clearance) or not 0 <= args.camera_clearance <= 100:
+        raise ValueError("Camera clearance must be finite and between 0 and 100")
     if args.timeout <= 0:
         raise ValueError("Timeout must be positive")
     out = args.out.resolve()
@@ -564,6 +572,7 @@ def frame(args, game, cdk):
         f'width:i={args.width}',
         f'height:i={args.height}',
         f'fov:r={numbers([args.fov])}',
+        f'camera_clearance:r={numbers([args.camera_clearance])}',
         f'yaw:r={numbers([args.yaw])}',
         f'tank:p3={numbers((args.tank_xz[0], args.ground_offset, args.tank_xz[1]))}',
     ]
@@ -637,7 +646,7 @@ def frame(args, game, cdk):
         debug_logs = sorted((out / ".logs").glob("daEditor3x-dev.exe-*/debug"), key=lambda p: p.stat().st_mtime)
         log_path = debug_logs[-1] if debug_logs else log_path
     log = require_file(log_path).read_text(encoding="utf-8", errors="replace")
-    for marker in ("MAP_OK", "MODEL_OK", "CAMERA_OK", "FRAME_OK"):
+    for marker in ("MAP_OK", "MODEL_OK", "CAMERA_TERRAIN", "SUPPORT_HEIGHTS", "CAMERA_OK", "FRAME_OK"):
         if f"[KE] {marker}" not in log:
             raise ValueError(f"{marker} missing from probe.dcmd.log")
     if args.count > 1:
@@ -697,6 +706,7 @@ def main():
     frame_cmd.add_argument("--count", type=int, default=1, help="Experimental single-process sequence count")
     frame_cmd.add_argument("--seed", type=int, help="Seed for the sequence yaw angles")
     frame_cmd.add_argument("--fov", type=float, default=55)
+    frame_cmd.add_argument("--camera-clearance", type=float, default=0.5, help="Minimum height above heightmap; not obstacle checking")
     frame_cmd.add_argument("--width", type=int, default=1280)
     frame_cmd.add_argument("--height", type=int, default=720)
     frame_cmd.add_argument("--renderdoc-cli", type=Path, help="renderdoccmd.exe; manual GPU capture requires --keep-open")

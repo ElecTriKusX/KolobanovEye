@@ -1,0 +1,71 @@
+diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+--- a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
++++ b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+@@ -116,6 +116,9 @@
+   const float defaultYaw = config.getReal("yaw", 0.f);
+   const int frameCount = config.getInt("frame_count", 1);
+   const float fov = config.getReal("fov", 55.f);
++  const float minCameraClearance = config.getReal("camera_clearance", 0.5f);
++  if (!std::isfinite(minCameraClearance) || minCameraClearance < 0.f || minCameraClearance > 100.f)
++    return fail("CONFIG", "Invalid minimum camera clearance");
+   if (!*level || !dd_file_exist(level) || !*modelName || !*output || !*metadata || width < 64 || width > 4096 || height < 64 ||
+       height > 4096 || !finite_point(requested) || !std::isfinite(defaultYaw) || frameCount < 1 || frameCount > 1000 || !(fov >= 15.f && fov <= 100.f))
+     return fail("CONFIG", "Check level file, model, output, frame size, tank position and FOV");
+@@ -191,6 +194,24 @@
+   world.setcol(0, cs, 0, -sn);
+   world.setcol(2, sn, 0, cs);
+   world.setcol(3, position);
++  // Heightmap-only diagnostic; does not prove contact or absence of obstacles.
++  int supportCount = 0;
++  float supportMin = 0.f, supportMax = 0.f;
++  for (int corner = 0; corner < 4; ++corner)
++  {
++    const Point3 local(bounds[(corner & 1) != 0].x, bounds[0].y, bounds[(corner & 2) != 0].z);
++    const Point3 probe = world * local;
++    float h = 0.f;
++    Point3 normal;
++    if (scene.getHeightmapAtPoint(probe.x, probe.z, h, &normal) && std::isfinite(h))
++    {
++      if (supportCount == 0) supportMin = supportMax = h;
++      else { supportMin = fminf(supportMin, h); supportMax = fmaxf(supportMax, h); }
++      ++supportCount;
++    }
++  }
++  console->addMessage(ILogWriter::NOTE, "[KE] SUPPORT_HEIGHTS index=%d samples=%d min=%.3f max=%.3f",
++    frameIndex, supportCount, supportMin, supportMax);
+   if (tree)
+   {
+     tree->setRootTmScalar(world);
+@@ -233,6 +254,17 @@
+     console->addMessage(ILogWriter::NOTE, "[KE] ORBIT_FRAME index=%d eye=(%.3f,%.3f,%.3f)", frameIndex, eye.x, eye.y, eye.z);
+   if (!finite_point(eye) || lengthSq(aim - eye) < 0.01f || lengthSq(Point3(0, 1, 0) % (aim - eye)) < 0.01f)
+     return fail("CAMERA", "Eye must be finite and offset horizontally from the target");
++  float cameraGround = 0.f;
++  Point3 cameraGroundNormal;
++  const bool cameraGroundKnown = scene.getHeightmapAtPoint(eye.x, eye.z, cameraGround, &cameraGroundNormal) &&
++    std::isfinite(cameraGround);
++  if (!cameraGroundKnown)
++    return fail("CAMERA_TERRAIN", "Heightmap unavailable under camera; position is not verified");
++  const float cameraClearance = eye.y - cameraGround;
++  console->addMessage(ILogWriter::NOTE, "[KE] CAMERA_TERRAIN index=%d ground=%.3f clearance=%.3f min=%.3f",
++    frameIndex, cameraGround, cameraClearance, minCameraClearance);
++  if (cameraClearance < minCameraClearance)
++    return fail("CAMERA_TERRAIN", "Camera is below the minimum height above terrain");
+   const Point3 forward = normalize(aim - eye);
+   const Point3 right = normalize(Point3(0, 1, 0) % forward);
+   TMatrix camera = TMatrix::IDENT;
+@@ -355,6 +387,14 @@
+   result.setPoint3("tank_world", position);
+   result.setReal("yaw_deg", yaw);
+   result.setPoint3("eye", eye);
++  result.setReal("camera_ground_y", cameraGround);
++  result.setReal("camera_clearance", cameraClearance);
++  result.setInt("support_height_samples", supportCount);
++  if (supportCount > 0)
++  {
++    result.setReal("support_height_min", supportMin);
++    result.setReal("support_height_max", supportMax);
++  }
+   result.setPoint3("look_at", aim);
+   result.setReal("fov_x_deg", fov);
+   result.setReal("near", nearZ);
