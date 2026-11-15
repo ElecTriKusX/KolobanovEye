@@ -5,6 +5,7 @@ import zlib
 from pathlib import Path
 
 import ke_diagnose as diagnostic
+import ke_pixel_debug as pixel
 
 
 def chunk(kind, payload):
@@ -19,6 +20,15 @@ class DiagnosticsTests(unittest.TestCase):
             p.write_bytes(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 2, 1, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b''))
             stats = diagnostic.image_stats(p)
             self.assertEqual((stats['black_pixels'], stats['near_black_pixels'], stats['pixels']), (1, 2, 2))
+
+    def test_pixel_comparison_and_invalid_dimensions(self):
+        a = (2, 1, bytearray([40, 50, 60, 0, 0, 0]))
+        b = (2, 1, bytearray([1, 2, 3, 1, 2, 3]))
+        cells = pixel.compare(a, b, cols=1, rows=1)
+        self.assertEqual(cells[0]['albedo_color_to_frame_dark_pct'], 50.0)
+        self.assertEqual(cells[0]['albedo_near_black_pct'], 50.0)
+        with self.assertRaises(ValueError):
+            pixel.compare(a, (1, 1, bytearray(3)))
 
     def test_cpu_upload_does_not_hide_gpu_failure(self):
         with tempfile.TemporaryDirectory() as d:
