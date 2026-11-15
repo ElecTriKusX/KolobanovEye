@@ -20,6 +20,7 @@ PATCHES = (
     HERE / "patches/dagor-clipmap-render-mask.patch",
     HERE / "patches/dagor-screenshot-lighting.patch",
     HERE / "patches/dagor-terrain-draw.patch",
+    HERE / "patches/dagor-render-debug.patch",
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -512,6 +513,11 @@ def frame(args, game, cdk):
                f"-rootdir:{dagor_path(out)}", f"-addpath:{dagor_path(game)}", f"-addpath:{dagor_path(cdk)}",
                "-enable:Scene view", "-disable:Landscape", r"-exclude_dll_re:heightmapLand-aces-dev\.dll$",
                f"-ws:{workspace_name}", project, batch]
+    if args.render_debug:
+        debug_dir = out / "render-debug"
+        debug_path = dagor_path(debug_dir)
+        debug_dir.mkdir()
+        command.insert(-2, f"-ke-render-debug:{debug_path}")
     try:
         run_logged(command, out / "host-stdout.log", out, args.timeout)
     except (ValueError, subprocess.TimeoutExpired) as exc:
@@ -527,6 +533,11 @@ def frame(args, game, cdk):
     require_file(meta).rename(out / "frame.blk")
     final = png.rename(out / "frame.png")
     print(f"[KE] FRAME_WRITTEN {final}  SHA256={hashlib.sha256(final.read_bytes()).hexdigest()}")
+    if args.render_debug:
+        print(f"[KE] Render diagnostics: {debug_dir}")
+        for name in ("terrain-last-clip.png", "static-albedo.png", "static-depth-mask.png"):
+            if not (debug_dir / name).is_file():
+                print(f"[KE] Diagnostic image missing: {name}. See RENDER_DEBUG in .logs.")
     print("[KE] Visual verification is still required.")
 
 
@@ -556,6 +567,7 @@ def main():
     frame_cmd.add_argument("--width", type=int, default=1280)
     frame_cmd.add_argument("--height", type=int, default=720)
     frame_cmd.add_argument("--timeout", type=int, default=360)
+    frame_cmd.add_argument("--render-debug", action="store_true", help="Export terrain and static G-buffer diagnostics")
     args = parser.parse_args()
     try:
         if args.command == "build":
