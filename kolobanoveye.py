@@ -12,6 +12,8 @@ import subprocess
 import sys
 import tempfile
 
+from ke_annotation import write_annotation
+
 REV = "9639942de5a8e5b01d91977f60ed82cda22d5f41"
 HERE = Path(__file__).resolve().parent
 RENDER_DEBUG_PATCH = HERE / "patches/dagor-render-debug.patch"
@@ -606,6 +608,7 @@ def frame(args, game, cdk):
         if f"[KE] {marker}" not in log:
             raise ValueError(f"{marker} missing from probe.dcmd.log")
     verify_png(png, args.width, args.height)
+    write_annotation(require_file(meta), out / "annotation.json")
     require_file(meta).rename(out / "frame.blk")
     final = png.rename(out / "frame.png")
     print(f"[KE] FRAME_WRITTEN {final}  SHA256={hashlib.sha256(final.read_bytes()).hexdigest()}")
