@@ -1,0 +1,17 @@
+--- a/prog/tools/sceneTools/daEditorX/binSceneView/plugin_scn.cpp
++++ b/prog/tools/sceneTools/daEditorX/binSceneView/plugin_scn.cpp
+@@ -486,6 +486,14 @@
+   if (!isVisible || !streamingScene)
+     return;
+ 
++  if (stage == STG_RENDER_DYNAMIC_OPAQUE && kolobanovEyeModel)
++  {
++    // Terrain clipmaps reuse this stage with a mask that selects only decals.
++    static const unsigned renderGeometryMask = 1u << DAEDITOR3.registerEntitySubTypeId("rend_ent_geom");
++    if (!(DAEDITOR3.getEntitySubTypeMask(IObjEntityFilter::STMASK_TYPE_RENDER) & renderGeometryMask))
++      return;
++  }
++
+   switch (stage)
+   {
+     case STG_BEFORE_RENDER: streamingScene->beforeRender(); break;
