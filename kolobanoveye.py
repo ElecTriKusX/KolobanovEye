@@ -519,6 +519,29 @@ def camera_orbit_offset(azimuth_deg, horizontal_distance=20.0, height=5.0):
     return (round(horizontal_distance * math.sin(a), 6), height, round(horizontal_distance * math.cos(a), 6))
 
 
+def plan_camera_orbits(seed, count, distance_range, elevation_range):
+    """Sample horizontal distance and elevation relative to the model center."""
+    dmin, dmax = distance_range
+    emin, emax = elevation_range
+    if not all(math.isfinite(v) for v in (dmin, dmax, emin, emax)):
+        raise ValueError("Camera ranges must be finite")
+    if not (2 <= dmin <= dmax <= 10000):
+        raise ValueError("Horizontal camera distance must satisfy 2 <= min <= max <= 10000")
+    if not (0 <= emin <= emax <= 80):
+        raise ValueError("Camera elevation must satisfy 0 <= min <= max <= 80 degrees")
+    rng = random.Random(seed)
+    result = []
+    for _ in range(count):
+        azimuth = round(rng.uniform(-180, 180), 4)
+        distance = round(rng.uniform(dmin, dmax), 4)
+        elevation = round(rng.uniform(emin, emax), 4)
+        height = round(distance * math.tan(math.radians(elevation)), 6)
+        result.append({"azimuth_deg": azimuth, "horizontal_distance": distance,
+                       "elevation_deg": elevation,
+                       "offset": camera_orbit_offset(azimuth, distance, height)})
+    return result
+
+
 def frame(args, game, cdk):
     if os.name != "nt":
         raise ValueError("DX11 capture requires Windows x64")
@@ -526,6 +549,8 @@ def frame(args, game, cdk):
         raise ValueError("Frame sides must be 64–4096 pixels and horizontal FOV 15–100 degrees")
     if not 1 <= args.count <= 1000 or (args.count > 1 and args.seed is None):
         raise ValueError("Sequence count must be 1–1000 and requires --seed for multiple frames")
+    if args.count > 1:
+        plan_camera_orbits(args.seed, 0, args.camera_distance_range, args.camera_elevation_range)
     if args.count > 1 and args.eye:
         raise ValueError("--eye is for a single frame; sequences choose camera offsets around the tank")
     if not math.isfinite(args.camera_clearance) or not 0 <= args.camera_clearance <= 100:
@@ -579,12 +604,13 @@ def frame(args, game, cdk):
     if args.count > 1:
         images = out / "images"
         images.mkdir()
-        rng = random.Random(args.seed)
-        angles = [round(rng.uniform(-180, 180), 4) for _ in range(args.count)]
-        offsets = [camera_orbit_offset(angle) for angle in angles]
-        (out / "plan.json").write_text(json.dumps({"seed": args.seed, "tank_yaw_deg": args.yaw, "camera_azimuth_degrees": angles, "camera_offsets": offsets}, indent=2) + "\n", encoding="utf-8")
+        orbit_plan = plan_camera_orbits(args.seed, args.count, args.camera_distance_range, args.camera_elevation_range)
+        offsets = [camera["offset"] for camera in orbit_plan]
+        (out / "plan.json").write_text(json.dumps({"schema_version": 2, "seed": args.seed,
+            "tank_yaw_deg": args.yaw, "camera_distance_range": args.camera_distance_range,
+            "camera_elevation_range": args.camera_elevation_range, "cameras": orbit_plan}, indent=2) + "\n", encoding="utf-8")
         entries.append(f"frame_count:i={args.count}")
-        for i, angle in enumerate(angles):
+        for i, camera in enumerate(orbit_plan):
             entries.extend((f"camera_offset_{i}:p3={numbers(offsets[i])}",
                 f'output_{i}:t="{dagor_path(images / f"{i:06d}.png")}"',
                 f'metadata_{i}:t="{dagor_path(out / f"frame-{i:06d}.pending.blk")}"'))
@@ -654,13 +680,14 @@ def frame(args, game, cdk):
             raise ValueError("Sequence incomplete or old editor build: check SEQUENCE_OK and FRAME_OK in logs")
         from ke_annotation import read_annotation
         records = []
-        for i, angle in enumerate(angles):
+        for i, camera in enumerate(orbit_plan):
             image_path = images / f"{i:06d}.png"
             source = out / f"frame-{i:06d}.pending.blk"
             verify_png(image_path, args.width, args.height)
             annotation = read_annotation(require_file(source))
             records.append({"seed": args.seed, "frame_index": i, "tank_yaw_deg": args.yaw,
-                "camera_azimuth_deg": angle, "camera_offset": offsets[i],
+                "camera_azimuth_deg": camera["azimuth_deg"], "camera_horizontal_distance": camera["horizontal_distance"],
+                "camera_elevation_deg": camera["elevation_deg"], "camera_offset": offsets[i],
                 "image": f"images/{i:06d}.png", "annotation": annotation["annotations"][0],
                 "dagor_frame_metadata_blk": source.read_text(encoding="utf-8")})
         (out / "metadata.jsonl").write_text("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in records), encoding="utf-8")
@@ -704,9 +731,13 @@ def main():
     frame_cmd.add_argument("--eye", nargs=3, type=float)
     frame_cmd.add_argument("--yaw", type=float, default=20)
     frame_cmd.add_argument("--count", type=int, default=1, help="Experimental single-process sequence count")
-    frame_cmd.add_argument("--seed", type=int, help="Seed for the sequence yaw angles")
+    frame_cmd.add_argument("--seed", type=int, help="Seed for the sequence camera angles and distances")
     frame_cmd.add_argument("--fov", type=float, default=55)
     frame_cmd.add_argument("--camera-clearance", type=float, default=0.5, help="Minimum height above heightmap; not obstacle checking")
+    frame_cmd.add_argument("--camera-distance-range", nargs=2, type=float, default=(18, 35), metavar=("MIN", "MAX"),
+                           help="Horizontal distance from tank center for sequences (default: 18 35)")
+    frame_cmd.add_argument("--camera-elevation-range", nargs=2, type=float, default=(10, 25), metavar=("MIN", "MAX"),
+                           help="Elevation in degrees above tank center for sequences (default: 10 25)")
     frame_cmd.add_argument("--width", type=int, default=1280)
     frame_cmd.add_argument("--height", type=int, default=720)
     frame_cmd.add_argument("--renderdoc-cli", type=Path, help="renderdoccmd.exe; manual GPU capture requires --keep-open")
