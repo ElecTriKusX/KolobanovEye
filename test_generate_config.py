@@ -1,0 +1,36 @@
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from ke_generate import DEFAULTS, command, validate_config
+from ke_review import write_rgb_png
+from ke_validate import validate
+
+
+class ConfigTest(unittest.TestCase):
+    def test_config_command_paths_are_separate_arguments(self):
+        config = validate_config({**DEFAULTS, 'dagor': r'D:\My Tools\Dagor', 'count': 3})
+        cmd = command(config)
+        self.assertEqual(cmd[cmd.index('--dagor') + 1], r'D:\My Tools\Dagor')
+        self.assertEqual(cmd[cmd.index('--count') + 1], '3')
+        self.assertEqual(cmd[cmd.index('--camera-distance-range') + 1:cmd.index('--camera-distance-range') + 3], ['18.0', '35.0'])
+
+    def test_config_rejects_bad_values(self):
+        for change in ({'count': True}, {'count': 1}, {'width': 20}, {'distance_min': 40},
+                       {'fov': float('nan')}, {'wat': 1}, {'clipmap_feedback': 'wrong'}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                validate_config({**DEFAULTS, **change})
+
+    def test_validator_checks_real_png_and_bounds(self):
+        with tempfile.TemporaryDirectory() as temp:
+            run = Path(temp); (run / 'images').mkdir()
+            write_rgb_png(run / 'images/000000.png', 64, 64, bytes([7, 8, 9]) * (64*64))
+            (run / 'plan.json').write_text(json.dumps({'cameras': [{}]}))
+            item = {'frame_index': 0, 'image': 'images/000000.png',
+                    'annotation': {'class': 'tank', 'bbox_kind': 'approximate_amodal', 'bbox_xywh': [2, 3, 20, 30]},
+                    'dagor_frame_metadata_blk': 'width:i=64\nheight:i=64\n'}
+            meta = run / 'metadata.jsonl'; meta.write_text(json.dumps(item) + '\n')
+            self.assertEqual(validate(run)['frames'], 1)
+            item['annotation']['bbox_xywh'] = [60, 2, 20, 5]
+            meta.write_text(json.dumps(item) + '\n')
+            with self.assertRaisesRegex(ValueError, 'BBox'): validate(run)

@@ -1,0 +1,21 @@
+{
+  "dagor": "D:\\Projects\\DagorEngine",
+  "game": "D:\\Games\\WarThunder",
+  "output": "D:\\Projects\\ke-generate-01",
+  "count": 6,
+  "seed": 42,
+  "width": 1280,
+  "height": 720,
+  "fov": 55.0,
+  "tank_x": 0.0,
+  "tank_z": 0.0,
+  "tank_yaw": 20.0,
+  "ground_offset": 0.05,
+  "camera_clearance": 0.5,
+  "distance_min": 18.0,
+  "distance_max": 35.0,
+  "elevation_min": 10.0,
+  "elevation_max": 25.0,
+  "clipmap_feedback": "software",
+  "timeout": 360
+}
