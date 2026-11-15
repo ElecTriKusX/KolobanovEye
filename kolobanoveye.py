@@ -216,9 +216,10 @@ def read_normandy_lightmap(path):
             aligned_length = (length + 3) & ~3
             if length < 0 or aligned_length > end - stream.tell():
                 raise ValueError("Invalid TEX name length")
-            if length not in (len(name), len(name) + 1):
-                continue
-            if read_exact(stream, aligned_length)[:length].rstrip(b"\0") != name:
+            encoded_name = read_exact(stream, aligned_length)[:length].rstrip(b"\0")
+            # Dagor's TEX name can end with a managed-texture marker and sampling metadata.
+            base_name = encoded_name.rsplit(b"?", 1)[0].removesuffix(b"*")
+            if base_name != name:
                 continue
             if end - stream.tell() < 36:
                 raise ValueError("Truncated embedded DDSx block")
@@ -251,6 +252,7 @@ def read_normandy_lightmap(path):
             payload = read_exact(stream, packed)
             meta = {
                 "texture": name.decode(),
+                "encoded_texture": encoded_name.decode("ascii", errors="backslashreplace"),
                 "texture_format_hex": fmt.hex(),
                 "width": width,
                 "height": height,

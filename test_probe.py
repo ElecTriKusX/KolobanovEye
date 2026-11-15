@@ -43,21 +43,28 @@ class ProbeTest(unittest.TestCase):
                 probe.level_info(self.write("level.bin", data))
 
     def test_extracts_embedded_oodle_lightmap(self):
-        name = b"avg_normandy_lightmap"
-        named = struct.pack("<I", len(name)) + name + bytes((-len(name)) % 4)
+        def texture_name(name):
+            return struct.pack("<I", len(name)) + name + bytes((-len(name)) % 4)
+
         payload = bytes((0x8C, 6, 0, 0, 0))
         ddsx = struct.pack("<4s4sIHHBBHHBBII", b"DDSx", b"DXT1", 0x60000000, 4, 4, 1, 0, 0, 4, 0, 3, 8, len(payload))
         outer = b"DBLD3x64" + bytes(4)
-        for declared in (len(ddsx) + len(payload), len(ddsx) + 1):
-            tex = block(b"TEX", named + struct.pack("<I", declared) + ddsx + payload)
-            path = self.write("level.bin", outer + tex + block(b"END"))
-            if declared == len(ddsx) + len(payload):
+        other = block(b"TEX", texture_name(b"avg_normandy_lightmap_extra*?AmQ0-0-0"))
+        for name in (b"avg_normandy_lightmap", b"avg_normandy_lightmap*?AmQ0-0-0"):
+            with self.subTest(name=name):
+                named = texture_name(name)
+                tex = block(b"TEX", named + struct.pack("<I", len(ddsx) + len(payload)) + ddsx + payload)
+                path = self.write("level.bin", outer + other + tex + block(b"END"))
                 info, data = probe.read_normandy_lightmap(path)
                 self.assertEqual(data, payload)
+                self.assertEqual(info["texture"], "avg_normandy_lightmap")
+                self.assertEqual(info["encoded_texture"], name.decode())
                 self.assertEqual(info["first_stream_type"], "Kraken")
                 self.assertEqual(info["mip_bytes"], 8)
-                self.assertEqual(info["payload_offset"], 84)
-            else:
+                self.assertEqual(info["payload_offset"], len(outer + other) + 12 + len(named) + len(ddsx))
+
+                truncated = block(b"TEX", named + struct.pack("<I", len(ddsx) + 1) + ddsx + payload)
+                path = self.write("level.bin", outer + truncated + block(b"END"))
                 with self.assertRaisesRegex(ValueError, "Invalid DDSx sizes"):
                     probe.read_normandy_lightmap(path)
 
