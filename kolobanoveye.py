@@ -410,9 +410,13 @@ def build(dagor, ooz=None):
     apply = ["git", "apply", "--whitespace=error-all"]
     patches = (*PATCHES, OOZ_PATCH) if ooz else PATCHES
     for patch in patches:
-        if subprocess.run([*apply, "--reverse", "--check", patch], cwd=dagor, capture_output=True).returncode:
-            subprocess.run([*apply, "--check", patch], cwd=dagor, check=True)
-            subprocess.run([*apply, patch], cwd=dagor, check=True)
+        # Git for Windows may have checked out the patch as CRLF. Keep strict
+        # whitespace validation and pass the original diff with LF endings.
+        diff = patch.read_bytes().replace(b"\r\n", b"\n")
+        if subprocess.run([*apply, "--reverse", "--check"], input=diff, cwd=dagor, capture_output=True).returncode:
+            print(f"[KE] Applying {patch.name}", flush=True)
+            subprocess.run([*apply, "--check"], input=diff, cwd=dagor, check=True)
+            subprocess.run(apply, input=diff, cwd=dagor, check=True)
 
     logs = HERE / "build-logs"
     logs.mkdir(exist_ok=True)
