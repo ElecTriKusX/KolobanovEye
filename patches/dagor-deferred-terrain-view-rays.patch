@@ -1,0 +1,12 @@
+--- a/prog/tools/sceneTools/daEditorX/services/dynRenderSrv/dynRender.cpp
++++ b/prog/tools/sceneTools/daEditorX/services/dynRenderSrv/dynRender.cpp
+@@ -1385,6 +1385,9 @@
+     auto ssao = vr_mode ? vrResources.ssao.get() : this->ssao.get();                                                          //-V688
+     auto upscaleSamplingRenderer = vr_mode ? vrResources.upscaleSamplingRenderer.get() : this->upscaleSamplingRenderer.get(); //-V688
+ 
++    // Heightmap materials reconstruct world position from these rays in the opaque pass.
++    ::set_viewvecs_to_shader(view_tm, proj_tm);
++
+     deferredTarget->setRt();
+     d3d::clearview(CLEAR_TARGET | CLEAR_ZBUFFER | CLEAR_STENCIL, 0, 0, 0);
+     if (!renderMatrixOk)

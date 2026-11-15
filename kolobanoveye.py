@@ -26,6 +26,7 @@ PATCHES = (
     DIRECT_DEPTH_PATCH,
     HERE / "patches/dagor-clipmap-software-feedback.patch",
     HERE / "patches/dagor-clipmap-tile-readback.patch",
+    HERE / "patches/dagor-deferred-terrain-view-rays.patch",
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
