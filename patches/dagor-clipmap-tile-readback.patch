@@ -1,0 +1,144 @@
+diff --git a/prog/gameLibs/landMesh/virtualtexture.cpp b/prog/gameLibs/landMesh/virtualtexture.cpp
+index e2b2bb2a..b8b104a3 100644
+--- a/prog/gameLibs/landMesh/virtualtexture.cpp
++++ b/prog/gameLibs/landMesh/virtualtexture.cpp
+@@ -25,6 +25,7 @@
+ #include <debug/dag_debug3d.h>
+ #include <osApiWrappers/dag_miscApi.h>
+ #include <osApiWrappers/dag_cpuJobs.h>
++#include <startup/dag_globalSettings.h>
+ #include <workCycle/dag_workCycle.h>
+ #include <perfMon/dag_cpuFreq.h>
+ #include <EASTL/vector_set.h>
+@@ -1072,6 +1073,8 @@ private:
+ 
+   static constexpr int COMPRESS_QUEUE_SIZE = 4;
+   StaticTab<CacheCoords, COMPRESS_QUEUE_SIZE> compressionQueue;
++  int debugCameraTileSlot = -1;
++  bool debugCameraTileReported = false;
+   int maxTexMipCnt = 0;
+   int texTileBorder, texTileInnerSize;
+   void setTileSizeVars();
+@@ -3446,6 +3449,80 @@ void ClipmapImpl::endUpdateTiles(ClipmapRenderer &renderer)
+   renderer.endRenderTiles();
+ }
+ 
++// Compare one terrain tile in the render buffer and the cache without mapping either live texture.
++static void report_clipmap_tile_rgb(const char *stage, Texture *source, int x, int y, int size)
++{
++  TextureInfo info;
++  if (!source || !source->getinfo(info) || x < 0 || y < 0 || size <= 0 || x + size > info.w || y + size > info.h)
++  {
++    debug("[KE] CLIPMAP_TILE %s status=invalid_region", stage);
++    return;
++  }
++
++  const unsigned format = info.cflg & TEXFMT_MASK;
++  const bool bc3 = format == TEXFMT_DXT5;
++  const bool rgba8 = format == TEXFMT_A8R8G8B8 || format == TEXFMT_A8B8G8R8;
++  if (!(rgba8 || (bc3 && ((x | y | size) & 3) == 0)))
++  {
++    debug("[KE] CLIPMAP_TILE %s status=unsupported_format format=0x%08x", stage, format);
++    return;
++  }
++
++  SCOPE_RENDER_TARGET;
++  d3d::set_render_target({}, DepthAccess::RW, {});
++  UniqueTex staging = dag::create_tex(nullptr, size, size, format | TEXCF_SYSMEM | TEXCF_UPDATE_DESTINATION, 1,
++    "ke_clipmap_tile_readback", RESTAG_LAND);
++  Texture *stagingTex = staging.getTex2D();
++  if (!stagingTex || !d3d::update_sub_region(source, 0, x, y, 0, size, size, 1, stagingTex, 0, 0, 0, 0))
++  {
++    debug("[KE] CLIPMAP_TILE %s status=copy_failed format=0x%08x", stage, format);
++    return;
++  }
++
++  void *pixels = nullptr;
++  int stride = 0;
++  if (!stagingTex->lockimg(&pixels, stride, 0, TEXLOCK_READ | TEXLOCK_DONOTUPDATE))
++  {
++    debug("[KE] CLIPMAP_TILE %s status=lock_failed format=0x%08x", stage, format);
++    return;
++  }
++
++  int nonBlack = 0;
++  if (pixels && stride >= size * 4)
++  {
++    const int rows = bc3 ? size / 4 : size;
++    const int cols = bc3 ? size / 4 : size;
++    for (int row = 0; row < rows; ++row)
++    {
++      const auto *line = static_cast<const uint8_t *>(pixels) + row * stride;
++      for (int col = 0; col < cols; ++col)
++      {
++        if (bc3)
++        {
++          // BC3 uses four RGB colors regardless of endpoint order. Alpha occupies the first eight bytes.
++          const auto *colors = line + col * 16 + 8;
++          const bool color0 = (colors[0] | colors[1]) != 0;
++          const bool color1 = (colors[2] | colors[3]) != 0;
++          const bool nonBlackColor[] = {color0, color1, color0 || color1, color0 || color1};
++          for (int indexByte = 4; indexByte < 8; ++indexByte)
++            for (int bit = 0; bit < 8; bit += 2)
++              nonBlack += nonBlackColor[(colors[indexByte] >> bit) & 3];
++        }
++        else
++        {
++          const auto *rgb = line + col * 4;
++          nonBlack += (rgb[0] | rgb[1] | rgb[2]) != 0;
++        }
++      }
++    }
++  }
++  else
++    nonBlack = -1;
++  stagingTex->unlockimg();
++  debug("[KE] CLIPMAP_TILE %s status=%s format=0x%08x nonblack=%d pixels=%d", stage, nonBlack >= 0 ? "ok" : "bad_pitch",
++    format, nonBlack, size * size);
++}
++
+ void ClipmapImpl::finalizeCompressionQueue()
+ {
+   TIME_D3D_PROFILE(compressAndCopyQueue);
+@@ -3454,6 +3531,10 @@ void ClipmapImpl::finalizeCompressionQueue()
+ 
+   G_ASSERT(bindedBufferTex.size());
+ 
++  const int debugSlot = debugCameraTileSlot;
++  if (debugSlot >= 0)
++    report_clipmap_tile_rgb("render_buffer", bindedBufferTex[0], debugSlot * texTileSize, 0, texTileSize);
++
+   // Create mips
+   if (mipCnt > 1)
+   {
+@@ -3652,6 +3733,14 @@ void ClipmapImpl::finalizeCompressionQueue()
+   for (int ci = 0; ci < maxBufferCnt; ++ci)
+     ShaderGlobal::set_texture(bufferTexVarId[ci], BAD_TEXTUREID);
+ 
++  if (debugSlot >= 0)
++  {
++    const CacheCoords coords = compressionQueue[debugSlot];
++    report_clipmap_tile_rgb("cache", cache[0].getTex2D(), coords.x * texTileSize, coords.y * texTileSize, texTileSize);
++    debugCameraTileSlot = -1;
++    debugCameraTileReported = true;
++  }
++
+   compressionQueue.clear();
+ }
+ 
+@@ -3707,6 +3796,15 @@ uint32_t ClipmapImpl::updateTileBlock(ClipmapRenderer &renderer, const CacheCoor
+   region[1].x = t1.x * uv2landscape.x + uv2landscape.z;
+   region[1].y = t1.y * uv2landscape.y + uv2landscape.w;
+   uint32_t tag = updateTileBlockRaw(renderer, cacheCoords, region, mippos.tileZoomShift + tilePos.mip);
++  static const bool debugTile = dgs_get_argv("ke-render-debug") != nullptr;
++  if (debugTile && !debugCameraTileReported && debugCameraTileSlot < 0 && cacheCnt > 0 &&
++      tilePos.ri_offset == TERRAIN_RI_OFFSET && (region & Point2::xz(viewerPosition)) && d3d::get_driver_code().is(d3d::dx11))
++  {
++    debugCameraTileSlot = int(compressionQueue.size()) - 1;
++    debug("[KE] CLIPMAP_TILE mip=%d world_xz=(%.2f,%.2f)-(%.2f,%.2f) cache_xy=(%d,%d) compressed=%d",
++      mippos.tileZoomShift + tilePos.mip, region[0].x, region[0].y, region[1].x, region[1].y, cacheCoords.x, cacheCoords.y,
++      compressor[0] && compressor[0]->isValid());
++  }
+   return tag;
+ }
+ 
