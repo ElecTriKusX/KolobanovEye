@@ -19,6 +19,7 @@ PATCHES = (
     HERE / "patches/dagor-editor-unused-parameters.patch",
     HERE / "patches/dagor-clipmap-render-mask.patch",
     HERE / "patches/dagor-screenshot-lighting.patch",
+    HERE / "patches/dagor-terrain-draw.patch",
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -509,7 +510,8 @@ def frame(args, game, cdk):
                 f' application_path:t="{dagor_path(cdk / "application.blk")}"\n}}\n'.encode("ascii"))
     command = [editor, "-quiet", "-drv:dx11", "-no_src_assets", "-no_dabuild", "-async_batch", "-kolobanoveye-probe",
                f"-rootdir:{dagor_path(out)}", f"-addpath:{dagor_path(game)}", f"-addpath:{dagor_path(cdk)}",
-               "-enable:Scene view", "-disable:Landscape", f"-ws:{workspace_name}", project, batch]
+               "-enable:Scene view", "-disable:Landscape", r"-exclude_dll_re:heightmapLand-aces-dev\.dll$",
+               f"-ws:{workspace_name}", project, batch]
     try:
         run_logged(command, out / "host-stdout.log", out, args.timeout)
     except (ValueError, subprocess.TimeoutExpired) as exc:

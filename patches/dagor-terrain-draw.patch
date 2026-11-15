@@ -1,0 +1,35 @@
+--- a/prog/tools/sceneTools/daEditorX/binSceneView/strmLevel.cpp
++++ b/prog/tools/sceneTools/daEditorX/binSceneView/strmLevel.cpp
+@@ -820,7 +820,12 @@
+   {
+     mat44f proj;
+     d3d::gettm(TM_PROJ, proj);
+-    rendinst::updateRIGenImpostors(10000, sunDir0, ::grs_cur_view.itm, proj);
++    const Color4 activeSun = ShaderGlobal::get_float4(fromSunDirectionVarId);
++    Point3 impostorSun(activeSun.r, activeSun.g, activeSun.b);
++    // Impostor shadow cameras build their side axis by crossing this direction with world up.
++    if (!(impostorSun.x * impostorSun.x + impostorSun.z * impostorSun.z > 1e-8f))
++      impostorSun = Point3(0.01f, impostorSun.y < 0.f ? -1.f : 1.f, 0.f);
++    rendinst::updateRIGenImpostors(10000, impostorSun, ::grs_cur_view.itm, proj);
+   }
+ 
+   if (lmeshMgr && pendingBuildDf)
+@@ -1064,6 +1069,18 @@
+ 
+   clipmap->startUAVFeedback();
+   ShaderGlobal::set_int_fast(inEditorGvId, 0);
++  if (dgs_get_argv("kolobanoveye-probe"))
++  {
++    static bool reportedTerrain = false;
++    if (!reportedTerrain)
++    {
++      const int vsVar = get_shader_variable_id("lmesh_vs_const__pos_to_world", true);
++      const int vsSlot = VariableMap::isGlobVariablePresent(vsVar) ? ShaderGlobal::get_int_fast(vsVar) : -1;
++      debug("[KE] TERRAIN_DRAW renderer=%d landmesh_mask=%d hmap_mask=%d pos_to_world_slot=%d", lmeshRenderer != nullptr,
++        (st_mask & land_mesh_mask) != 0, (st_mask & hmap_mask) != 0, vsSlot);
++      reportedTerrain = true;
++    }
++  }
+   if (lmeshRenderer && (st_mask & (land_mesh_mask | hmap_mask)))
+   {
+     LandMeshRenderDesc desc;
