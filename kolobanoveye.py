@@ -33,6 +33,7 @@ PATCHES = (
     INDIRECTION_PATCH,
     INDIRECTION_FIX_PATCH,
     INDIRECTION_CPU_PATCH,
+    HERE / "patches/dagor-terrain-bind-diagnostics.patch",
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"

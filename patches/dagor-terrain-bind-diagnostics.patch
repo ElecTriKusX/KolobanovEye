@@ -1,0 +1,94 @@
+--- a/prog/gameLibs/landMesh/lmeshRenderer.cpp
++++ b/prog/gameLibs/landMesh/lmeshRenderer.cpp
+@@ -22,11 +22,14 @@
+ #include <math/dag_Point2.h>
+ #include <math/integer/dag_IBBox2.h>
+ #include <3d/dag_render.h>
++#include <3d/dag_lockTexture.h>
+ #include <3d/dag_texStreamingContext.h>
+ #include <shaders/dag_shaderBlock.h>
+ #include <shaders/dag_DynamicShaderHelper.h>
+ #include <debug/dag_debug.h>
+ #include <startup/dag_globalSettings.h>
++#include <osApiWrappers/dag_miscApi.h>
++#include <shaders/dag_shaderVarType.h>
+ #include <landMesh/lmeshRenderer.h>
+ #include <landMesh/lmeshManager.h>
+ #include "heightmap/heightmapHandler.h"
+@@ -1733,6 +1736,76 @@
+     ShaderGlobal::set_texture(var::vertical_tex, BAD_TEXTUREID);
+ 
+   ShaderGlobal::setBlock(land_mesh_object_blkid[rtype], ShaderGlobal::LAYER_SCENE);
++  if (rtype == RENDER_WITH_CLIPMAP && dgs_get_argv("ke-render-debug"))
++  {
++    static bool keReported = false;
++    if (!keReported)
++    {
++      keReported = true;
++      debug("[KE] TERRAIN_BIND blocks frame=%d scene=%d target_scene=%d hmap_type=%d tools=%d force_hmap=%d",
++        ShaderGlobal::getBlock(ShaderGlobal::LAYER_FRAME), ShaderGlobal::getBlock(ShaderGlobal::LAYER_SCENE),
++        land_mesh_object_blkid[rtype], int(culledData.hmapDrawType), provider.isInTools(), provider.forceHeightmapRendering);
++      const char *names[] = {"indirection_tex", "cache_tex0", "cache_tex1", "cache_tex2", "last_clip_tex",
++        "landscape2uv", "mippos_offset", "g_cache2uv", "g_TileSize", "g_TileInnerSize", "clipmap_tex_mips",
++        "fallback_info0", "fallback_info1", "world_to_last_clip"};
++      for (const char *name : names)
++      {
++        const int id = get_shader_variable_id(name, true);
++        if (!VariableMap::isGlobVariablePresent(id))
++        {
++          debug("[KE] TERRAIN_BIND var=%s missing", name);
++          continue;
++        }
++        const int type = ShaderGlobal::get_var_type(id);
++        if (type == SHVT_COLOR4)
++        {
++          const Color4 v = ShaderGlobal::get_float4(id);
++          debug("[KE] TERRAIN_BIND var=%s float4=(%g,%g,%g,%g)", name, v.r, v.g, v.b, v.a);
++        }
++        else if (type == SHVT_INT4)
++        {
++          const IPoint4 v = ShaderGlobal::get_int4(id);
++          debug("[KE] TERRAIN_BIND var=%s int4=(%d,%d,%d,%d)", name, v.x, v.y, v.z, v.w);
++        }
++        else if (type == SHVT_INT)
++          debug("[KE] TERRAIN_BIND var=%s int=%d", name, ShaderGlobal::get_int(id));
++        else if (type == SHVT_REAL)
++          debug("[KE] TERRAIN_BIND var=%s float=%g", name, ShaderGlobal::get_float(id));
++        else if (type == SHVT_TEXTURE)
++        {
++          BaseTexture *tex = ShaderGlobal::get_tex_ptr(id);
++          TextureInfo info{};
++          if (tex)
++            tex->getinfo(info);
++          debug("[KE] TERRAIN_BIND var=%s bound=%d size=%dx%d format=0x%08x", name, tex != nullptr, info.w, info.h, info.cflg);
++          if (tex && strcmp(name, "indirection_tex") == 0)
++          {
++            const auto pixels = lock_texture<const ImageRawBytes>(tex, 0, TEXLOCK_READ);
++            if (pixels && (pixels.getBytesPerElement() == 2 || pixels.getBytesPerElement() == 4))
++            {
++              const int bytes = pixels.getBytesPerElement();
++              int zeros = 0;
++              uint32_t first = 0;
++              for (int y = 0; y < info.h; ++y)
++                for (int x = 0; x < info.w; ++x)
++                {
++                  uint32_t value = 0;
++                  memcpy(&value, pixels.get() + y * pixels.getByteStride() + x * bytes, bytes);
++                  if (x == 0 && y == 0)
++                    first = value;
++                  zeros += value == 0;
++                }
++              debug("[KE] TERRAIN_BIND indirection_readback zeros=%d entries=%d first=0x%08x", zeros, info.w * info.h, first);
++            }
++            else
++              debug("[KE] TERRAIN_BIND indirection_readback_failed");
++          }
++        }
++        else
++          debug("[KE] TERRAIN_BIND var=%s type=%d", name, type);
++      }
++    }
++  }
+   if ((!provider.isInTools() || provider.forceHeightmapRendering) && (passCtx.desc.renderFlags & RENDER_HEIGHTMAP) &&
+       culledData.hmapDrawType != HmapDrawType::NONE && provider.getHmapHandler() && rtype != RENDER_GRASS_MASK &&
+       rtype != RENDER_CLIPMAP && rtype != RENDER_PATCHES)
