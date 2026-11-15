@@ -30,6 +30,7 @@ SEQUENCE_PATCH = HERE / "patches/dagor-sequence.patch"
 ORBIT_PATCH = HERE / "patches/dagor-orbit-camera.patch"
 CLEAN_CAPTURE_PATCH = HERE / "patches/dagor-clean-capture.patch"
 CAMERA_TERRAIN_PATCH = HERE / "patches/dagor-camera-terrain.patch"
+PLACEMENT_PATCH = HERE / "patches/dagor-placement-search.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
     HERE / "patches/dagor-editor-unused-parameters.patch",
@@ -53,6 +54,7 @@ PATCHES = (
     ORBIT_PATCH,
     CLEAN_CAPTURE_PATCH,
     CAMERA_TERRAIN_PATCH,
+    PLACEMENT_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -467,7 +469,11 @@ def build(dagor, ooz=None):
         input=SEQUENCE_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     terrain_patch_applied = subprocess.run([*apply, "--reverse", "--check"],
         input=CAMERA_TERRAIN_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    placement_patch_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=PLACEMENT_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     for patch in patches:
+        if placement_patch_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH)):
+            continue
         if terrain_patch_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH)):
             continue
         if sequence_applied and patch.name == "dagor-phase0.patch":
@@ -542,6 +548,17 @@ def plan_camera_orbits(seed, count, distance_range, elevation_range):
     return result
 
 
+def plan_placements(seed, center, radius, attempts):
+    if not math.isfinite(radius) or not 0 <= radius <= 10000 or not 1 <= attempts <= 64:
+        raise ValueError("Placement radius must be 0–10000; attempts must be 1–64")
+    if radius == 0:
+        return [(center[0], center[1])]
+    rng = random.Random(f"placement:{seed}")
+    return [(round(center[0] + radius * math.sqrt(u) * math.cos(a), 5),
+             round(center[1] + radius * math.sqrt(u) * math.sin(a), 5))
+            for u, a in ((rng.random(), rng.uniform(-math.pi, math.pi)) for _ in range(attempts))]
+
+
 def frame(args, game, cdk):
     if os.name != "nt":
         raise ValueError("DX11 capture requires Windows x64")
@@ -555,6 +572,11 @@ def frame(args, game, cdk):
         raise ValueError("--eye is for a single frame; sequences choose camera offsets around the tank")
     if not math.isfinite(args.camera_clearance) or not 0 <= args.camera_clearance <= 100:
         raise ValueError("Camera clearance must be finite and between 0 and 100")
+    if not math.isfinite(args.max_height_range) or not 0 <= args.max_height_range <= 100:
+        raise ValueError("Maximum terrain height range must be 0–100")
+    candidates = plan_placements(args.seed, args.tank_xz, args.placement_radius, args.placement_attempts)
+    if args.placement_radius > 0 and args.seed is None:
+        raise ValueError("Placement search requires --seed")
     if args.timeout <= 0:
         raise ValueError("Timeout must be positive")
     out = args.out.resolve()
@@ -598,16 +620,20 @@ def frame(args, game, cdk):
         f'height:i={args.height}',
         f'fov:r={numbers([args.fov])}',
         f'camera_clearance:r={numbers([args.camera_clearance])}',
+        f'max_height_range:r={numbers([args.max_height_range])}',
+        f'candidate_count:i={len(candidates)}',
         f'yaw:r={numbers([args.yaw])}',
         f'tank:p3={numbers((args.tank_xz[0], args.ground_offset, args.tank_xz[1]))}',
     ]
+    for i, (x, z) in enumerate(candidates):
+        entries.append(f'candidate_{i}:p3={numbers((x, args.ground_offset, z))}')
     if args.count > 1:
         images = out / "images"
         images.mkdir()
         orbit_plan = plan_camera_orbits(args.seed, args.count, args.camera_distance_range, args.camera_elevation_range)
         offsets = [camera["offset"] for camera in orbit_plan]
         (out / "plan.json").write_text(json.dumps({"schema_version": 2, "seed": args.seed,
-            "tank_yaw_deg": args.yaw, "camera_distance_range": args.camera_distance_range,
+            "tank_yaw_deg": args.yaw, "placement_candidates_xz": candidates, "max_height_range": args.max_height_range, "camera_distance_range": args.camera_distance_range,
             "camera_elevation_range": args.camera_elevation_range, "cameras": orbit_plan}, indent=2) + "\n", encoding="utf-8")
         entries.append(f"frame_count:i={args.count}")
         for i, camera in enumerate(orbit_plan):
@@ -672,7 +698,7 @@ def frame(args, game, cdk):
         debug_logs = sorted((out / ".logs").glob("daEditor3x-dev.exe-*/debug"), key=lambda p: p.stat().st_mtime)
         log_path = debug_logs[-1] if debug_logs else log_path
     log = require_file(log_path).read_text(encoding="utf-8", errors="replace")
-    for marker in ("MAP_OK", "MODEL_OK", "CAMERA_TERRAIN", "SUPPORT_HEIGHTS", "CAMERA_OK", "FRAME_OK"):
+    for marker in ("MAP_OK", "MODEL_OK", "PLACEMENT_OK", "CAMERA_TERRAIN", "SUPPORT_HEIGHTS", "CAMERA_OK", "FRAME_OK"):
         if f"[KE] {marker}" not in log:
             raise ValueError(f"{marker} missing from probe.dcmd.log")
     if args.count > 1:
@@ -733,6 +759,9 @@ def main():
     frame_cmd.add_argument("--count", type=int, default=1, help="Experimental single-process sequence count")
     frame_cmd.add_argument("--seed", type=int, help="Seed for the sequence camera angles and distances")
     frame_cmd.add_argument("--fov", type=float, default=55)
+    frame_cmd.add_argument("--placement-radius", type=float, default=0, help="Search radius around tank X/Z; 0 keeps fixed position")
+    frame_cmd.add_argument("--placement-attempts", type=int, default=24, help="Up to 64 heightmap candidates")
+    frame_cmd.add_argument("--max-height-range", type=float, default=0.5, help="Allowed heightmap range across AABB corners")
     frame_cmd.add_argument("--camera-clearance", type=float, default=0.5, help="Minimum height above heightmap; not obstacle checking")
     frame_cmd.add_argument("--camera-distance-range", nargs=2, type=float, default=(18, 35), metavar=("MIN", "MAX"),
                            help="Horizontal distance from tank center for sequences (default: 18 35)")

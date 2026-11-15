@@ -16,7 +16,8 @@ FIELDS = [
  ('count', 'Количество кадров (2–1000)'), ('seed', 'Seed'),
  ('width', 'Ширина'), ('height', 'Высота'), ('fov', 'Горизонтальный FOV, °'),
  ('tank_x', 'Позиция танка X'), ('tank_z', 'Позиция танка Z'), ('tank_yaw', 'Поворот танка, °'),
- ('ground_offset', 'Отступ танка от земли'), ('camera_clearance', 'Высота камеры над землёй'),
+ ('placement_radius', 'Радиус поиска точки'), ('placement_attempts', 'Попыток размещения'),
+ ('max_height_range', 'Макс. перепад высот'), ('ground_offset', 'Отступ танка от земли'), ('camera_clearance', 'Высота камеры над землёй'),
  ('distance_min', 'Расстояние камеры: от'), ('distance_max', 'Расстояние камеры: до'),
  ('elevation_min', 'Возвышение камеры, °: от'), ('elevation_max', 'Возвышение камеры, °: до'),
  ('clipmap_feedback', 'Обратная связь clipmap'), ('timeout', 'Таймаут, с'),
@@ -171,7 +172,7 @@ class App:
             'COCO — создаёт JSON-разметку для существующей серии без копирования изображений.\n\n'
             'COCO — формат данных для обучения детектора; здесь рамка приблизительная, видимость не проверена. '
             'Папку серии нельзя отделять от файлов coco: в JSON сохранены относительные пути к кадрам.\n\n'
-            'Seed определяет последовательность ракурсов. Вода, препятствия и маски пока не проверяются.')
+            'Seed определяет расположение и ракурсы. Радиус 0 сохраняет указанную точку; при ненулевом радиусе выбирается одна точка на серию. Вода, препятствия и маски пока не проверяются.')
 
     def choose_run(self):
         return filedialog.askdirectory(title='Выберите папку серии ke-generate-XX',
@@ -231,7 +232,7 @@ class App:
                 json.dump(data, f, ensure_ascii=False, indent=2); f.write('\n')
             script = Path(__file__).resolve().parent
             execute('2/4 Проверка серии', [sys.executable, '-u', str(script / 'ke_validate.py'), '--run', str(run)])
-            execute('3/4 Диагностика рельефа', [sys.executable, '-u', str(script / 'ke_terrain_audit.py'), '--run', str(run), '--write'])
+            execute('3/4 Диагностика рельефа', [sys.executable, '-u', str(script / 'ke_terrain_audit.py'), '--run', str(run), '--write', '--max-height-range', str(data['max_height_range'])])
             execute('4/4 Экспорт COCO', [sys.executable, '-u', str(script / 'ke_coco.py'), '--runs', str(run), '--out', str(run / 'coco')])
             self.events.put(('success', str(run)))
         except (OSError, ValueError, RuntimeError) as exc:

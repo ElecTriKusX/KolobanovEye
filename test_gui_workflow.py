@@ -33,7 +33,7 @@ class WorkflowTest(unittest.TestCase):
                     def wait(self): return 1 if failure == len(calls)-1 else 0
                 app = SimpleNamespace(events=queue.Queue(), process=None)
                 with patch('ke_gui.subprocess.Popen', Process):
-                    App.worker(app, {'output':str(run)}, ['renderer'])
+                    App.worker(app, {'output':str(run), 'max_height_range':0.5}, ['renderer'])
                 events=[]
                 while not app.events.empty(): events.append(app.events.get_nowait())
                 if failure is None:
@@ -67,7 +67,7 @@ class WorkflowTest(unittest.TestCase):
                 def wait(self): return 0
             app = SimpleNamespace(events=queue.Queue(), process=None)
             with patch('ke_gui.subprocess.Popen', Process):
-                App.worker(app, {'output': str(run)}, ['renderer'])
+                App.worker(app, {'output': str(run), 'max_height_range':0.5}, ['renderer'])
             self.assertEqual(len(environments), 4)
             self.assertTrue(all(e['PYTHONIOENCODING'] == 'utf-8' for e in environments))
 
