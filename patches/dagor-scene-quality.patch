@@ -1,0 +1,71 @@
+diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+--- a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
++++ b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+@@ -21,4 +21,6 @@
+ #include <math/dag_geomTree.h>
+ #include <memory/dag_mem.h>
++#include <rendInst/rendInstAccess.h>
++#include <rendInst/rendInstCollision.h>
+ #include <osApiWrappers/dag_direct.h>
+ #include <osApiWrappers/dag_miscApi.h>
+@@ -350,5 +350,11 @@
+     const float clearance = candidateEye.y - candidateGround;
+-    if (clearance < minCameraClearance)
++    if (waterPlaneAvailable && candidateEye.y <= waterPlane)
++    {
++      console->addMessage(ILogWriter::NOTE, "[KE] CAMERA_REJECT index=%d attempt=%d reason=below_water_plane y=%.3f water=%.3f",
++        frameIndex, cameraAttempt, candidateEye.y, waterPlane);
++      continue;
++    }
++    if (clearance < minCameraClearance)
+     {
+       console->addMessage(ILogWriter::NOTE, "[KE] CAMERA_REJECT index=%d attempt=%d reason=below_clearance value=%.3f", frameIndex, cameraAttempt, clearance);
+       continue;
+@@ -444,5 +444,6 @@
+   TexPtr frame;
+   int frames = 0;
++  int readyPasses = 0;
+   for (; frames < 48; ++frames)
+   {
+     scene.update(eye, 1.f / 60.f);
+@@ -460,7 +460,9 @@
+     if (!frame)
+       return fail("RENDER", "Offscreen texture creation or render failed");
+-    if (frames >= 7 && (!scene.getSsm() || !scene.getSsm()->isLoading()) &&
+-        get_managed_textures_streaming_pending_count() == 0 && (!skies || skies->areCloudTexturesReady()))
++    const bool ready = (!scene.getSsm() || !scene.getSsm()->isLoading()) &&
++      get_managed_textures_streaming_pending_count() == 0 && (!skies || skies->areCloudTexturesReady());
++    readyPasses = ready ? readyPasses + 1 : 0;
++    if (frames >= 15 && readyPasses >= 3)
+       break;
+     sleep_msec(20);
+   }
+@@ -471,4 +471,28 @@
+   if (frames == 48)
+     return fail("STREAMING", "Map or sky did not settle within 48 warm-up renders");
++  const char *buildingScan = config.getStr("building_scan", "");
++  if (frameIndex == 0 && *buildingScan)
++  {
++    if (FILE *out = fopen(buildingScan, "wb"))
++    {
++      struct InstanceWriter final : rendinst::ForeachCB
++      {
++        FILE *stream;
++        explicit InstanceWriter(FILE *s) : stream(s) {}
++        void executeForTm(RendInstGenData *, const rendinst::RendInstDesc &desc, const TMatrix &tm) override
++        {
++          const char *name = rendinst::getRIGenResName(desc);
++          const Point3 pos = tm.getcol(3);
++          if (name && *name && finite_point(pos))
++            fprintf(stream, "%.9g\t%.9g\t%s\n", pos.x, pos.z, name);
++        }
++      } writer(out);
++      rendinst::foreachRIGenInBox(mapBounds, rendinst::GatherRiTypeFlag::RiGenTmAndExtra, writer);
++      if (fclose(out) != 0)
++        return fail("BUILDING_SCAN", "Could not finish writing instance coordinates");
++    }
++    else
++      return fail("BUILDING_SCAN", "Could not open instance coordinates output");
++  }
+   if (plugin->getKolobanovEyeDrawCount() == 0)
+     return fail("RENDER", "No opaque tank submission in the screenshot pass");

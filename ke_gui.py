@@ -51,6 +51,7 @@ class App:
         self.keep_open = tk.BooleanVar(value=False)
         self.capture_last_clip = tk.BooleanVar(value=False)
         self.render_debug = tk.BooleanVar(value=False)
+        self.scan_buildings = tk.BooleanVar(value=False)
         self.values['output'].set(str(Path(DEFAULTS['output']).parent))
         self.values['placement_mode'].set(MODE_LABELS[DEFAULTS['placement_mode']])
         self.last_run = None
@@ -102,6 +103,7 @@ class App:
         menu.add_command(label='Проверить рельеф серии…', command=self.check_terrain)
         menu.add_command(label='Восстановить метаданные после сбоя…', command=self.recover_run)
         menu.add_checkbutton(label='Сохранить обзорную текстуру карты', variable=self.capture_last_clip)
+        menu.add_checkbutton(label='Найти предполагаемую застройку', variable=self.scan_buildings)
         menu.add_command(label='Позиции на карте…', command=self.fixed_clip_map)
         menu.add_checkbutton(label='Диагностика рендера (MRT, глубина и другие буферы)', variable=self.render_debug)
         menu.add_command(label='Показать рамки на копиях…', command=self.preview_run)
@@ -170,6 +172,7 @@ class App:
         data['keep_open'] = self.keep_open.get()
         data['capture_last_clip'] = self.capture_last_clip.get()
         data['render_debug'] = self.render_debug.get()
+        data['scan_buildings'] = self.scan_buildings.get()
         return validate_config(data)
 
     def open_config(self):
@@ -180,6 +183,7 @@ class App:
             self.keep_open.set(data['keep_open'])
             self.capture_last_clip.set(data['capture_last_clip'])
             self.render_debug.set(data['render_debug'])
+            self.scan_buildings.set(data['scan_buildings'])
             for k, v in data.items():
                 if k in self.values:
                     self.values[k].set(str(Path(v).parent) if k == 'output' else MODE_LABELS.get(v, v) if k == 'placement_mode' else str(v))
@@ -244,7 +248,9 @@ class App:
         if not run: return
         from kolobanoveye import LEVEL
         run = Path(run).resolve()
-        image = run / 'render-debug' / 'terrain-last-clip.png'
+        image = run / 'maps' / f'{LEVEL.stem}.png'
+        if not image.is_file():
+            image = run / 'render-debug' / 'terrain-last-clip.png'
         if not image.is_file():
             image = run.parent / 'maps' / f'{LEVEL.stem}.png'
         if not image.is_file():

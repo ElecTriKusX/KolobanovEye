@@ -42,6 +42,7 @@ LAST_CLIP_BOUNDS_PATCH = HERE / "patches/dagor-last-clip-bounds.patch"
 REMOVE_CLIPMAP_EXPORT_PATCH = HERE / "patches/dagor-remove-clipmap-export.patch"
 LAST_CLIP_OUTPUT_PATCH = HERE / "patches/dagor-last-clip-output.patch"
 FRAME_JOURNAL_PATCH = HERE / "patches/dagor-frame-journal.patch"
+SCENE_QUALITY_PATCH = HERE / "patches/dagor-scene-quality.patch"
 CLIPMAP_TILE_PATCH = HERE / "patches/dagor-clipmap-tile-readback.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
@@ -76,6 +77,7 @@ PATCHES = (
     LAST_CLIP_BOUNDS_PATCH,
     LAST_CLIP_OUTPUT_PATCH,
     FRAME_JOURNAL_PATCH,
+    SCENE_QUALITY_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -509,7 +511,11 @@ def build(dagor, ooz=None):
         subprocess.run(apply, input=removal, cwd=dagor, check=True)
     water_filter_applied = subprocess.run([*apply, "--reverse", "--check"], input=WATER_FILTER_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     last_clip_bounds_applied = subprocess.run([*apply, "--reverse", "--check"], input=LAST_CLIP_BOUNDS_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    scene_quality_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=SCENE_QUALITY_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     for patch in patches:
+        if scene_quality_applied and patch == CLEAN_CAPTURE_PATCH:
+            continue
         if last_clip_bounds_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH, WATER_PROBE_PATCH, MULTI_COMPOSITION_PATCH, CAMERA_HEIGHT_PATCH, MAP_PLACEMENT_PATCH, WATER_FILTER_PATCH)):
             continue
         if water_filter_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH, WATER_PROBE_PATCH, MULTI_COMPOSITION_PATCH, CAMERA_HEIGHT_PATCH, MAP_PLACEMENT_PATCH)):
@@ -749,6 +755,8 @@ def frame(args, game, cdk):
                 if "height_above_ground" in camera:
                     entries.append(f"camera_height_{i}_{j}:r={numbers([camera['height_above_ground']])}")
             entries.append(f'output_{i}:t="{dagor_path(images / f"{i:06d}.png")}"')
+    if args.scan_buildings:
+        entries.append(f'building_scan:t="{dagor_path(out / "scene-instances.tsv")}"')
     if args.eye:
         entries.append(f'eye:p3={numbers(args.eye)}')
     config.write_text("\n".join(entries) + "\n", encoding="ascii")
@@ -773,13 +781,13 @@ def frame(args, game, cdk):
                f"-ws:{workspace_name}", project, batch]
     map_capture = None
     if args.capture_last_clip:
-        map_image = out.parent / "maps" / f"{LEVEL.stem}.png"
-        if map_image.resolve().is_relative_to(game) or map_image.resolve().is_relative_to(cdk):
+        map_image = out / "maps" / f"{LEVEL.stem}.png"
+        map_cache = (out.parent / ".ke-map-cache" / map_image.name).resolve()
+        if map_cache.is_relative_to(game) or map_cache.is_relative_to(cdk):
             raise ValueError("Keep the maps cache outside War Thunder")
-        if map_image.is_file():
-            print(f"[KE] Reusing map {map_image}", flush=True)
-        else:
-            map_image.parent.mkdir(exist_ok=True)
+        map_image.parent.mkdir()
+        if not map_cache.is_file():
+            map_cache.parent.mkdir(exist_ok=True)
             map_capture = out / "terrain-last-clip.pending.png"
             command.insert(-2, f"-ke-last-clip-output:{dagor_path(map_capture)}")
     if args.keep_open:
@@ -825,10 +833,15 @@ def frame(args, game, cdk):
         if map_capture is not None:
             try:
                 # On Windows rename publishes the completed PNG without overwriting a concurrent capture.
-                map_capture.rename(map_image)
+                map_capture.rename(map_cache)
             except FileExistsError:
                 map_capture.unlink()
-            print(f"[KE] Map available at {map_image}", flush=True)
+    if args.capture_last_clip and map_cache.is_file():
+        try:
+            os.link(map_cache, map_image)
+        except OSError:
+            shutil.copyfile(map_cache, map_image)
+        print(f"[KE] Map available at {map_image}", flush=True)
     error_log = out / "probe.dcmd.err"
     if error_log.is_file():
         raise ValueError(editor_failure(out, f"Dagor reported errors. See {error_log}."))
@@ -844,6 +857,10 @@ def frame(args, game, cdk):
     for marker in ("MAP_OK", "MODEL_OK", "PLACEMENT_OK", "WATER_PROXY", "CAMERA_TERRAIN", "SUPPORT_HEIGHTS", "CAMERA_OK", "FRAME_OK"):
         if f"[KE] {marker}" not in log:
             raise ValueError(f"{marker} missing from probe.dcmd.log")
+    if args.scan_buildings:
+        from ke_urban import write_report
+        report = write_report(require_file(out / "scene-instances.tsv"), out / "urban-zones.json")
+        print(f"[KE] Urban candidates: {len(report['zones'])}; {out / 'urban-zones.json'}", flush=True)
     if args.count > 1:
         if f"[KE] SEQUENCE_OK frames={args.count}" not in log or log.count("[KE] FRAME_OK ") != args.count or log.count("[KE] ORBIT_FRAME ") != args.count:
             raise ValueError("Sequence incomplete or old editor build: check SEQUENCE_OK and FRAME_OK in logs")
@@ -930,7 +947,8 @@ def main():
     frame_cmd.add_argument("--width", type=int, default=1280)
     frame_cmd.add_argument("--height", type=int, default=720)
     frame_cmd.add_argument("--renderdoc-cli", type=Path, help="renderdoccmd.exe; manual GPU capture requires --keep-open")
-    frame_cmd.add_argument("--capture-last-clip", action="store_true", help="Save the overview PNG once in the shared maps directory")
+    frame_cmd.add_argument("--capture-last-clip", action="store_true", help="Save the overview in the run maps directory and reuse cached pixels")
+    frame_cmd.add_argument("--scan-buildings", action="store_true", help="Report candidate urban zones from loaded scene instances")
     frame_cmd.add_argument("--keep-open", action="store_true", help="Keep editor open until window is closed; no process timeout")
     frame_cmd.add_argument("--timeout", type=int, default=360)
     frame_cmd.add_argument("--dx11-trace", action="store_true", help="Log native DX11 draw state for terrain and clipmap updates")
