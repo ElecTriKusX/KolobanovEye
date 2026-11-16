@@ -44,6 +44,7 @@ LAST_CLIP_OUTPUT_PATCH = HERE / "patches/dagor-last-clip-output.patch"
 FRAME_JOURNAL_PATCH = HERE / "patches/dagor-frame-journal.patch"
 SCENE_QUALITY_PATCH = HERE / "patches/dagor-scene-quality.patch"
 OFFSCREEN_STREAMING_PATCH = HERE / "patches/dagor-offscreen-streaming.patch"
+TEXTURE_PUMP_PATCH = HERE / "patches/dagor-offscreen-texture-pump.patch"
 CLIPMAP_TILE_PATCH = HERE / "patches/dagor-clipmap-tile-readback.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
@@ -80,6 +81,7 @@ PATCHES = (
     FRAME_JOURNAL_PATCH,
     SCENE_QUALITY_PATCH,
     OFFSCREEN_STREAMING_PATCH,
+    TEXTURE_PUMP_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -517,10 +519,14 @@ def build(dagor, ooz=None):
         input=SCENE_QUALITY_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     offscreen_streaming_applied = subprocess.run([*apply, "--reverse", "--check"],
         input=OFFSCREEN_STREAMING_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    texture_pump_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=TEXTURE_PUMP_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     for patch in patches:
-        if offscreen_streaming_applied and patch == SCENE_QUALITY_PATCH:
+        if texture_pump_applied and patch == OFFSCREEN_STREAMING_PATCH:
             continue
-        if (scene_quality_applied or offscreen_streaming_applied) and patch in (CLEAN_CAPTURE_PATCH, FRAME_JOURNAL_PATCH):
+        if (offscreen_streaming_applied or texture_pump_applied) and patch == SCENE_QUALITY_PATCH:
+            continue
+        if (scene_quality_applied or offscreen_streaming_applied or texture_pump_applied) and patch in (CLEAN_CAPTURE_PATCH, FRAME_JOURNAL_PATCH):
             continue
         if last_clip_bounds_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH, WATER_PROBE_PATCH, MULTI_COMPOSITION_PATCH, CAMERA_HEIGHT_PATCH, MAP_PLACEMENT_PATCH, WATER_FILTER_PATCH)):
             continue
@@ -852,7 +858,12 @@ def frame(args, game, cdk):
         print(f"[KE] Map available at {map_image}", flush=True)
     error_log = out / "probe.dcmd.err"
     if error_log.is_file():
-        raise ValueError(editor_failure(out, f"Dagor reported errors. See {error_log}."))
+        lines = error_log.read_text(encoding="utf-8", errors="replace").splitlines()
+        failure = next((line.strip() for line in reversed(lines) if "[KE] FAIL " in line), "Dagor reported errors.")
+        streaming = next((line.strip() for line in reversed(lines) if "[KE] STREAMING_PUMP " in line), "")
+        if streaming and "FAIL STREAMING:" in failure:
+            failure += f"\n{streaming}"
+        raise ValueError(editor_failure(out, f"{failure}\nSee {error_log}."))
     log_path = out / "probe.dcmd.log"
     if args.keep_open and not log_path.is_file():
         debug_logs = sorted((out / ".logs").glob("daEditor3x-dev.exe-*/debug"), key=lambda p: p.stat().st_mtime)
