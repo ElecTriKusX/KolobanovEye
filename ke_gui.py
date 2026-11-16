@@ -15,11 +15,11 @@ FIELDS = [
  ('dagor', 'Папка Dagor Engine'), ('game', 'Папка War Thunder'), ('output', 'Родительская папка результатов'),
  ('count', 'Количество кадров (2–1000)'), ('frames_per_position', 'Кадров на позицию'), ('seed', 'Seed'),
  ('width', 'Ширина'), ('height', 'Высота'), ('fov', 'Горизонтальный FOV, °'),
- ('tank_x', 'Позиция танка X'), ('tank_z', 'Позиция танка Z'), ('tank_yaw', 'Поворот танка, °'),
+ ('tank_x', 'Центр поиска X'), ('tank_z', 'Центр поиска Z'), ('tank_yaw', 'Ориентация корпуса, °'),
  ('camera_attempts', 'Попыток камеры на кадр'), ('placement_radius', 'Радиус поиска точки'), ('placement_attempts', 'Попыток размещения'),
- ('max_height_range', 'Макс. перепад высот'), ('ground_offset', 'Отступ танка от земли'), ('camera_clearance', 'Высота камеры над землёй'),
- ('distance_min', 'Расстояние камеры: от'), ('distance_max', 'Расстояние камеры: до'),
- ('elevation_min', 'Возвышение камеры, °: от'), ('elevation_max', 'Возвышение камеры, °: до'),
+ ('max_height_range', 'Макс. перепад высот'), ('ground_offset', 'Отступ танка от земли'), ('camera_clearance', 'Мин. запас камеры над землёй'),
+ ('distance_min', 'Горизонтальная дистанция: от'), ('distance_max', 'Горизонтальная дистанция: до'),
+ ('camera_height_min', 'Высота камеры над землёй: от'), ('camera_height_max', 'Высота камеры над землёй: до'),
  ('clipmap_feedback', 'Обратная связь clipmap'), ('timeout', 'Таймаут, с'),
 ]
 
@@ -39,7 +39,8 @@ class App:
     def __init__(self, root):
         self.root = root
         root.title('KolobanovEye — тестовый генератор')
-        root.geometry('900x780')
+        root.geometry('1250x850')
+        root.minsize(1000, 720)
         self.events = queue.Queue()
         self.process = None
         self.running = False
@@ -52,18 +53,35 @@ class App:
         ttk.Label(main, text='Выберите папку результатов: ke-generate-01, 02… создаются автоматически.').pack(anchor='w', pady=(2, 8))
         form = ttk.Frame(main)
         form.pack(fill='x')
-        for idx, (key, label) in enumerate(FIELDS):
-            row, col = divmod(idx, 2)
-            parent = ttk.Frame(form)
-            parent.grid(row=row, column=col, sticky='ew', padx=(0, 12), pady=2)
-            ttk.Label(parent, text=label, width=29).pack(side='left')
+        labels = dict(FIELDS)
+        groups = [
+            ('Пути', [('dagor',), ('game',), ('output',)]),
+            ('Кадры', [('count',), ('frames_per_position',), ('seed',), ('width','height','Размер, пиксели: ширина / высота'), ('fov',)]),
+            ('Танк и место', [('tank_x','tank_z','Центр поиска: X / Z'), ('tank_yaw',), ('placement_radius',), ('max_height_range',), ('ground_offset',)]),
+            ('Камера', [('distance_min','distance_max','Дистанция по горизонтали: от / до'),
+                        ('camera_height_min','camera_height_max','Высота над рельефом: от / до'), ('camera_clearance',)]),
+            ('Служебные параметры', [('camera_attempts',), ('placement_attempts',), ('clipmap_feedback',), ('timeout',)])]
+        self.widgets = {}
+        def add_widget(parent, key):
             if key == 'clipmap_feedback':
-                widget = ttk.Combobox(parent, textvariable=self.values[key], values=('software','hardware'), state='readonly', width=12)
+                widget = ttk.Combobox(parent, textvariable=self.values[key], values=('software', 'hardware'), state='readonly', width=12)
             else:
-                widget = ttk.Entry(parent, textvariable=self.values[key])
+                widget = ttk.Entry(parent, textvariable=self.values[key], width=12)
             widget.pack(side='left', fill='x', expand=True)
+            self.widgets[key] = widget
             if key in ('dagor', 'game', 'output'):
                 ttk.Button(parent, text='…', width=3, command=lambda k=key: self.choose_directory(k)).pack(side='left')
+        for idx, (title, rows) in enumerate(groups):
+            box = ttk.LabelFrame(form, text=title, padding=8)
+            box.grid(row=idx//2, column=idx%2, sticky='nsew', padx=(0,8), pady=3)
+            for row in rows:
+                container = ttk.Frame(box); container.pack(fill='x', pady=2)
+                label = labels[row[0]] if len(row) == 1 else row[2]
+                ttk.Label(container, text=label, width=38).pack(side='left')
+                add_widget(container, row[0])
+                if len(row) > 1:
+                    ttk.Label(container, text=' — ').pack(side='left')
+                    add_widget(container, row[1])
         form.columnconfigure(0, weight=1); form.columnconfigure(1, weight=1)
         buttons = ttk.Frame(main); buttons.pack(fill='x', pady=8)
         self.run_button = ttk.Button(buttons, text='Создать и проверить датасет', command=self.run)
@@ -141,7 +159,8 @@ class App:
         if not path: return
         try:
             data = validate_config(json.loads(Path(path).read_text(encoding='utf-8')))
-            for k, v in data.items(): self.values[k].set(str(Path(v).parent) if k == 'output' else str(v))
+            for k, v in data.items():
+                if k in self.values: self.values[k].set(str(Path(v).parent) if k == 'output' else str(v))
         except (OSError, ValueError) as exc: messagebox.showerror('Ошибка настроек', str(exc))
 
     def save_config(self):
@@ -174,6 +193,9 @@ class App:
             'COCO — создаёт JSON-разметку для существующей серии без копирования изображений.\n\n'
             'COCO — формат данных для обучения детектора; здесь рамка приблизительная, видимость не проверена. '
             'Папку серии нельзя отделять от файлов coco: в JSON сохранены относительные пути к кадрам.\n\n'
+            'X и Z — координаты центра поиска точки на карте; при радиусе 0 танк ставится именно туда. Поворот — направление корпуса, в градусах.\n\n'
+            'Дистанция — горизонтальное расстояние от центра танка до камеры. Высота от–до — высота камеры над рельефом в точке расположения камеры.\n'
+            'Минимальный запас камеры — защитный порог высоты камеры над рельефом в точке камеры; это не диапазон случайной высоты.\n\n'
             'Seed определяет расположение и ракурсы. Радиус 0 сохраняет указанную точку; при ненулевом радиусе выбираются точки; число ракурсов на каждую задаётся полем «Кадров на позицию». Вода, препятствия и маски пока не проверяются.')
 
     def choose_run(self):

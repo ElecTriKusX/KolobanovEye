@@ -34,3 +34,17 @@ class ConfigTest(unittest.TestCase):
             item['annotation']['bbox_xywh'] = [60, 2, 20, 5]
             meta.write_text(json.dumps(item) + '\n')
             with self.assertRaisesRegex(ValueError, 'BBox'): validate(run)
+
+class CameraHeightConfigTests(unittest.TestCase):
+    def test_height_range_is_passed_to_renderer(self):
+        from ke_generate import command
+        cmd = command({'camera_height_min': 5.0, 'camera_height_max': 12.0})
+        i = cmd.index('--camera-height-range')
+        self.assertEqual(cmd[i+1:i+3], ['5.0', '12.0'])
+
+    def test_impossible_height_range_rejected(self):
+        from ke_generate import validate_config
+        with self.assertRaises(ValueError):
+            validate_config({'camera_height_min': 3.0, 'camera_height_max': 2.0})
+        with self.assertRaises(ValueError):
+            validate_config({'camera_height_min': 0.0, 'camera_height_max': 0.1, 'camera_clearance': 0.5})

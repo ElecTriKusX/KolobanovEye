@@ -45,8 +45,9 @@ def recover(run):
                 raise ValueError('Некорректный номер композиции')
             records.append({'seed': plan['seed'], 'frame_index': i, 'composition_index': int(m.group(1)),
                 'tank_yaw_deg': plan['tank_yaw_deg'], 'camera_azimuth_deg': camera['azimuth_deg'],
-                'camera_horizontal_distance': camera['horizontal_distance'], 'camera_elevation_deg': camera['elevation_deg'],
-                'camera_offset': camera['offset'], 'camera_attempt': attempt, 'image': f'images/{i:06d}.png',
+                'camera_horizontal_distance': camera['horizontal_distance'],
+                'planned_camera_elevation_deg': camera['elevation_deg'] if camera.get('height_above_ground') is None else None,
+                'planned_camera_offset': camera['offset'], 'planned_height_above_ground': camera.get('height_above_ground'), 'camera_attempt': attempt, 'image': f'images/{i:06d}.png',
                 'annotation': ann['annotations'][0], 'dagor_frame_metadata_blk': raw})
         except (OSError, ValueError, KeyError, TypeError, IndexError) as exc:
             failures.append({'frame_index': i, 'reason': str(exc)})

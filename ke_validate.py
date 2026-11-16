@@ -5,7 +5,7 @@ import math
 import sys
 from pathlib import Path
 from kolobanoveye import verify_png
-from ke_pixel_debug import load_png
+from ke_png_fast import validate_rgb_png
 
 
 def validate(run):
@@ -39,7 +39,7 @@ def validate(run):
             return int(m.group(1))
         width, height = get_int('width'), get_int('height')
         verify_png(path, width, height)
-        decoded_width, decoded_height, _ = load_png(path)
+        decoded_width, decoded_height = validate_rgb_png(path, width, height)
         if (decoded_width, decoded_height) != (width, height):
             raise ValueError("Размер изображения не соответствует метаданным")
         x, y, w, h = box
