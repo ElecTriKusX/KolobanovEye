@@ -36,6 +36,8 @@ WATER_PROBE_PATCH = HERE / "patches/dagor-water-probe.patch"
 MULTI_COMPOSITION_PATCH = HERE / "patches/dagor-multi-composition.patch"
 CAMERA_HEIGHT_PATCH = HERE / "patches/dagor-camera-ground-height.patch"
 MAP_PLACEMENT_PATCH = HERE / "patches/dagor-map-placement.patch"
+CLIPMAP_EXPORT_PATCH = HERE / "patches/dagor-clipmap-export.patch"
+CLIPMAP_TILE_PATCH = HERE / "patches/dagor-clipmap-tile-readback.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
     HERE / "patches/dagor-editor-unused-parameters.patch",
@@ -45,7 +47,7 @@ PATCHES = (
     RENDER_DEBUG_PATCH,
     DIRECT_DEPTH_PATCH,
     HERE / "patches/dagor-clipmap-software-feedback.patch",
-    HERE / "patches/dagor-clipmap-tile-readback.patch",
+    CLIPMAP_TILE_PATCH,
     HERE / "patches/dagor-deferred-terrain-view-rays.patch",
     INDIRECTION_PATCH,
     INDIRECTION_FIX_PATCH,
@@ -65,6 +67,7 @@ PATCHES = (
     MULTI_COMPOSITION_PATCH,
     CAMERA_HEIGHT_PATCH,
     MAP_PLACEMENT_PATCH,
+    CLIPMAP_EXPORT_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -491,7 +494,10 @@ def build(dagor, ooz=None):
         input=CAMERA_HEIGHT_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     map_placement_applied = subprocess.run([*apply, "--reverse", "--check"],
         input=MAP_PLACEMENT_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    clipmap_export_applied = subprocess.run([*apply, "--reverse", "--check"], input=CLIPMAP_EXPORT_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     for patch in patches:
+        if clipmap_export_applied and patch == CLIPMAP_TILE_PATCH:
+            continue
         if map_placement_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH, WATER_PROBE_PATCH, MULTI_COMPOSITION_PATCH, CAMERA_HEIGHT_PATCH)):
             continue
         if camera_height_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH, WATER_PROBE_PATCH, MULTI_COMPOSITION_PATCH)):
@@ -745,6 +751,10 @@ def frame(args, game, cdk):
                f"-rootdir:{dagor_path(out)}", f"-addpath:{dagor_path(game)}", f"-addpath:{dagor_path(cdk)}",
                "-enable:Scene view", "-disable:Landscape", r"-exclude_dll_re:heightmapLand-aces-dev\.dll$",
                f"-ws:{workspace_name}", project, batch]
+    if args.collect_clipmap_tiles:
+        tile_dir = out / "ke-clipmap-tiles"
+        tile_dir.mkdir()
+        command.insert(-2, f"-ke-collect-clipmap:{dagor_path(tile_dir)}")
     if args.keep_open:
         command.remove("-quiet")
         print("[KE] Editor remains open. Close its window to finalize the frame and report.", flush=True)
@@ -867,6 +877,7 @@ def main():
     frame_cmd.add_argument("--width", type=int, default=1280)
     frame_cmd.add_argument("--height", type=int, default=720)
     frame_cmd.add_argument("--renderdoc-cli", type=Path, help="renderdoccmd.exe; manual GPU capture requires --keep-open")
+    frame_cmd.add_argument("--collect-clipmap-tiles", action="store_true", help="Experimentally collect terrain clipmap tiles seen during rendering")
     frame_cmd.add_argument("--keep-open", action="store_true", help="Keep editor open until window is closed; no process timeout")
     frame_cmd.add_argument("--timeout", type=int, default=360)
     frame_cmd.add_argument("--dx11-trace", action="store_true", help="Log native DX11 draw state for terrain and clipmap updates")

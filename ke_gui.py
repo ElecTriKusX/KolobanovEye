@@ -49,6 +49,7 @@ class App:
         self.running = False
         self.values = {k: tk.StringVar(value=str(DEFAULTS[k])) for k, _ in FIELDS}
         self.keep_open = tk.BooleanVar(value=False)
+        self.collect_tiles = tk.BooleanVar(value=False)
         self.values['output'].set(str(Path(DEFAULTS['output']).parent))
         self.values['placement_mode'].set(MODE_LABELS[DEFAULTS['placement_mode']])
         self.last_run = None
@@ -99,6 +100,8 @@ class App:
         menu.add_command(label='Проверить существующую серию…', command=self.check_run)
         menu.add_command(label='Проверить рельеф серии…', command=self.check_terrain)
         menu.add_command(label='Восстановить метаданные после сбоя…', command=self.recover_run)
+        menu.add_checkbutton(label='Собирать тайлы земли (эксперимент)', variable=self.collect_tiles)
+        menu.add_command(label='Собрать карту из тайлов…', command=self.build_clipmap_map)
         menu.add_command(label='Позиции на изображении карты…', command=self.map_run)
         menu.add_command(label='Показать рамки на копиях…', command=self.preview_run)
         menu.add_command(label='Экспортировать COCO отдельно…', command=self.coco_run)
@@ -164,6 +167,7 @@ class App:
             raise ValueError('Укажите родительскую папку результатов')
         data['output'] = str(next_numbered_directory(data['output']))
         data['keep_open'] = self.keep_open.get()
+        data['collect_clipmap_tiles'] = self.collect_tiles.get()
         return validate_config(data)
 
     def open_config(self):
@@ -172,6 +176,7 @@ class App:
         try:
             data = validate_config(json.loads(Path(path).read_text(encoding='utf-8')))
             self.keep_open.set(data['keep_open'])
+            self.collect_tiles.set(data['collect_clipmap_tiles'])
             for k, v in data.items():
                 if k in self.values:
                     self.values[k].set(str(Path(v).parent) if k == 'output' else MODE_LABELS.get(v, v) if k == 'placement_mode' else str(v))
@@ -199,6 +204,7 @@ class App:
     def show_help(self):
         messagebox.showinfo('Справка',
             'Открыть папку — показывает последний успешный результат в Проводнике. Копировать журнал — копирует выделенный текст или весь журнал.\n\n'
+            'Сбор тайлов земли — эксперимент: записывает загруженные участки clipmap, может занять много места. Карта собирается отдельно через меню; покрытие не гарантировано.\n\n'
             'При открытом редакторе проверка и экспорт начнутся после закрытия его окна.\n\n'
             'Основная кнопка: создаёт новую папку ke-generate-XX, рендерит кадры, проверяет их и создаёт COCO в подпапке coco.\n\n'
             'Проверить серию — проверяет файлы и границы рамок существующей серии.\n'
@@ -229,6 +235,13 @@ class App:
     def recover_run(self):
         run = self.choose_run()
         if run: self.start_tool('ke_recover.py', ['--run', run])
+
+    def build_clipmap_map(self):
+        run = self.choose_run()
+        if not run: return
+        try: out = next_numbered_directory(Path(run), 'terrain-map-')
+        except ValueError as exc: messagebox.showerror('Ошибка', str(exc)); return
+        self.start_tool('ke_clipmap_map.py', ['--run', run, '--out', str(out)])
 
     def map_run(self):
         run = self.choose_run()
