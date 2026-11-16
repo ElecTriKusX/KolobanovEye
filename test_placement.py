@@ -28,3 +28,21 @@ class PlacementTest(unittest.TestCase):
         self.assertEqual(a, plan_compositions(42, (0,0), 50, 4, 7, 3))
         self.assertEqual(len({group[0] for group in a}), 3)
         self.assertEqual(plan_compositions(1,(0,0),0,4,2,1), [[(0,0)],[(0,0)]])
+
+class WholeMapPlacementTest(unittest.TestCase):
+    def test_seed_margin_and_attempts(self):
+        from kolobanoveye import plan_map_compositions
+        groups = plan_map_compositions(42, 15, 8, 7, 3)
+        self.assertEqual(len(groups), 3)
+        self.assertEqual([len(g) for g in groups], [8, 8, 8])
+        self.assertEqual(groups, plan_map_compositions(42, 15, 8, 7, 3))
+        self.assertNotEqual(groups, plan_map_compositions(43, 15, 8, 7, 3))
+        self.assertTrue(all(.15 <= x <= .85 and .15 <= z <= .85 for g in groups for x,z in g))
+        for margin in (-1, 50, float('nan')):
+            with self.assertRaises(ValueError): plan_map_compositions(42, margin, 8, 7, 3)
+
+    def test_mode_and_margin_forwarded(self):
+        args = command({'placement_mode': 'whole_map', 'map_margin_percent': 20})
+        self.assertEqual(args[args.index('--placement-mode') + 1], 'whole_map')
+        self.assertEqual(args[args.index('--map-margin-percent') + 1], '20')
+        with self.assertRaises(ValueError): validate_config({'map_margin_percent': 50})

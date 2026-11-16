@@ -12,6 +12,8 @@
   "tank_yaw": 20.0,
   "ground_offset": 0.05,
   "camera_clearance": 0.5,
+  "placement_mode": "whole_map",
+  "map_margin_percent": 15.0,
   "placement_radius": 0.0,
   "placement_attempts": 24,
   "frames_per_position": 6,

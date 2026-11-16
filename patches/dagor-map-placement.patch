@@ -1,0 +1,47 @@
+diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+--- a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
++++ b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+@@ -175,6 +175,14 @@
+   const int framesPerPosition = config.getInt("frames_per_position", frameCount);
+   if (framesPerPosition < 1 || framesPerPosition > 1000)
+     return fail("CONFIG", "Invalid frames per position");
++  const bool sampleWholeMap = config.getBool("placement_whole_map", false);
++  const BBox3 mapBounds = scene.lmeshMgr->getBBox();
++  if (sampleWholeMap && (!finite_point(mapBounds[0]) || !finite_point(mapBounds[1]) ||
++      mapBounds[0].x >= mapBounds[1].x || mapBounds[0].z >= mapBounds[1].z))
++    return fail("MAP_BOUNDS", "Invalid landscape bounds");
++  if (sampleWholeMap)
++    console->addMessage(ILogWriter::NOTE, "[KE] MAP_BOUNDS min_x=%.3f max_x=%.3f min_z=%.3f max_z=%.3f",
++      mapBounds[0].x, mapBounds[1].x, mapBounds[0].z, mapBounds[1].z);
+   console->addMessage(ILogWriter::NOTE, "[KE] SEQUENCE_BEGIN frames=%d map_loads=1 model_loads=1", frameCount);
+   for (int sceneIndex = 0; sceneIndex * framesPerPosition < frameCount; ++sceneIndex)
+   {
+@@ -195,7 +203,14 @@
+   {
+     char key[32];
+     snprintf(key, sizeof(key), "candidate_%d_%d", sceneIndex, attempt);
+-    const Point3 candidate = config.getPoint3(key, requested);
++    Point3 candidate = config.getPoint3(key, requested);
++    if (sampleWholeMap)
++    {
++      if (!finite_point(candidate) || candidate.x < 0.f || candidate.x > 1.f || candidate.z < 0.f || candidate.z > 1.f)
++        return fail("CONFIG", "Invalid normalized map candidate");
++      candidate.x = mapBounds[0].x + candidate.x * (mapBounds[1].x - mapBounds[0].x);
++      candidate.z = mapBounds[0].z + candidate.z * (mapBounds[1].z - mapBounds[0].z);
++    }
+     if (!finite_point(candidate))
+       return fail("CONFIG", "Invalid candidate coordinates");
+     float h = 0.f;
+@@ -493,6 +508,12 @@
+   result.setStr("pack", pack);
+   result.setReal("terrain_y", ground);
+   result.setInt("composition_index", sceneIndex);
++  result.setStr("placement_mode", sampleWholeMap ? "whole_map" : "around_point");
++  if (sampleWholeMap)
++  {
++    result.setPoint3("map_bounds_min", mapBounds[0]);
++    result.setPoint3("map_bounds_max", mapBounds[1]);
++  }
+   result.setInt("placement_candidate", selectedCandidate);
+   result.setStr("placement_check", "heightmap_only_water_and_obstacles_unknown");
+   result.setStr("water_proxy_method", "scene_water_plane_unverified");

@@ -15,6 +15,7 @@ FIELDS = [
  ('dagor', 'Папка Dagor Engine'), ('game', 'Папка War Thunder'), ('output', 'Родительская папка результатов'),
  ('count', 'Количество кадров (2–1000)'), ('frames_per_position', 'Кадров на позицию'), ('seed', 'Seed'),
  ('width', 'Ширина'), ('height', 'Высота'), ('fov', 'Горизонтальный FOV, °'),
+ ('placement_mode', 'Где размещать танк'), ('map_margin_percent', 'Отступ от краёв карты, %'),
  ('tank_x', 'Центр поиска X'), ('tank_z', 'Центр поиска Z'), ('tank_yaw', 'Ориентация корпуса, °'),
  ('camera_attempts', 'Попыток камеры на кадр'), ('placement_radius', 'Радиус поиска точки'), ('placement_attempts', 'Попыток размещения'),
  ('max_height_range', 'Макс. перепад высот'), ('ground_offset', 'Отступ танка от земли'), ('camera_clearance', 'Мин. запас камеры над землёй'),
@@ -23,6 +24,8 @@ FIELDS = [
  ('clipmap_feedback', 'Обратная связь clipmap'), ('timeout', 'Таймаут, с'),
 ]
 
+
+MODE_LABELS = {'whole_map': 'Вся карта', 'around_point': 'Вокруг точки'}
 
 def next_numbered_directory(parent, prefix='ke-generate-'):
     parent = Path(parent)
@@ -46,6 +49,7 @@ class App:
         self.running = False
         self.values = {k: tk.StringVar(value=str(DEFAULTS[k])) for k, _ in FIELDS}
         self.values['output'].set(str(Path(DEFAULTS['output']).parent))
+        self.values['placement_mode'].set(MODE_LABELS[DEFAULTS['placement_mode']])
         self.last_run = None
         main = ttk.Frame(root, padding=12)
         main.pack(fill='both', expand=True)
@@ -57,13 +61,15 @@ class App:
         groups = [
             ('Пути', [('dagor',), ('game',), ('output',)]),
             ('Кадры', [('count',), ('frames_per_position',), ('seed',), ('width','height','Размер, пиксели: ширина / высота'), ('fov',)]),
-            ('Танк и место', [('tank_x','tank_z','Центр поиска: X / Z'), ('tank_yaw',), ('placement_radius',), ('max_height_range',), ('ground_offset',)]),
+            ('Танк и место', [('placement_mode',), ('map_margin_percent',), ('tank_x','tank_z','Центр поиска: X / Z'), ('tank_yaw',), ('placement_radius',), ('max_height_range',), ('ground_offset',)]),
             ('Камера', [('distance_min','distance_max','Дистанция по горизонтали: от / до'),
                         ('camera_height_min','camera_height_max','Высота над рельефом: от / до'), ('camera_clearance',)]),
             ('Служебные параметры', [('camera_attempts',), ('placement_attempts',), ('clipmap_feedback',), ('timeout',)])]
         self.widgets = {}
         def add_widget(parent, key):
-            if key == 'clipmap_feedback':
+            if key == 'placement_mode':
+                widget = ttk.Combobox(parent, textvariable=self.values[key], values=tuple(MODE_LABELS.values()), state='readonly', width=12)
+            elif key == 'clipmap_feedback':
                 widget = ttk.Combobox(parent, textvariable=self.values[key], values=('software', 'hardware'), state='readonly', width=12)
             else:
                 widget = ttk.Entry(parent, textvariable=self.values[key], width=12)
@@ -145,6 +151,8 @@ class App:
         data = {}
         for key, var in self.values.items():
             value = var.get().strip()
+            if key == 'placement_mode':
+                value = next((k for k, label in MODE_LABELS.items() if label == value), value)
             try:
                 data[key] = int(value) if key in INTS else float(value.replace(',', '.')) if key in FLOATS else value
             except ValueError as exc:
@@ -160,7 +168,8 @@ class App:
         try:
             data = validate_config(json.loads(Path(path).read_text(encoding='utf-8')))
             for k, v in data.items():
-                if k in self.values: self.values[k].set(str(Path(v).parent) if k == 'output' else str(v))
+                if k in self.values:
+                    self.values[k].set(str(Path(v).parent) if k == 'output' else MODE_LABELS.get(v, v) if k == 'placement_mode' else str(v))
         except (OSError, ValueError) as exc: messagebox.showerror('Ошибка настроек', str(exc))
 
     def save_config(self):
@@ -193,6 +202,7 @@ class App:
             'COCO — создаёт JSON-разметку для существующей серии без копирования изображений.\n\n'
             'COCO — формат данных для обучения детектора; здесь рамка приблизительная, видимость не проверена. '
             'Папку серии нельзя отделять от файлов coco: в JSON сохранены относительные пути к кадрам.\n\n'
+            'Где размещать: «Вся карта» — с отступом в процентах; «Вокруг точки» — вокруг заданной точки. X/Z и радиус учитываются только во втором режиме.\n\n'
             'X и Z — координаты центра поиска точки на карте; при радиусе 0 танк ставится именно туда. Поворот — направление корпуса, в градусах.\n\n'
             'Дистанция — горизонтальное расстояние от центра танка до камеры. Высота от–до — высота камеры над рельефом в точке расположения камеры.\n'
             'Минимальный запас камеры — защитный порог высоты камеры над рельефом в точке камеры; это не диапазон случайной высоты.\n\n'

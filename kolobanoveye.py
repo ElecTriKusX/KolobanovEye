@@ -35,6 +35,7 @@ CAMERA_RETRY_PATCH = HERE / "patches/dagor-camera-retry.patch"
 WATER_PROBE_PATCH = HERE / "patches/dagor-water-probe.patch"
 MULTI_COMPOSITION_PATCH = HERE / "patches/dagor-multi-composition.patch"
 CAMERA_HEIGHT_PATCH = HERE / "patches/dagor-camera-ground-height.patch"
+MAP_PLACEMENT_PATCH = HERE / "patches/dagor-map-placement.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
     HERE / "patches/dagor-editor-unused-parameters.patch",
@@ -63,6 +64,7 @@ PATCHES = (
     WATER_PROBE_PATCH,
     MULTI_COMPOSITION_PATCH,
     CAMERA_HEIGHT_PATCH,
+    MAP_PLACEMENT_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -487,7 +489,11 @@ def build(dagor, ooz=None):
         input=MULTI_COMPOSITION_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     camera_height_applied = subprocess.run([*apply, "--reverse", "--check"],
         input=CAMERA_HEIGHT_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    map_placement_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=MAP_PLACEMENT_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     for patch in patches:
+        if map_placement_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH, WATER_PROBE_PATCH, MULTI_COMPOSITION_PATCH, CAMERA_HEIGHT_PATCH)):
+            continue
         if camera_height_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH, WATER_PROBE_PATCH, MULTI_COMPOSITION_PATCH)):
             continue
         if multi_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH, WATER_PROBE_PATCH)):
@@ -591,6 +597,18 @@ def plan_compositions(seed, center, radius, attempts, count, frames_per_position
             for i in range(scene_count)]
 
 
+def plan_map_compositions(seed, margin_percent, attempts, count, frames_per_position):
+    """Sample reproducible normalized X/Z coordinates inside the landscape bounds."""
+    if not math.isfinite(margin_percent) or not 0 <= margin_percent < 50:
+        raise ValueError("Map edge margin must be between 0 and 50 percent")
+    if not 1 <= attempts <= 64 or not 1 <= count <= 1000 or not 1 <= frames_per_position <= 1000:
+        raise ValueError("Invalid placement count or attempts")
+    rng = random.Random(f"map-placement:{seed}")
+    margin = margin_percent / 100
+    return [[(round(rng.uniform(margin, 1-margin), 6), round(rng.uniform(margin, 1-margin), 6))
+             for _ in range(attempts)] for _ in range((count + frames_per_position - 1) // frames_per_position)]
+
+
 def select_camera_attempt(raw_metadata, candidates):
     match = re.search(r"^camera_attempt:i=(\d+)\s*$", raw_metadata, re.MULTILINE)
     if not match or int(match.group(1)) >= len(candidates):
@@ -622,8 +640,13 @@ def frame(args, game, cdk):
         raise ValueError("Camera clearance must be finite and between 0 and 100")
     if not math.isfinite(args.max_height_range) or not 0 <= args.max_height_range <= 100:
         raise ValueError("Maximum terrain height range must be 0–100")
-    candidate_groups = plan_compositions(args.seed, args.tank_xz, args.placement_radius,
-        args.placement_attempts, args.count, args.frames_per_position)
+    if args.placement_mode == "whole_map":
+        if args.seed is None:
+            raise ValueError("Whole-map search requires --seed")
+        candidate_groups = plan_map_compositions(args.seed, args.map_margin_percent, args.placement_attempts, args.count, args.frames_per_position)
+    else:
+        candidate_groups = plan_compositions(args.seed, args.tank_xz, args.placement_radius,
+            args.placement_attempts, args.count, args.frames_per_position)
     if args.placement_radius > 0 and args.seed is None:
         raise ValueError("Placement search requires --seed")
     if args.timeout <= 0:
@@ -671,6 +694,7 @@ def frame(args, game, cdk):
         f'camera_clearance:r={numbers([args.camera_clearance])}',
         f'max_height_range:r={numbers([args.max_height_range])}',
         f'candidate_count:i={len(candidate_groups[0])}',
+        f'placement_whole_map:b={"yes" if args.placement_mode == "whole_map" else "no"}',
         f'frames_per_position:i={args.frames_per_position}',
         f'yaw:r={numbers([args.yaw])}',
         f'tank:p3={numbers((args.tank_xz[0], args.ground_offset, args.tank_xz[1]))}',
@@ -688,7 +712,7 @@ def frame(args, game, cdk):
                 camera["height_above_ground"] = round(hrng.uniform(*args.camera_height_range), 5)
         orbit_plan = [flat_orbits[i * args.camera_attempts:(i + 1) * args.camera_attempts] for i in range(args.count)]
         (out / "plan.json").write_text(json.dumps({"schema_version": 3, "seed": args.seed,
-            "tank_yaw_deg": args.yaw, "placement_candidates_xz": candidate_groups, "frames_per_position": args.frames_per_position, "max_height_range": args.max_height_range,
+            "tank_yaw_deg": args.yaw, "placement_mode": args.placement_mode, "map_margin_percent": args.map_margin_percent if args.placement_mode == "whole_map" else None, "placement_candidate_coordinates": "normalized_landscape_bbox" if args.placement_mode == "whole_map" else "world_xz", "placement_candidates_xz": candidate_groups, "frames_per_position": args.frames_per_position, "max_height_range": args.max_height_range,
             "camera_distance_range": args.camera_distance_range, "camera_elevation_range": args.camera_elevation_range,
             "camera_attempts": args.camera_attempts, "camera_height_range": args.camera_height_range, "cameras": orbit_plan}, indent=2) + "\n", encoding="utf-8")
         entries.extend((f"frame_count:i={args.count}", f"camera_attempts:i={args.camera_attempts}"))
@@ -757,6 +781,8 @@ def frame(args, game, cdk):
         debug_logs = sorted((out / ".logs").glob("daEditor3x-dev.exe-*/debug"), key=lambda p: p.stat().st_mtime)
         log_path = debug_logs[-1] if debug_logs else log_path
     log = require_file(log_path).read_text(encoding="utf-8", errors="replace")
+    if args.placement_mode == "whole_map" and "[KE] MAP_BOUNDS " not in log:
+        raise ValueError("Whole-map mode requires the updated Dagor build; rebuild the editor")
     for marker in ("MAP_OK", "MODEL_OK", "PLACEMENT_OK", "WATER_PROXY", "CAMERA_TERRAIN", "SUPPORT_HEIGHTS", "CAMERA_OK", "FRAME_OK"):
         if f"[KE] {marker}" not in log:
             raise ValueError(f"{marker} missing from probe.dcmd.log")
@@ -828,6 +854,8 @@ def main():
     frame_cmd.add_argument("--frames-per-position", type=int, default=6, help="Number of camera views per selected tank position")
     frame_cmd.add_argument("--camera-height-range", nargs=2, type=float, metavar=("MIN", "MAX"), help="Actual camera height above local heightmap for sequences")
     frame_cmd.add_argument("--camera-attempts", type=int, default=8, help="Maximum camera candidates per frame")
+    frame_cmd.add_argument("--placement-mode", choices=("around_point", "whole_map"), default="around_point")
+    frame_cmd.add_argument("--map-margin-percent", type=float, default=15.0, help="Margin on each landscape edge in percent, 0 <= value < 50")
     frame_cmd.add_argument("--placement-radius", type=float, default=0, help="Search radius around tank X/Z; 0 keeps fixed position")
     frame_cmd.add_argument("--placement-attempts", type=int, default=24, help="Up to 64 heightmap candidates")
     frame_cmd.add_argument("--max-height-range", type=float, default=0.5, help="Allowed heightmap range across AABB corners")

@@ -13,13 +13,13 @@ DEFAULTS = {
     'output': r'D:\Projects\ke-generate-01', 'count': 6, 'seed': 42,
     'width': 1280, 'height': 720, 'fov': 55.0, 'tank_x': 0.0, 'tank_z': 0.0,
     'tank_yaw': 20.0, 'ground_offset': 0.05, 'camera_clearance': 0.5,
-    'placement_radius': 0.0, 'placement_attempts': 24, 'frames_per_position': 6, 'max_height_range': 0.5, 'camera_attempts': 8,
+    'placement_mode': 'whole_map', 'map_margin_percent': 15.0, 'placement_radius': 0.0, 'placement_attempts': 24, 'frames_per_position': 6, 'max_height_range': 0.5, 'camera_attempts': 8,
     'camera_height_min': 4.0, 'camera_height_max': 16.0, 'distance_min': 18.0, 'distance_max': 35.0, 'elevation_min': 10.0, 'elevation_max': 25.0,
     'clipmap_feedback': 'software', 'timeout': 360,
 }
 INTS = {'count', 'seed', 'width', 'height', 'timeout', 'placement_attempts', 'camera_attempts', 'frames_per_position'}
 FLOATS = {'fov', 'tank_x', 'tank_z', 'tank_yaw', 'ground_offset', 'camera_clearance',
-          'distance_min', 'distance_max', 'elevation_min', 'elevation_max', 'placement_radius', 'max_height_range', 'camera_height_min', 'camera_height_max'}
+          'distance_min', 'distance_max', 'elevation_min', 'elevation_max', 'placement_radius', 'max_height_range', 'camera_height_min', 'camera_height_max', 'map_margin_percent'}
 
 
 def validate_config(raw):
@@ -47,6 +47,8 @@ def validate_config(raw):
         raise ValueError('FOV: 15–100; высота камеры: 0–100; таймаут положительный')
     if any(abs(c[k]) > 100000 for k in ('tank_x', 'tank_z', 'tank_yaw', 'ground_offset')):
         raise ValueError('Координаты и поворот должны быть в пределах ±100000')
+    if c['placement_mode'] not in ('whole_map', 'around_point') or not 0 <= c['map_margin_percent'] < 50:
+        raise ValueError('Режим размещения или отступ от краёв карты некорректен (0–49.99%)')
     if not 0 <= c['placement_radius'] <= 10000 or not 1 <= c['placement_attempts'] <= 64 or not 1 <= c['camera_attempts'] <= 64 or not 0 <= c['max_height_range'] <= 100:
         raise ValueError('Радиус: 0–10000; попытки: 1–64; перепад: 0–100')
     if not 0 <= c['camera_height_min'] <= c['camera_height_max'] <= 10000:
@@ -66,7 +68,7 @@ def command(c):
             '--count', str(c['count']), '--seed', str(c['seed']), '--width', str(c['width']),
             '--height', str(c['height']), '--fov', str(c['fov']), '--tank-xz', str(c['tank_x']), str(c['tank_z']),
             '--yaw', str(c['tank_yaw']), '--ground-offset', str(c['ground_offset']),
-            '--frames-per-position', str(c['frames_per_position']), '--camera-attempts', str(c['camera_attempts']), '--placement-radius', str(c['placement_radius']), '--placement-attempts', str(c['placement_attempts']),
+            '--placement-mode', c['placement_mode'], '--map-margin-percent', str(c['map_margin_percent']), '--frames-per-position', str(c['frames_per_position']), '--camera-attempts', str(c['camera_attempts']), '--placement-radius', str(c['placement_radius']), '--placement-attempts', str(c['placement_attempts']),
             '--max-height-range', str(c['max_height_range']), '--camera-clearance', str(c['camera_clearance']), '--camera-height-range', str(c['camera_height_min']), str(c['camera_height_max']), '--camera-distance-range', str(c['distance_min']), str(c['distance_max']),
             '--camera-elevation-range', str(c['elevation_min']), str(c['elevation_max']),
             '--clipmap-feedback', c['clipmap_feedback'], '--timeout', str(c['timeout'])]
