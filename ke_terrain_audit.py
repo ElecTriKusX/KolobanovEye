@@ -26,6 +26,7 @@ def analyze(records, threshold=0.5):
         lo = number(blk, 'support_height_min', 'r')
         hi = number(blk, 'support_height_max', 'r')
         clearance = number(blk, 'camera_clearance', 'r')
+        minimum_ground_y = number(blk, 'minimum_ground_y', 'r')
         water_plane = number(blk, 'water_plane_y', 'r')
         above_water = number(blk, 'terrain_above_water_plane', 'r')
         known = count == 4 and lo is not None and hi is not None and hi >= lo
@@ -34,7 +35,7 @@ def analyze(records, threshold=0.5):
                        'corner_height_range': delta, 'max_allowed_range': threshold,
                        'heightmap_range_result': ('within_threshold' if delta <= threshold else 'above_threshold') if known else 'unknown',
                        'camera_clearance': clearance, 'camera_heightmap_result': 'measured' if clearance is not None else 'unknown',
-                       'water_check': 'unknown', 'water_plane_y': water_plane, 'terrain_above_water_plane': above_water,
+                       'water_check': 'unknown', 'minimum_ground_y_filter': minimum_ground_y, 'water_plane_y': water_plane, 'terrain_above_water_plane': above_water,
                        'water_proxy_method': 'scene_water_plane_unverified', 'obstacle_check': 'unknown', 'track_contact': 'unknown'})
     return {'method': 'heightmap_at_four_projected_local_aabb_bottom_corners', 'frames': frames,
             'note': 'Диагностика перепада высот по углам габарита, не проверка воды, наклона, контакта гусениц или препятствий; '

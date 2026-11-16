@@ -48,3 +48,11 @@ class CameraHeightConfigTests(unittest.TestCase):
             validate_config({'camera_height_min': 3.0, 'camera_height_max': 2.0})
         with self.assertRaises(ValueError):
             validate_config({'camera_height_min': 0.0, 'camera_height_max': 0.1, 'camera_clearance': 0.5})
+
+class WaterGroundFilterTests(unittest.TestCase):
+    def test_ground_threshold_passed_and_finite(self):
+        from ke_generate import command, validate_config
+        args = command({'minimum_ground_y': 1.25})
+        self.assertEqual(args[args.index('--minimum-ground-y') + 1], '1.25')
+        with self.assertRaises(ValueError): validate_config({'minimum_ground_y': float('nan')})
+        with self.assertRaises(ValueError): validate_config({'minimum_ground_y': -100001})

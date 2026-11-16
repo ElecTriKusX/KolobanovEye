@@ -36,6 +36,7 @@ WATER_PROBE_PATCH = HERE / "patches/dagor-water-probe.patch"
 MULTI_COMPOSITION_PATCH = HERE / "patches/dagor-multi-composition.patch"
 CAMERA_HEIGHT_PATCH = HERE / "patches/dagor-camera-ground-height.patch"
 MAP_PLACEMENT_PATCH = HERE / "patches/dagor-map-placement.patch"
+WATER_FILTER_PATCH = HERE / "patches/dagor-water-ground-filter.patch"
 CLIPMAP_EXPORT_PATCH = HERE / "patches/dagor-clipmap-export.patch"
 CLIPMAP_TILE_PATCH = HERE / "patches/dagor-clipmap-tile-readback.patch"
 PATCHES = (
@@ -67,6 +68,7 @@ PATCHES = (
     MULTI_COMPOSITION_PATCH,
     CAMERA_HEIGHT_PATCH,
     MAP_PLACEMENT_PATCH,
+    WATER_FILTER_PATCH,
     CLIPMAP_EXPORT_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
@@ -495,7 +497,10 @@ def build(dagor, ooz=None):
     map_placement_applied = subprocess.run([*apply, "--reverse", "--check"],
         input=MAP_PLACEMENT_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     clipmap_export_applied = subprocess.run([*apply, "--reverse", "--check"], input=CLIPMAP_EXPORT_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    water_filter_applied = subprocess.run([*apply, "--reverse", "--check"], input=WATER_FILTER_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     for patch in patches:
+        if water_filter_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH, WATER_PROBE_PATCH, MULTI_COMPOSITION_PATCH, CAMERA_HEIGHT_PATCH, MAP_PLACEMENT_PATCH)):
+            continue
         if clipmap_export_applied and patch == CLIPMAP_TILE_PATCH:
             continue
         if map_placement_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH, WATER_PROBE_PATCH, MULTI_COMPOSITION_PATCH, CAMERA_HEIGHT_PATCH)):
@@ -644,6 +649,8 @@ def frame(args, game, cdk):
         raise ValueError("--eye is for a single frame; sequences choose camera offsets around the tank")
     if not math.isfinite(args.camera_clearance) or not 0 <= args.camera_clearance <= 100:
         raise ValueError("Camera clearance must be finite and between 0 and 100")
+    if not math.isfinite(args.minimum_ground_y) or abs(args.minimum_ground_y) > 100000:
+        raise ValueError("Minimum ground height must be finite and within ±100000")
     if not math.isfinite(args.max_height_range) or not 0 <= args.max_height_range <= 100:
         raise ValueError("Maximum terrain height range must be 0–100")
     if args.placement_mode == "whole_map":
@@ -699,6 +706,7 @@ def frame(args, game, cdk):
         f'fov:r={numbers([args.fov])}',
         f'camera_clearance:r={numbers([args.camera_clearance])}',
         f'max_height_range:r={numbers([args.max_height_range])}',
+        f'minimum_ground_y:r={numbers([args.minimum_ground_y])}',
         f'candidate_count:i={len(candidate_groups[0])}',
         f'placement_whole_map:b={"yes" if args.placement_mode == "whole_map" else "no"}',
         f'frames_per_position:i={args.frames_per_position}',
@@ -791,6 +799,8 @@ def frame(args, game, cdk):
         debug_logs = sorted((out / ".logs").glob("daEditor3x-dev.exe-*/debug"), key=lambda p: p.stat().st_mtime)
         log_path = debug_logs[-1] if debug_logs else log_path
     log = require_file(log_path).read_text(encoding="utf-8", errors="replace")
+    if "[KE] WATER_GROUND_FILTER " not in log:
+        raise ValueError("Water ground filter missing: rebuild Dagor with current code")
     if args.placement_mode == "whole_map" and "[KE] MAP_BOUNDS " not in log:
         raise ValueError("Whole-map mode requires the updated Dagor build; rebuild the editor")
     for marker in ("MAP_OK", "MODEL_OK", "PLACEMENT_OK", "WATER_PROXY", "CAMERA_TERRAIN", "SUPPORT_HEIGHTS", "CAMERA_OK", "FRAME_OK"):
@@ -868,6 +878,7 @@ def main():
     frame_cmd.add_argument("--map-margin-percent", type=float, default=15.0, help="Margin on each landscape edge in percent, 0 <= value < 50")
     frame_cmd.add_argument("--placement-radius", type=float, default=0, help="Search radius around tank X/Z; 0 keeps fixed position")
     frame_cmd.add_argument("--placement-attempts", type=int, default=24, help="Up to 64 heightmap candidates")
+    frame_cmd.add_argument("--minimum-ground-y", type=float, default=0.5, help="Reject terrain below this world Y (Normandy sea-level proxy)")
     frame_cmd.add_argument("--max-height-range", type=float, default=0.5, help="Allowed heightmap range across AABB corners")
     frame_cmd.add_argument("--camera-clearance", type=float, default=0.5, help="Minimum height above heightmap; not obstacle checking")
     frame_cmd.add_argument("--camera-distance-range", nargs=2, type=float, default=(18, 35), metavar=("MIN", "MAX"),

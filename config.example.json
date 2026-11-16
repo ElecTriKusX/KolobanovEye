@@ -26,5 +26,6 @@
   "elevation_min": 10.0,
   "elevation_max": 25.0,
   "clipmap_feedback": "software",
-  "timeout": 360
+  "timeout": 360,
+  "minimum_ground_y": 0.5
 }
