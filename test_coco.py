@@ -42,9 +42,23 @@ class CocoTest(unittest.TestCase):
                 self.assertEqual(coco['categories'][0]['name'], 'tank')
                 for img in coco['images']:
                     self.assertTrue((out/img['file_name']).is_file())
+                    self.assertEqual(img['ke_scene']['tank_world_xyz'][1], 50)
+                    self.assertIsNone(img['ke_scene']['camera_eye_world_xyz'])
                     seen.setdefault(img['scene_group'],set()).add(sub)
                 for ann in coco['annotations']:
                     self.assertEqual(ann['bbox_kind'], 'approximate_amodal')
             self.assertTrue(all(len(s)==1 for s in seen.values()))
             self.assertFalse(list(out.glob('*.png')))
             with self.assertRaises(ValueError): export(runs,out,split=True)
+
+class SceneMetadataTest(unittest.TestCase):
+    def test_actual_camera_and_missing_optional_data(self):
+        from ke_coco import scene_metadata
+        blk = frame_blk(10,20,30) + 'eye:p3=1, 2, 3\nlook_at:p3=4, 5, 6\nfov_x_deg:r=55\n'
+        scene = scene_metadata(blk)
+        self.assertEqual(scene['tank_world_xyz'], [10,50,20])
+        self.assertEqual(scene['camera_eye_world_xyz'], [1,2,3])
+        self.assertEqual(scene['camera_look_at_world_xyz'], [4,5,6])
+        self.assertEqual(scene['tank_yaw_deg'],30)
+        self.assertIsNone(scene_metadata(frame_blk(0,0))['camera_eye_world_xyz'])
+        with self.assertRaises(ValueError): scene_metadata(blk.replace('eye:p3=1, 2, 3', 'eye:p3=nan, 2, 3'))

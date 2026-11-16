@@ -50,6 +50,7 @@ class App:
         self.values = {k: tk.StringVar(value=str(DEFAULTS[k])) for k, _ in FIELDS}
         self.keep_open = tk.BooleanVar(value=False)
         self.collect_tiles = tk.BooleanVar(value=False)
+        self.capture_last_clip = tk.BooleanVar(value=False)
         self.values['output'].set(str(Path(DEFAULTS['output']).parent))
         self.values['placement_mode'].set(MODE_LABELS[DEFAULTS['placement_mode']])
         self.last_run = None
@@ -100,6 +101,8 @@ class App:
         menu.add_command(label='Проверить существующую серию…', command=self.check_run)
         menu.add_command(label='Проверить рельеф серии…', command=self.check_terrain)
         menu.add_command(label='Восстановить метаданные после сбоя…', command=self.recover_run)
+        menu.add_checkbutton(label='Сохранить обзорную текстуру карты', variable=self.capture_last_clip)
+        menu.add_command(label='Позиции на обзорной текстуре…', command=self.fixed_clip_map)
         menu.add_checkbutton(label='Собирать тайлы земли (эксперимент)', variable=self.collect_tiles)
         menu.add_command(label='Собрать карту из тайлов…', command=self.build_clipmap_map)
         menu.add_command(label='Позиции на изображении карты…', command=self.map_run)
@@ -168,6 +171,7 @@ class App:
         data['output'] = str(next_numbered_directory(data['output']))
         data['keep_open'] = self.keep_open.get()
         data['collect_clipmap_tiles'] = self.collect_tiles.get()
+        data['capture_last_clip'] = self.capture_last_clip.get()
         return validate_config(data)
 
     def open_config(self):
@@ -177,6 +181,7 @@ class App:
             data = validate_config(json.loads(Path(path).read_text(encoding='utf-8')))
             self.keep_open.set(data['keep_open'])
             self.collect_tiles.set(data['collect_clipmap_tiles'])
+            self.capture_last_clip.set(data['capture_last_clip'])
             for k, v in data.items():
                 if k in self.values:
                     self.values[k].set(str(Path(v).parent) if k == 'output' else MODE_LABELS.get(v, v) if k == 'placement_mode' else str(v))
@@ -243,6 +248,22 @@ class App:
         try: out = next_numbered_directory(Path(run), 'terrain-map-')
         except ValueError as exc: messagebox.showerror('Ошибка', str(exc)); return
         self.start_tool('ke_clipmap_map.py', ['--run', run, '--out', str(out)])
+
+    def fixed_clip_map(self):
+        run = self.choose_run()
+        if not run: return
+        image = Path(run) / 'render-debug' / 'terrain-last-clip.png'
+        if not image.is_file():
+            messagebox.showerror('Нет текстуры', 'В серии нет terrain-last-clip.png. Включите сохранение обзорной текстуры и создайте новую серию.')
+            return
+        try:
+            from ke_map import read_landscape_bounds
+            read_landscape_bounds(Path(run), fixed_clip=True)
+            out = next_numbered_directory(Path(run), 'fixed-clip-map-')
+            out.mkdir()
+        except (OSError, ValueError, KeyError) as exc:
+            messagebox.showerror('Нет границ текстуры', str(exc)); return
+        self.start_tool('ke_map.py', ['--run', run, '--image', str(image), '--out', str(out / 'positions.html'), '--fixed-clip'])
 
     def map_run(self):
         run = self.choose_run()

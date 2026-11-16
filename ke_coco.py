@@ -18,6 +18,25 @@ def field(blk, name, typ):
     return match.group(1).strip().strip('"')
 
 
+def scene_metadata(blk):
+    """Read actual world-space values saved by Dagor, never planned offsets."""
+    def optional(name, kind, vector=False):
+        try:
+            value = field(blk, name, kind)
+        except ValueError:
+            return None
+        values = [float(x.strip()) for x in value.split(',')] if vector else [float(value)]
+        if (vector and len(values) != 3) or not all(math.isfinite(v) for v in values):
+            raise ValueError(f'Некорректное значение {name}')
+        return values if vector else values[0]
+    return {'tank_world_xyz': optional('tank_world', 'p3', True),
+            'tank_yaw_deg': optional('yaw_deg', 'r'),
+            'camera_eye_world_xyz': optional('eye', 'p3', True),
+            'camera_look_at_world_xyz': optional('look_at', 'p3', True),
+            'camera_horizontal_fov_deg': optional('fov_x_deg', 'r'),
+            'coordinate_system': 'Dagor world XYZ; Y is vertical'}
+
+
 def group_for(blk, tile_size):
     """Group by map and a fixed X/Z cell, intentionally independent of seed and yaw."""
     level = field(blk, 'level', 't').replace('\\', '/').split('/')[-1].casefold()
@@ -61,7 +80,7 @@ def export(runs, out, tile_size=256, split=False, seed=42):
             except ValueError as exc: raise ValueError('Экспорт и исходные кадры должны быть на одном диске') from exc
             data.append({'relative': relative, 'group': group_for(blk, tile_size),
                          'width': int(field(blk, 'width', 'i')), 'height': int(field(blk, 'height', 'i')),
-                         'annotation': record['annotation']})
+                         'annotation': record['annotation'], 'scene': scene_metadata(blk)})
     assignments = split_groups([r['group'] for r in data], seed) if split else {r['group']: 'all' for r in data}
     subsets = ('train', 'val', 'test') if split else ('all',)
     output = {}
@@ -74,7 +93,7 @@ def export(runs, out, tile_size=256, split=False, seed=42):
             i = len(result['images']) + 1
             x, y, w, h = rec['annotation']['bbox_xywh']
             result['images'].append({'id': i, 'file_name': rec['relative'], 'width': rec['width'], 'height': rec['height'],
-                                     'scene_group': rec['group']})
+                                     'scene_group': rec['group'], 'ke_scene': rec['scene']})
             result['annotations'].append({'id': i, 'image_id': i, 'category_id': 1, 'bbox': [x, y, w, h],
                                           'area': w*h, 'iscrowd': 0,
                                           'bbox_method': rec['annotation']['bbox_method'], 'bbox_kind': 'approximate_amodal'})

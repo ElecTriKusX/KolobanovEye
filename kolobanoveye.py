@@ -37,6 +37,7 @@ MULTI_COMPOSITION_PATCH = HERE / "patches/dagor-multi-composition.patch"
 CAMERA_HEIGHT_PATCH = HERE / "patches/dagor-camera-ground-height.patch"
 MAP_PLACEMENT_PATCH = HERE / "patches/dagor-map-placement.patch"
 WATER_FILTER_PATCH = HERE / "patches/dagor-water-ground-filter.patch"
+LAST_CLIP_BOUNDS_PATCH = HERE / "patches/dagor-last-clip-bounds.patch"
 CLIPMAP_EXPORT_PATCH = HERE / "patches/dagor-clipmap-export.patch"
 CLIPMAP_TILE_PATCH = HERE / "patches/dagor-clipmap-tile-readback.patch"
 PATCHES = (
@@ -69,6 +70,7 @@ PATCHES = (
     CAMERA_HEIGHT_PATCH,
     MAP_PLACEMENT_PATCH,
     WATER_FILTER_PATCH,
+    LAST_CLIP_BOUNDS_PATCH,
     CLIPMAP_EXPORT_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
@@ -498,7 +500,10 @@ def build(dagor, ooz=None):
         input=MAP_PLACEMENT_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     clipmap_export_applied = subprocess.run([*apply, "--reverse", "--check"], input=CLIPMAP_EXPORT_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     water_filter_applied = subprocess.run([*apply, "--reverse", "--check"], input=WATER_FILTER_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    last_clip_bounds_applied = subprocess.run([*apply, "--reverse", "--check"], input=LAST_CLIP_BOUNDS_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     for patch in patches:
+        if last_clip_bounds_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH, WATER_PROBE_PATCH, MULTI_COMPOSITION_PATCH, CAMERA_HEIGHT_PATCH, MAP_PLACEMENT_PATCH, WATER_FILTER_PATCH)):
+            continue
         if water_filter_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH, WATER_PROBE_PATCH, MULTI_COMPOSITION_PATCH, CAMERA_HEIGHT_PATCH, MAP_PLACEMENT_PATCH)):
             continue
         if clipmap_export_applied and patch == CLIPMAP_TILE_PATCH:

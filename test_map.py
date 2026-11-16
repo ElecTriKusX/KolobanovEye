@@ -22,3 +22,17 @@ class MapTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             p=Path(d); (p/'metadata.jsonl').write_text(json.dumps({'dagor_frame_metadata_blk':'tank_world:p3=0,0,0'})+'\n')
             with self.assertRaises(ValueError): read_landscape_bounds(p)
+
+class FixedClipBoundsTest(unittest.TestCase):
+    def test_fixed_clip_uses_own_bounds(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from ke_map import read_landscape_bounds
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)
+            blk=('map_bounds_min:p3=-32768,0,-32768\nmap_bounds_max:p3=32736,0,32736\n'
+                 'last_clip_min:p3=-100,0,-200\nlast_clip_max:p3=300,0,400\n')
+            (p/'metadata.jsonl').write_text(json.dumps({'dagor_frame_metadata_blk':blk})+'\n')
+            self.assertEqual(read_landscape_bounds(p,fixed_clip=True), (-100,300,-200,400))
+            self.assertEqual(read_landscape_bounds(p), (-32768,32736,-32768,32736))

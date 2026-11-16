@@ -1,0 +1,22 @@
+diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+--- a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
++++ b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+@@ -515,6 +515,18 @@
+   result.setStr("model", modelName);
+   result.setStr("skeleton", skeletonName);
+   result.setStr("pack", pack);
++  const auto cellOrigin = scene.lmeshMgr->getCellOrigin();
++  const float cellSize = scene.lmeshMgr->getLandCellSize();
++  const float gridSize = scene.lmeshMgr->getGridCellSize();
++  const float lastClipX0 = cellOrigin.x * cellSize;
++  const float lastClipZ0 = cellOrigin.y * cellSize;
++  const float lastClipX1 = (scene.lmeshMgr->getNumCellsX() + cellOrigin.x) * cellSize - gridSize;
++  const float lastClipZ1 = (scene.lmeshMgr->getNumCellsY() + cellOrigin.y) * cellSize - gridSize;
++  if (!std::isfinite(lastClipX0) || !std::isfinite(lastClipX1) || !std::isfinite(lastClipZ0) || !std::isfinite(lastClipZ1) ||
++      lastClipX0 >= lastClipX1 || lastClipZ0 >= lastClipZ1)
++    return fail("LAST_CLIP_BOUNDS", "Invalid fixed clip bounds");
++  result.setPoint3("last_clip_min", Point3(lastClipX0, 0.f, lastClipZ0));
++  result.setPoint3("last_clip_max", Point3(lastClipX1, 0.f, lastClipZ1));
+   result.setReal("terrain_y", ground);
+   result.setInt("composition_index", sceneIndex);
+   result.setStr("placement_mode", sampleWholeMap ? "whole_map" : "around_point");
