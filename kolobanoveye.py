@@ -45,6 +45,7 @@ FRAME_JOURNAL_PATCH = HERE / "patches/dagor-frame-journal.patch"
 SCENE_QUALITY_PATCH = HERE / "patches/dagor-scene-quality.patch"
 OFFSCREEN_STREAMING_PATCH = HERE / "patches/dagor-offscreen-streaming.patch"
 TEXTURE_PUMP_PATCH = HERE / "patches/dagor-offscreen-texture-pump.patch"
+OFFSCREEN_FRAME_CLOCK_PATCH = HERE / "patches/dagor-offscreen-frame-clock.patch"
 CLIPMAP_TILE_PATCH = HERE / "patches/dagor-clipmap-tile-readback.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
@@ -82,6 +83,7 @@ PATCHES = (
     SCENE_QUALITY_PATCH,
     OFFSCREEN_STREAMING_PATCH,
     TEXTURE_PUMP_PATCH,
+    OFFSCREEN_FRAME_CLOCK_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -519,10 +521,12 @@ def build(dagor, ooz=None):
         input=SCENE_QUALITY_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     offscreen_streaming_applied = subprocess.run([*apply, "--reverse", "--check"],
         input=OFFSCREEN_STREAMING_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
-    texture_pump_applied = subprocess.run([*apply, "--reverse", "--check"],
+    offscreen_frame_clock_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=OFFSCREEN_FRAME_CLOCK_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    texture_pump_applied = offscreen_frame_clock_applied or subprocess.run([*apply, "--reverse", "--check"],
         input=TEXTURE_PUMP_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     for patch in patches:
-        if texture_pump_applied and patch == OFFSCREEN_STREAMING_PATCH:
+        if (texture_pump_applied and patch == OFFSCREEN_STREAMING_PATCH) or (offscreen_frame_clock_applied and patch == TEXTURE_PUMP_PATCH):
             continue
         if (offscreen_streaming_applied or texture_pump_applied) and patch == SCENE_QUALITY_PATCH:
             continue
