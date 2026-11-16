@@ -33,6 +33,7 @@ CAMERA_TERRAIN_PATCH = HERE / "patches/dagor-camera-terrain.patch"
 PLACEMENT_PATCH = HERE / "patches/dagor-placement-search.patch"
 CAMERA_RETRY_PATCH = HERE / "patches/dagor-camera-retry.patch"
 WATER_PROBE_PATCH = HERE / "patches/dagor-water-probe.patch"
+MULTI_COMPOSITION_PATCH = HERE / "patches/dagor-multi-composition.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
     HERE / "patches/dagor-editor-unused-parameters.patch",
@@ -59,6 +60,7 @@ PATCHES = (
     PLACEMENT_PATCH,
     CAMERA_RETRY_PATCH,
     WATER_PROBE_PATCH,
+    MULTI_COMPOSITION_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -479,7 +481,11 @@ def build(dagor, ooz=None):
         input=CAMERA_RETRY_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     water_probe_applied = subprocess.run([*apply, "--reverse", "--check"],
         input=WATER_PROBE_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    multi_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=MULTI_COMPOSITION_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     for patch in patches:
+        if multi_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH, WATER_PROBE_PATCH)):
+            continue
         if water_probe_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH)):
             continue
         if camera_retry_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH)):
@@ -571,6 +577,14 @@ def plan_placements(seed, center, radius, attempts):
             for u, a in ((rng.random(), rng.uniform(-math.pi, math.pi)) for _ in range(attempts))]
 
 
+def plan_compositions(seed, center, radius, attempts, count, frames_per_position):
+    if not 1 <= frames_per_position <= 1000 or not 1 <= count <= 1000:
+        raise ValueError("Frames and frames per position must be 1–1000")
+    scene_count = (count + frames_per_position - 1) // frames_per_position
+    return [plan_placements(seed if i == 0 else f"{seed}:scene:{i}", center, radius, attempts)
+            for i in range(scene_count)]
+
+
 def select_camera_attempt(raw_metadata, candidates):
     match = re.search(r"^camera_attempt:i=(\d+)\s*$", raw_metadata, re.MULTILINE)
     if not match or int(match.group(1)) >= len(candidates):
@@ -588,6 +602,8 @@ def frame(args, game, cdk):
         raise ValueError("Sequence count must be 1–1000 and requires --seed for multiple frames")
     if args.count > 1:
         plan_camera_orbits(args.seed, 0, args.camera_distance_range, args.camera_elevation_range)
+    if not 1 <= args.frames_per_position <= 1000:
+        raise ValueError("Frames per position must be 1–1000")
     if not 1 <= args.camera_attempts <= 64:
         raise ValueError("Camera attempts must be 1–64")
     if args.count > 1 and args.eye:
@@ -596,7 +612,8 @@ def frame(args, game, cdk):
         raise ValueError("Camera clearance must be finite and between 0 and 100")
     if not math.isfinite(args.max_height_range) or not 0 <= args.max_height_range <= 100:
         raise ValueError("Maximum terrain height range must be 0–100")
-    candidates = plan_placements(args.seed, args.tank_xz, args.placement_radius, args.placement_attempts)
+    candidate_groups = plan_compositions(args.seed, args.tank_xz, args.placement_radius,
+        args.placement_attempts, args.count, args.frames_per_position)
     if args.placement_radius > 0 and args.seed is None:
         raise ValueError("Placement search requires --seed")
     if args.timeout <= 0:
@@ -643,19 +660,21 @@ def frame(args, game, cdk):
         f'fov:r={numbers([args.fov])}',
         f'camera_clearance:r={numbers([args.camera_clearance])}',
         f'max_height_range:r={numbers([args.max_height_range])}',
-        f'candidate_count:i={len(candidates)}',
+        f'candidate_count:i={len(candidate_groups[0])}',
+        f'frames_per_position:i={args.frames_per_position}',
         f'yaw:r={numbers([args.yaw])}',
         f'tank:p3={numbers((args.tank_xz[0], args.ground_offset, args.tank_xz[1]))}',
     ]
-    for i, (x, z) in enumerate(candidates):
-        entries.append(f'candidate_{i}:p3={numbers((x, args.ground_offset, z))}')
+    for scene_index, candidates in enumerate(candidate_groups):
+        for i, (x, z) in enumerate(candidates):
+            entries.append(f'candidate_{scene_index}_{i}:p3={numbers((x, args.ground_offset, z))}')
     if args.count > 1:
         images = out / "images"
         images.mkdir()
         flat_orbits = plan_camera_orbits(args.seed, args.count * args.camera_attempts, args.camera_distance_range, args.camera_elevation_range)
         orbit_plan = [flat_orbits[i * args.camera_attempts:(i + 1) * args.camera_attempts] for i in range(args.count)]
         (out / "plan.json").write_text(json.dumps({"schema_version": 3, "seed": args.seed,
-            "tank_yaw_deg": args.yaw, "placement_candidates_xz": candidates, "max_height_range": args.max_height_range,
+            "tank_yaw_deg": args.yaw, "placement_candidates_xz": candidate_groups, "frames_per_position": args.frames_per_position, "max_height_range": args.max_height_range,
             "camera_distance_range": args.camera_distance_range, "camera_elevation_range": args.camera_elevation_range,
             "camera_attempts": args.camera_attempts, "cameras": orbit_plan}, indent=2) + "\n", encoding="utf-8")
         entries.extend((f"frame_count:i={args.count}", f"camera_attempts:i={args.camera_attempts}"))
@@ -737,7 +756,11 @@ def frame(args, game, cdk):
             annotation = read_annotation(require_file(source))
             raw_metadata = source.read_text(encoding="utf-8")
             camera_attempt, camera = select_camera_attempt(raw_metadata, camera_candidates)
-            records.append({"seed": args.seed, "frame_index": i, "tank_yaw_deg": args.yaw,
+            composition_match = re.search(r"^composition_index:i=(\d+)\s*$", raw_metadata, re.MULTILINE)
+            expected_composition = i // args.frames_per_position
+            if not composition_match or int(composition_match.group(1)) != expected_composition:
+                raise ValueError("Missing or invalid composition_index in Dagor metadata; rebuild the editor")
+            records.append({"seed": args.seed, "frame_index": i, "composition_index": expected_composition, "tank_yaw_deg": args.yaw,
                 "camera_azimuth_deg": camera["azimuth_deg"], "camera_horizontal_distance": camera["horizontal_distance"],
                 "camera_elevation_deg": camera["elevation_deg"], "camera_offset": camera["offset"], "camera_attempt": camera_attempt,
                 "image": f"images/{i:06d}.png", "annotation": annotation["annotations"][0],
@@ -785,6 +808,7 @@ def main():
     frame_cmd.add_argument("--count", type=int, default=1, help="Experimental single-process sequence count")
     frame_cmd.add_argument("--seed", type=int, help="Seed for the sequence camera angles and distances")
     frame_cmd.add_argument("--fov", type=float, default=55)
+    frame_cmd.add_argument("--frames-per-position", type=int, default=6, help="Number of camera views per selected tank position")
     frame_cmd.add_argument("--camera-attempts", type=int, default=8, help="Maximum camera candidates per frame")
     frame_cmd.add_argument("--placement-radius", type=float, default=0, help="Search radius around tank X/Z; 0 keeps fixed position")
     frame_cmd.add_argument("--placement-attempts", type=int, default=24, help="Up to 64 heightmap candidates")

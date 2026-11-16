@@ -19,3 +19,12 @@ class PlacementTest(unittest.TestCase):
         self.assertEqual(cmd[cmd.index('--placement-attempts')+1], '7')
         self.assertEqual(cmd[cmd.index('--max-height-range')+1], '0.4')
         with self.assertRaises(ValueError): validate_config({**DEFAULTS,'placement_attempts':65})
+
+    def test_multiple_compositions_and_final_partial_group(self):
+        from kolobanoveye import plan_compositions
+        a = plan_compositions(42, (0,0), 50, 4, 7, 3)
+        self.assertEqual(len(a), 3)
+        self.assertEqual([len(x) for x in a], [4,4,4])
+        self.assertEqual(a, plan_compositions(42, (0,0), 50, 4, 7, 3))
+        self.assertEqual(len({group[0] for group in a}), 3)
+        self.assertEqual(plan_compositions(1,(0,0),0,4,2,1), [[(0,0)],[(0,0)]])

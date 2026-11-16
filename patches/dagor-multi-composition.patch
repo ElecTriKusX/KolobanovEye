@@ -1,0 +1,51 @@
+diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+--- a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
++++ b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+@@ -172,6 +172,12 @@
+   if (!finite_point(bounds[0]) || !finite_point(bounds[1]) || bounds[0].x >= bounds[1].x || bounds[0].y >= bounds[1].y ||
+       bounds[0].z >= bounds[1].z)
+     return fail("MODEL_BOUNDS", "Invalid DynModel bounds");
++  const int framesPerPosition = config.getInt("frames_per_position", frameCount);
++  if (framesPerPosition < 1 || framesPerPosition > 1000)
++    return fail("CONFIG", "Invalid frames per position");
++  console->addMessage(ILogWriter::NOTE, "[KE] SEQUENCE_BEGIN frames=%d map_loads=1 model_loads=1", frameCount);
++  for (int sceneIndex = 0; sceneIndex * framesPerPosition < frameCount; ++sceneIndex)
++  {
+   // Heightmap-only placement: water and obstacle collisions remain unverified.
+   const int candidateCount = config.getInt("candidate_count", 1);
+   const float maxHeightRange = config.getReal("max_height_range", 0.5f);
+@@ -188,7 +194,7 @@
+   for (int attempt = 0; attempt < candidateCount; ++attempt)
+   {
+     char key[32];
+-    snprintf(key, sizeof(key), "candidate_%d", attempt);
++    snprintf(key, sizeof(key), "candidate_%d_%d", sceneIndex, attempt);
+     const Point3 candidate = config.getPoint3(key, requested);
+     if (!finite_point(candidate))
+       return fail("CONFIG", "Invalid candidate coordinates");
+@@ -233,8 +239,7 @@
+     return fail("PLACEMENT", "No candidate passed the heightmap checks");
+   console->addMessage(ILogWriter::NOTE, "[KE] MAP_OK terrain_y=%.3f normal_y=%.3f static_collision=%d", ground, groundNormal.y,
+     scene.hasStaticScene() ? 1 : 0);
+-  console->addMessage(ILogWriter::NOTE, "[KE] SEQUENCE_BEGIN frames=%d map_loads=1 model_loads=1", frameCount);
+-  for (int frameIndex = 0; frameIndex < frameCount; ++frameIndex)
++  for (int frameIndex = sceneIndex * framesPerPosition; frameIndex < frameCount && frameIndex < (sceneIndex + 1) * framesPerPosition; ++frameIndex)
+   {
+   char yawKey[32], outputKey[32], metadataKey[32];
+   snprintf(yawKey, sizeof(yawKey), "yaw_%d", frameIndex);
+@@ -480,6 +485,7 @@
+   result.setStr("skeleton", skeletonName);
+   result.setStr("pack", pack);
+   result.setReal("terrain_y", ground);
++  result.setInt("composition_index", sceneIndex);
+   result.setInt("placement_candidate", selectedCandidate);
+   result.setStr("placement_check", "heightmap_only_water_and_obstacles_unknown");
+   result.setStr("water_proxy_method", "scene_water_plane_unverified");
+@@ -513,6 +519,7 @@
+     return fail("METADATA", "Metadata write failed");
+   console->addMessage(ILogWriter::NOTE, "[KE] FRAME_OK %dx%d %s", width, height, frameOutput);
+   }
++  } // scene group: keep map and model loaded
+   console->addMessage(ILogWriter::NOTE, "[KE] SEQUENCE_OK frames=%d", frameCount);
+   return true;
+ }
