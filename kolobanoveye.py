@@ -48,6 +48,7 @@ TEXTURE_PUMP_PATCH = HERE / "patches/dagor-offscreen-texture-pump.patch"
 OFFSCREEN_FRAME_CLOCK_PATCH = HERE / "patches/dagor-offscreen-frame-clock.patch"
 OFFSCREEN_SERIAL_STREAMING_PATCH = HERE / "patches/dagor-offscreen-serial-streaming.patch"
 OFFSCREEN_STREAMING_WAIT_PATCH = HERE / "patches/dagor-offscreen-streaming-wait.patch"
+OFFSCREEN_RESOLVE_CAMERA_PATCH = HERE / "patches/dagor-offscreen-resolve-camera.patch"
 CLIPMAP_TILE_PATCH = HERE / "patches/dagor-clipmap-tile-readback.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
@@ -88,6 +89,7 @@ PATCHES = (
     OFFSCREEN_FRAME_CLOCK_PATCH,
     OFFSCREEN_SERIAL_STREAMING_PATCH,
     OFFSCREEN_STREAMING_WAIT_PATCH,
+    OFFSCREEN_RESOLVE_CAMERA_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
