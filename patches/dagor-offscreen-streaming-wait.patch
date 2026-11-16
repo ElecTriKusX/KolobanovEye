@@ -1,0 +1,150 @@
+diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+--- a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
++++ b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+@@ -33,15 +33,17 @@
+ #include <util/dag_delayedAction.h>
+ 
++#include <chrono>
+ #include <cstdio>
+ #include <cmath>
+ #include <cstring>
+ #include <EASTL/unique_ptr.h>
+ 
+ // The texture manager uses this during synchronous prefetch on the main thread.
+ namespace texmgr_internal
+ {
+ void do_per_frame_updates_while_waiting_on_main_thread();
+ int get_pending_tex_prio(int prio);
++extern int reload_jobmgr_id;
+ }
+ 
+ void ke_set_render_debug_dir(const char *dir);
+@@ -488,74 +490,79 @@
+     skipRenderObjects = previousSkipRenderObjects;
+     return captured;
+   };
++  const bool loadOnDemand = is_managed_textures_streaming_load_on_demand();
++  const auto textureWorkerBusy = [&]() {
++    return loadOnDemand && texmgr_internal::reload_jobmgr_id >= 0 && cpujobs::is_job_manager_busy(texmgr_internal::reload_jobmgr_id);
++  };
++  const auto texturesIdle = [&]() {
++    return get_managed_textures_streaming_pending_count() == 0 && !textureWorkerBusy();
++  };
++  const auto pumpStreaming = [&]() {
++    cpujobs::release_done_jobs();
++    if (!loadOnDemand)
++      ddsx::tex_pack2_perform_delayed_data_loading();
++    texmgr_internal::do_per_frame_updates_while_waiting_on_main_thread();
++  };
++
++  constexpr int minWarmupRenders = 8;
++  using Clock = std::chrono::steady_clock;
++  const auto warmupStart = Clock::now();
++  const auto deadline = warmupStart + std::chrono::seconds(10);
+   TexPtr frame;
+   int frames = 0;
+-  int previousPending = 0;
+-  int unchangedPasses = 0;
+-  bool triedSerialLoad = false;
+-  for (; frames < 48; ++frames)
++  bool ready = false;
++  bool mapLoading = false;
++  bool skyReady = false;
++  int pendingBefore = 0;
++  while (Clock::now() < deadline)
+   {
+     scene.update(eye, 1.f / 60.f);
+     perform_delayed_actions();
+     if (skies)
+       skies->updateSkies(1.f / 60.f);
+     plugin->setKolobanovEyeModel(&model);
++    pendingBefore = get_managed_textures_streaming_pending_count();
++    const bool idleBeforeRender = pendingBefore == 0 && !textureWorkerBusy();
+     frame = captureFrame(nullptr);
+     if (!frame)
+       return fail("RENDER", "Offscreen texture creation or render failed");
++    ++frames;
+     // The viewport renderer advances Dagor's frame counter after drawing. Screenshots do not.
+     dagor_frame_no_increment();
+-    cpujobs::release_done_jobs();
+-    const int pendingBefore = get_managed_textures_streaming_pending_count();
+-    const bool loadOnDemand = is_managed_textures_streaming_load_on_demand();
+-    if (!loadOnDemand)
+-      ddsx::tex_pack2_perform_delayed_data_loading();
+-    texmgr_internal::do_per_frame_updates_while_waiting_on_main_thread();
+-    int pendingAfter = get_managed_textures_streaming_pending_count();
+-    unchangedPasses = pendingAfter > 0 && pendingAfter == previousPending ? unchangedPasses + 1 : 0;
+-    previousPending = pendingAfter;
+-    if (loadOnDemand && unchangedPasses >= 7 && !triedSerialLoad)
++    pumpStreaming();
++
++    mapLoading = scene.getSsm() && scene.getSsm()->isLoading();
++    skyReady = !skies || skies->areCloudTexturesReady();
++    const bool sceneReady = frames >= minWarmupRenders && !mapLoading && skyReady;
++    if (sceneReady && idleBeforeRender && texturesIdle())
+     {
+-      triedSerialLoad = true;
+-      const bool interrupted = ddsx::interrupt_texq_loading();
+-      if (interrupted)
+-      {
+-        // DDSx flag for serial decoding. The caller already owns the queue pause.
+-        constexpr int serialDecode = 0x100;
+-        ddsx::tex_pack2_perform_delayed_data_loading(serialDecode);
+-        const int hqPriority = ddsx::hq_tex_priority;
+-        if (hqPriority && texmgr_internal::get_pending_tex_prio(hqPriority))
+-          ddsx::tex_pack2_perform_delayed_data_loading(serialDecode | hqPriority);
+-        texmgr_internal::do_per_frame_updates_while_waiting_on_main_thread();
+-        ddsx::restore_texq_loading(interrupted);
+-      }
+-      const int pendingAfterSerial = get_managed_textures_streaming_pending_count();
+-      console->addMessage(ILogWriter::NOTE,
+-        "[KE] STREAMING_SERIAL index=%d pass=%d interrupted=%d pending_before=%d pending_after=%d",
+-        frameIndex, frames + 1, int(interrupted), pendingAfter, pendingAfterSerial);
+-      pendingAfter = pendingAfterSerial;
++      ready = true;
++      break;
+     }
+-    const bool mapLoading = scene.getSsm() && scene.getSsm()->isLoading();
+-    const bool skyReady = !skies || skies->areCloudTexturesReady();
+-    const bool ready = frames >= 7 && !mapLoading && pendingBefore == 0 && pendingAfter == 0 && skyReady;
+-    if (frames == 0 || frames == 47 || ready)
++
++    // Let the worker finish its current batch without spending GPU time on more warm-up renders.
++    while (sceneReady && !texturesIdle() && Clock::now() < deadline)
+     {
+-      const int hqPriority = ddsx::hq_tex_priority;
+-      console->addMessage(ILogWriter::NOTE,
+-        "[KE] STREAMING_PUMP index=%d pass=%d engine_frame=%u pending_before=%d pending_after=%d "
+-        "pending_base=%d pending_hq=%d hq_prio=%d on_demand=%d map_loading=%d sky_ready=%d",
+-        frameIndex, frames + 1, dagor_frame_no(), pendingBefore, pendingAfter, texmgr_internal::get_pending_tex_prio(0),
+-        hqPriority ? texmgr_internal::get_pending_tex_prio(hqPriority) : 0, hqPriority, int(loadOnDemand), int(mapLoading), int(skyReady));
++      sleep_msec(10);
++      perform_delayed_actions();
++      pumpStreaming();
+     }
+-    if (ready)
+-      break;
+-    sleep_msec(20);
++    if (!sceneReady)
++      sleep_msec(20);
+   }
+-  console->addMessage(ILogWriter::NOTE, "[KE] WARMUP passes=%d pending_textures=%d settled=%d", frames < 48 ? frames + 1 : frames,
+-    get_managed_textures_streaming_pending_count(), frames < 48 ? 1 : 0);
++  const int pendingAfter = get_managed_textures_streaming_pending_count();
++  const int hqPriority = ddsx::hq_tex_priority;
++  const int elapsedMs = int(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - warmupStart).count());
++  console->addMessage(ILogWriter::NOTE,
++    "[KE] STREAMING_PUMP index=%d pass=%d engine_frame=%u pending_before=%d pending_after=%d "
++    "pending_base=%d pending_hq=%d hq_prio=%d on_demand=%d worker_busy=%d map_loading=%d sky_ready=%d elapsed_ms=%d",
++    frameIndex, frames, dagor_frame_no(), pendingBefore, pendingAfter, texmgr_internal::get_pending_tex_prio(0),
++    hqPriority ? texmgr_internal::get_pending_tex_prio(hqPriority) : 0, hqPriority, int(loadOnDemand), int(textureWorkerBusy()),
++    int(mapLoading), int(skyReady), elapsedMs);
++  console->addMessage(ILogWriter::NOTE, "[KE] WARMUP passes=%d pending_textures=%d settled=%d", frames, pendingAfter, int(ready));
+   console->addMessage(ILogWriter::NOTE, "[KE] ENV_LIGHT_READY %d", renderer->isEnvironmentLightingReady() ? 1 : 0);
+-  if (frames == 48)
+-    return fail("STREAMING", "Scene, textures or sky did not settle within 48 warm-up renders");
++  if (!ready)
++    return fail("STREAMING", "Scene, textures or sky did not settle within 10 seconds of warm-up");
+   char renderDebugKey[32];
+   snprintf(renderDebugKey, sizeof(renderDebugKey), "render_debug_%d", frameIndex);
+   const char *renderDebugDir = config.getStr(renderDebugKey, "");
