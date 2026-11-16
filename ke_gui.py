@@ -72,6 +72,7 @@ class App:
         menu = tk.Menu(menu_button, tearoff=False)
         menu.add_command(label='Проверить существующую серию…', command=self.check_run)
         menu.add_command(label='Проверить рельеф серии…', command=self.check_terrain)
+        menu.add_command(label='Восстановить метаданные после сбоя…', command=self.recover_run)
         menu.add_command(label='Показать рамки на копиях…', command=self.preview_run)
         menu.add_command(label='Экспортировать COCO отдельно…', command=self.coco_run)
         menu.add_separator()
@@ -168,6 +169,7 @@ class App:
             'Основная кнопка: создаёт новую папку ke-generate-XX, рендерит кадры, проверяет их и создаёт COCO в подпапке coco.\n\n'
             'Проверить серию — проверяет файлы и границы рамок существующей серии.\n'
             'Проверить рельеф — оценивает перепад heightmap под углами габарита; воду и препятствия не проверяет.\n'
+            'Восстановление — проверяет уже записанные кадры и создаёт отдельные метаданные; рендер не продолжает.\n'
             'Рамки — создаёт отдельные копии кадров с зелёной рамкой.\n'
             'COCO — создаёт JSON-разметку для существующей серии без копирования изображений.\n\n'
             'COCO — формат данных для обучения детектора; здесь рамка приблизительная, видимость не проверена. '
@@ -185,6 +187,10 @@ class App:
     def check_terrain(self):
         run = self.choose_run()
         if run: self.start_tool('ke_terrain_audit.py', ['--run', run])
+
+    def recover_run(self):
+        run = self.choose_run()
+        if run: self.start_tool('ke_recover.py', ['--run', run])
 
     def preview_run(self):
         run = self.choose_run()
