@@ -15,7 +15,7 @@ DEFAULTS = {
     'tank_yaw': 20.0, 'ground_offset': 0.05, 'camera_clearance': 0.5,
     'placement_mode': 'whole_map', 'map_margin_percent': 15.0, 'placement_radius': 0.0, 'placement_attempts': 24, 'frames_per_position': 6, 'max_height_range': 0.5, 'camera_attempts': 8,
     'camera_height_min': 4.0, 'camera_height_max': 16.0, 'distance_min': 18.0, 'distance_max': 35.0, 'elevation_min': 10.0, 'elevation_max': 25.0,
-    'clipmap_feedback': 'software', 'timeout': 360,
+    'keep_open': False, 'clipmap_feedback': 'software', 'timeout': 360,
 }
 INTS = {'count', 'seed', 'width', 'height', 'timeout', 'placement_attempts', 'camera_attempts', 'frames_per_position'}
 FLOATS = {'fov', 'tank_x', 'tank_z', 'tank_yaw', 'ground_offset', 'camera_clearance',
@@ -55,6 +55,8 @@ def validate_config(raw):
         raise ValueError('Высота камеры: 0–10000, от не больше до')
     if c['camera_height_max'] < c['camera_clearance']:
         raise ValueError('Максимальная высота камеры меньше минимального зазора над землёй')
+    if not isinstance(c['keep_open'], bool):
+        raise ValueError('keep_open должен быть true или false')
     if c['clipmap_feedback'] not in ('software', 'hardware'):
         raise ValueError('clipmap_feedback: software или hardware')
     plan_camera_orbits(c['seed'], 0, (c['distance_min'], c['distance_max']), (c['elevation_min'], c['elevation_max']))
@@ -63,7 +65,7 @@ def validate_config(raw):
 
 def command(c):
     c = validate_config(c)
-    return [sys.executable, '-u', str(Path(__file__).resolve().with_name('kolobanoveye.py')), 'frame',
+    return ([sys.executable, '-u', str(Path(__file__).resolve().with_name('kolobanoveye.py')), 'frame',
             '--dagor', c['dagor'], '--game', c['game'], '--out', c['output'],
             '--count', str(c['count']), '--seed', str(c['seed']), '--width', str(c['width']),
             '--height', str(c['height']), '--fov', str(c['fov']), '--tank-xz', str(c['tank_x']), str(c['tank_z']),
@@ -71,7 +73,7 @@ def command(c):
             '--placement-mode', c['placement_mode'], '--map-margin-percent', str(c['map_margin_percent']), '--frames-per-position', str(c['frames_per_position']), '--camera-attempts', str(c['camera_attempts']), '--placement-radius', str(c['placement_radius']), '--placement-attempts', str(c['placement_attempts']),
             '--max-height-range', str(c['max_height_range']), '--camera-clearance', str(c['camera_clearance']), '--camera-height-range', str(c['camera_height_min']), str(c['camera_height_max']), '--camera-distance-range', str(c['distance_min']), str(c['distance_max']),
             '--camera-elevation-range', str(c['elevation_min']), str(c['elevation_max']),
-            '--clipmap-feedback', c['clipmap_feedback'], '--timeout', str(c['timeout'])]
+            '--clipmap-feedback', c['clipmap_feedback'], '--timeout', str(c['timeout'])] + (['--keep-open'] if c['keep_open'] else []))
 
 
 def main():

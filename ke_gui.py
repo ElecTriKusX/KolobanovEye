@@ -6,7 +6,7 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
 from pathlib import Path
 
 from ke_generate import DEFAULTS, INTS, FLOATS, validate_config, command
@@ -48,6 +48,7 @@ class App:
         self.process = None
         self.running = False
         self.values = {k: tk.StringVar(value=str(DEFAULTS[k])) for k, _ in FIELDS}
+        self.keep_open = tk.BooleanVar(value=False)
         self.values['output'].set(str(Path(DEFAULTS['output']).parent))
         self.values['placement_mode'].set(MODE_LABELS[DEFAULTS['placement_mode']])
         self.last_run = None
@@ -92,11 +93,13 @@ class App:
         buttons = ttk.Frame(main); buttons.pack(fill='x', pady=8)
         self.run_button = ttk.Button(buttons, text='Создать и проверить датасет', command=self.run)
         self.run_button.pack(side='left')
+        ttk.Checkbutton(buttons, text='Оставить редактор открытым', variable=self.keep_open).pack(side='left', padx=8)
         menu_button = ttk.Menubutton(buttons, text='Дополнительно')
         menu = tk.Menu(menu_button, tearoff=False)
         menu.add_command(label='Проверить существующую серию…', command=self.check_run)
         menu.add_command(label='Проверить рельеф серии…', command=self.check_terrain)
         menu.add_command(label='Восстановить метаданные после сбоя…', command=self.recover_run)
+        menu.add_command(label='Позиции на изображении карты…', command=self.map_run)
         menu.add_command(label='Показать рамки на копиях…', command=self.preview_run)
         menu.add_command(label='Экспортировать COCO отдельно…', command=self.coco_run)
         menu.add_separator()
@@ -160,6 +163,7 @@ class App:
         if not data['output']:
             raise ValueError('Укажите родительскую папку результатов')
         data['output'] = str(next_numbered_directory(data['output']))
+        data['keep_open'] = self.keep_open.get()
         return validate_config(data)
 
     def open_config(self):
@@ -167,6 +171,7 @@ class App:
         if not path: return
         try:
             data = validate_config(json.loads(Path(path).read_text(encoding='utf-8')))
+            self.keep_open.set(data['keep_open'])
             for k, v in data.items():
                 if k in self.values:
                     self.values[k].set(str(Path(v).parent) if k == 'output' else MODE_LABELS.get(v, v) if k == 'placement_mode' else str(v))
@@ -194,6 +199,7 @@ class App:
     def show_help(self):
         messagebox.showinfo('Справка',
             'Открыть папку — показывает последний успешный результат в Проводнике. Копировать журнал — копирует выделенный текст или весь журнал.\n\n'
+            'При открытом редакторе проверка и экспорт начнутся после закрытия его окна.\n\n'
             'Основная кнопка: создаёт новую папку ke-generate-XX, рендерит кадры, проверяет их и создаёт COCO в подпапке coco.\n\n'
             'Проверить серию — проверяет файлы и границы рамок существующей серии.\n'
             'Проверить рельеф — оценивает перепад heightmap под углами габарита; воду и препятствия не проверяет.\n'
@@ -223,6 +229,22 @@ class App:
     def recover_run(self):
         run = self.choose_run()
         if run: self.start_tool('ke_recover.py', ['--run', run])
+
+    def map_run(self):
+        run = self.choose_run()
+        if not run: return
+        image = filedialog.askopenfilename(title='Изображение карты', filetypes=[('Изображение', '*.png *.jpg *.jpeg')])
+        if not image: return
+        from ke_map import read_landscape_bounds
+        try:
+            bounds = read_landscape_bounds(Path(run))
+        except (OSError, ValueError, KeyError) as exc:
+            messagebox.showerror('Нет границ карты', str(exc)); return
+        messagebox.showinfo('Границы ландшафта',
+            f'Из метаданных Dagor: X {bounds[0]:.1f} … {bounds[1]:.1f}; Z {bounds[2]:.1f} … {bounds[3]:.1f}.\n\n'
+            'Метки будут рассчитаны относительно этих границ. Изображение должно охватывать тот же прямоугольник; его ориентация не проверена.')
+        out = filedialog.asksaveasfilename(title='Сохранить карту позиций', defaultextension='.html', filetypes=[('HTML', '*.html')])
+        if out: self.start_tool('ke_map.py', ['--run', run, '--image', image, '--out', out])
 
     def preview_run(self):
         run = self.choose_run()
