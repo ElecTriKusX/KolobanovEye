@@ -32,6 +32,7 @@ CLEAN_CAPTURE_PATCH = HERE / "patches/dagor-clean-capture.patch"
 CAMERA_TERRAIN_PATCH = HERE / "patches/dagor-camera-terrain.patch"
 PLACEMENT_PATCH = HERE / "patches/dagor-placement-search.patch"
 CAMERA_RETRY_PATCH = HERE / "patches/dagor-camera-retry.patch"
+WATER_PROBE_PATCH = HERE / "patches/dagor-water-probe.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
     HERE / "patches/dagor-editor-unused-parameters.patch",
@@ -57,6 +58,7 @@ PATCHES = (
     CAMERA_TERRAIN_PATCH,
     PLACEMENT_PATCH,
     CAMERA_RETRY_PATCH,
+    WATER_PROBE_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -475,7 +477,11 @@ def build(dagor, ooz=None):
         input=PLACEMENT_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     camera_retry_applied = subprocess.run([*apply, "--reverse", "--check"],
         input=CAMERA_RETRY_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    water_probe_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=WATER_PROBE_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     for patch in patches:
+        if water_probe_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH)):
+            continue
         if camera_retry_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH)):
             continue
         if placement_patch_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH)):
@@ -716,7 +722,7 @@ def frame(args, game, cdk):
         debug_logs = sorted((out / ".logs").glob("daEditor3x-dev.exe-*/debug"), key=lambda p: p.stat().st_mtime)
         log_path = debug_logs[-1] if debug_logs else log_path
     log = require_file(log_path).read_text(encoding="utf-8", errors="replace")
-    for marker in ("MAP_OK", "MODEL_OK", "PLACEMENT_OK", "CAMERA_TERRAIN", "SUPPORT_HEIGHTS", "CAMERA_OK", "FRAME_OK"):
+    for marker in ("MAP_OK", "MODEL_OK", "PLACEMENT_OK", "WATER_PROXY", "CAMERA_TERRAIN", "SUPPORT_HEIGHTS", "CAMERA_OK", "FRAME_OK"):
         if f"[KE] {marker}" not in log:
             raise ValueError(f"{marker} missing from probe.dcmd.log")
     if args.count > 1:

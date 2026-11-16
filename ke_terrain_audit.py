@@ -26,16 +26,19 @@ def analyze(records, threshold=0.5):
         lo = number(blk, 'support_height_min', 'r')
         hi = number(blk, 'support_height_max', 'r')
         clearance = number(blk, 'camera_clearance', 'r')
+        water_plane = number(blk, 'water_plane_y', 'r')
+        above_water = number(blk, 'terrain_above_water_plane', 'r')
         known = count == 4 and lo is not None and hi is not None and hi >= lo
         delta = round(hi-lo, 6) if known else None
         frames.append({'index': item['frame_index'], 'heightmap_samples': count,
                        'corner_height_range': delta, 'max_allowed_range': threshold,
                        'heightmap_range_result': ('within_threshold' if delta <= threshold else 'above_threshold') if known else 'unknown',
                        'camera_clearance': clearance, 'camera_heightmap_result': 'measured' if clearance is not None else 'unknown',
-                       'water_check': 'unknown', 'obstacle_check': 'unknown', 'track_contact': 'unknown'})
+                       'water_check': 'unknown', 'water_plane_y': water_plane, 'terrain_above_water_plane': above_water,
+                       'water_proxy_method': 'scene_water_plane_unverified', 'obstacle_check': 'unknown', 'track_contact': 'unknown'})
     return {'method': 'heightmap_at_four_projected_local_aabb_bottom_corners', 'frames': frames,
             'note': 'Диагностика перепада высот по углам габарита, не проверка воды, наклона, контакта гусениц или препятствий; '
-                    'отбор и повторное размещение не выполняются.'}
+                    'Уровень водной плоскости диагностический, наличие воды в точке не доказано; отбор и повторное размещение здесь не выполняются.'}
 
 
 def audit(run, threshold=0.5):

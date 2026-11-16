@@ -14,5 +14,9 @@ class TerrainAuditTest(unittest.TestCase):
         self.assertTrue(all(f['obstacle_check']=='unknown' and f['water_check']=='unknown' for f in result['frames']))
         self.assertEqual(result['frames'][0]['camera_clearance'], 2)
         self.assertIsNone(result['frames'][3]['camera_clearance'])
+        water = analyze([rec(4, 'water_plane_y:r=12.5\nterrain_above_water_plane:r=-0.2\n')])['frames'][0]
+        self.assertEqual(water['water_plane_y'], 12.5)
+        self.assertEqual(water['terrain_above_water_plane'], -0.2)
+        self.assertEqual(water['water_check'], 'unknown')
         with self.assertRaises(ValueError): analyze([], 0.5)
         with self.assertRaises(ValueError): analyze([rec(0, '')], float('nan'))
