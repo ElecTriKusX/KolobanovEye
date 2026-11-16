@@ -1,0 +1,92 @@
+diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+--- a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
++++ b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+@@ -301,24 +301,65 @@
+     }
+ 
+   const Point3 aim = world * ((bounds[0] + bounds[1]) * 0.5f);
+-  char offsetKey[32];
+-  snprintf(offsetKey, sizeof(offsetKey), "camera_offset_%d", frameIndex);
+-  const Point3 eye = config.getPoint3(offsetKey, config.getPoint3("eye", aim + Point3(12, 5, 16)) - aim) + aim;
++  const int cameraAttempts = config.getInt("camera_attempts", 1);
++  if (cameraAttempts < 1 || cameraAttempts > 64)
++    return fail("CONFIG", "Invalid camera attempt limit");
++  Point3 eye;
++  float cameraGround = 0.f, cameraClearance = 0.f;
++  int cameraAttemptUsed = -1;
++  for (int cameraAttempt = 0; cameraAttempt < cameraAttempts; ++cameraAttempt)
++  {
++    char offsetKey[64], legacyKey[32];
++    snprintf(offsetKey, sizeof(offsetKey), "camera_offset_%d_%d", frameIndex, cameraAttempt);
++    snprintf(legacyKey, sizeof(legacyKey), "camera_offset_%d", frameIndex);
++    const Point3 legacy = config.getPoint3(legacyKey, config.getPoint3("eye", aim + Point3(12, 5, 16)) - aim);
++    const Point3 candidateEye = aim + config.getPoint3(offsetKey, legacy);
++    if (!finite_point(candidateEye) || lengthSq(aim - candidateEye) < 0.01f ||
++        lengthSq(Point3(0, 1, 0) % (aim - candidateEye)) < 0.01f)
++    {
++      console->addMessage(ILogWriter::NOTE, "[KE] CAMERA_REJECT index=%d attempt=%d reason=invalid_eye", frameIndex, cameraAttempt);
++      continue;
++    }
++    float candidateGround = 0.f;
++    Point3 cameraGroundNormal;
++    if (!scene.getHeightmapAtPoint(candidateEye.x, candidateEye.z, candidateGround, &cameraGroundNormal) || !std::isfinite(candidateGround))
++    {
++      console->addMessage(ILogWriter::NOTE, "[KE] CAMERA_REJECT index=%d attempt=%d reason=height_unknown", frameIndex, cameraAttempt);
++      continue;
++    }
++    const float clearance = candidateEye.y - candidateGround;
++    if (clearance < minCameraClearance)
++    {
++      console->addMessage(ILogWriter::NOTE, "[KE] CAMERA_REJECT index=%d attempt=%d reason=below_clearance value=%.3f", frameIndex, cameraAttempt, clearance);
++      continue;
++    }
++    const Point3 candidateForward = normalize(aim - candidateEye);
++    const Point3 candidateRight = normalize(Point3(0, 1, 0) % candidateForward);
++    TMatrix candidateCamera = TMatrix::IDENT;
++    candidateCamera.setcol(0, candidateRight);
++    candidateCamera.setcol(1, candidateForward % candidateRight);
++    candidateCamera.setcol(2, candidateForward);
++    candidateCamera.setcol(3, candidateEye);
++    const float candidateWk = 1.f / tanf(fov * DEG_TO_RAD * 0.5f);
++    Point4 candidateBbox;
++    if (!project_bounds(bounds, world, candidateCamera, 0.2f, 20000.f, candidateWk,
++          candidateWk * float(width) / height, width, height, candidateBbox))
++    {
++      console->addMessage(ILogWriter::NOTE, "[KE] CAMERA_REJECT index=%d attempt=%d reason=outside_frame", frameIndex, cameraAttempt);
++      continue;
++    }
++    eye = candidateEye;
++    cameraGround = candidateGround;
++    cameraClearance = clearance;
++    cameraAttemptUsed = cameraAttempt;
++    break;
++  }
++  if (cameraAttemptUsed < 0)
++    return fail("CAMERA_TERRAIN", "No camera candidate passed heightmap checks; attempt limit exhausted");
+   if (frameCount > 1)
+-    console->addMessage(ILogWriter::NOTE, "[KE] ORBIT_FRAME index=%d eye=(%.3f,%.3f,%.3f)", frameIndex, eye.x, eye.y, eye.z);
+-  if (!finite_point(eye) || lengthSq(aim - eye) < 0.01f || lengthSq(Point3(0, 1, 0) % (aim - eye)) < 0.01f)
+-    return fail("CAMERA", "Eye must be finite and offset horizontally from the target");
+-  float cameraGround = 0.f;
+-  Point3 cameraGroundNormal;
+-  const bool cameraGroundKnown = scene.getHeightmapAtPoint(eye.x, eye.z, cameraGround, &cameraGroundNormal) &&
+-    std::isfinite(cameraGround);
+-  if (!cameraGroundKnown)
+-    return fail("CAMERA_TERRAIN", "Heightmap unavailable under camera; position is not verified");
+-  const float cameraClearance = eye.y - cameraGround;
++    console->addMessage(ILogWriter::NOTE, "[KE] ORBIT_FRAME index=%d attempt=%d eye=(%.3f,%.3f,%.3f)", frameIndex, cameraAttemptUsed, eye.x, eye.y, eye.z);
+   console->addMessage(ILogWriter::NOTE, "[KE] CAMERA_TERRAIN index=%d ground=%.3f clearance=%.3f min=%.3f",
+     frameIndex, cameraGround, cameraClearance, minCameraClearance);
+-  if (cameraClearance < minCameraClearance)
+-    return fail("CAMERA_TERRAIN", "Camera is below the minimum height above terrain");
+   const Point3 forward = normalize(aim - eye);
+   const Point3 right = normalize(Point3(0, 1, 0) % forward);
+   TMatrix camera = TMatrix::IDENT;
+@@ -443,6 +469,7 @@
+   result.setPoint3("tank_world", position);
+   result.setReal("yaw_deg", yaw);
+   result.setPoint3("eye", eye);
++  result.setInt("camera_attempt", cameraAttemptUsed);
+   result.setReal("camera_ground_y", cameraGround);
+   result.setReal("camera_clearance", cameraClearance);
+   result.setInt("support_height_samples", supportCount);

@@ -36,3 +36,12 @@ class OrbitPlanTest(unittest.TestCase):
                 plan_camera_orbits(42, 1, distance, elevation)
         plan = plan_camera_orbits(1, 3, (20, 20), (10, 10))
         self.assertTrue(all(c['horizontal_distance'] == 20 and c['elevation_deg'] == 10 for c in plan))
+
+class CameraRetryMetadataTest(unittest.TestCase):
+    def test_selects_actual_attempt_and_rejects_bad_metadata(self):
+        from kolobanoveye import select_camera_attempt
+        candidates = [{'offset': [0,1,2]}, {'offset': [3,4,5]}]
+        self.assertEqual(select_camera_attempt('camera_attempt:i=1\n', candidates), (1, candidates[1]))
+        for raw in ('', 'camera_attempt:i=2\n', 'camera_attempt:i=-1\n'):
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                select_camera_attempt(raw, candidates)

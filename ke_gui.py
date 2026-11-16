@@ -16,7 +16,7 @@ FIELDS = [
  ('count', 'Количество кадров (2–1000)'), ('seed', 'Seed'),
  ('width', 'Ширина'), ('height', 'Высота'), ('fov', 'Горизонтальный FOV, °'),
  ('tank_x', 'Позиция танка X'), ('tank_z', 'Позиция танка Z'), ('tank_yaw', 'Поворот танка, °'),
- ('placement_radius', 'Радиус поиска точки'), ('placement_attempts', 'Попыток размещения'),
+ ('camera_attempts', 'Попыток камеры на кадр'), ('placement_radius', 'Радиус поиска точки'), ('placement_attempts', 'Попыток размещения'),
  ('max_height_range', 'Макс. перепад высот'), ('ground_offset', 'Отступ танка от земли'), ('camera_clearance', 'Высота камеры над землёй'),
  ('distance_min', 'Расстояние камеры: от'), ('distance_max', 'Расстояние камеры: до'),
  ('elevation_min', 'Возвышение камеры, °: от'), ('elevation_max', 'Возвышение камеры, °: до'),
