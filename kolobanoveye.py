@@ -13,7 +13,8 @@ import subprocess
 import sys
 import tempfile
 
-from ke_annotation import write_annotation
+from ke_annotation import parse_annotation, write_annotation
+from ke_frame_journal import JOURNAL, read_journal
 
 REV = "9639942de5a8e5b01d91977f60ed82cda22d5f41"
 HERE = Path(__file__).resolve().parent
@@ -38,7 +39,9 @@ CAMERA_HEIGHT_PATCH = HERE / "patches/dagor-camera-ground-height.patch"
 MAP_PLACEMENT_PATCH = HERE / "patches/dagor-map-placement.patch"
 WATER_FILTER_PATCH = HERE / "patches/dagor-water-ground-filter.patch"
 LAST_CLIP_BOUNDS_PATCH = HERE / "patches/dagor-last-clip-bounds.patch"
-CLIPMAP_EXPORT_PATCH = HERE / "patches/dagor-clipmap-export.patch"
+REMOVE_CLIPMAP_EXPORT_PATCH = HERE / "patches/dagor-remove-clipmap-export.patch"
+LAST_CLIP_OUTPUT_PATCH = HERE / "patches/dagor-last-clip-output.patch"
+FRAME_JOURNAL_PATCH = HERE / "patches/dagor-frame-journal.patch"
 CLIPMAP_TILE_PATCH = HERE / "patches/dagor-clipmap-tile-readback.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
@@ -71,7 +74,8 @@ PATCHES = (
     MAP_PLACEMENT_PATCH,
     WATER_FILTER_PATCH,
     LAST_CLIP_BOUNDS_PATCH,
-    CLIPMAP_EXPORT_PATCH,
+    LAST_CLIP_OUTPUT_PATCH,
+    FRAME_JOURNAL_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -498,15 +502,17 @@ def build(dagor, ooz=None):
         input=CAMERA_HEIGHT_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     map_placement_applied = subprocess.run([*apply, "--reverse", "--check"],
         input=MAP_PLACEMENT_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
-    clipmap_export_applied = subprocess.run([*apply, "--reverse", "--check"], input=CLIPMAP_EXPORT_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    # Remove the former experimental tile writer when upgrading an existing Dagor tree.
+    removal = REMOVE_CLIPMAP_EXPORT_PATCH.read_bytes().replace(b"\r\n", b"\n")
+    if subprocess.run([*apply, "--check"], input=removal, cwd=dagor, capture_output=True).returncode == 0:
+        print("[KE] Removing the experimental clipmap tile exporter", flush=True)
+        subprocess.run(apply, input=removal, cwd=dagor, check=True)
     water_filter_applied = subprocess.run([*apply, "--reverse", "--check"], input=WATER_FILTER_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     last_clip_bounds_applied = subprocess.run([*apply, "--reverse", "--check"], input=LAST_CLIP_BOUNDS_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     for patch in patches:
         if last_clip_bounds_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH, WATER_PROBE_PATCH, MULTI_COMPOSITION_PATCH, CAMERA_HEIGHT_PATCH, MAP_PLACEMENT_PATCH, WATER_FILTER_PATCH)):
             continue
         if water_filter_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH, WATER_PROBE_PATCH, MULTI_COMPOSITION_PATCH, CAMERA_HEIGHT_PATCH, MAP_PLACEMENT_PATCH)):
-            continue
-        if clipmap_export_applied and patch == CLIPMAP_TILE_PATCH:
             continue
         if map_placement_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH, WATER_PROBE_PATCH, MULTI_COMPOSITION_PATCH, CAMERA_HEIGHT_PATCH)):
             continue
@@ -734,14 +740,15 @@ def frame(args, game, cdk):
             "tank_yaw_deg": args.yaw, "placement_mode": args.placement_mode, "map_margin_percent": args.map_margin_percent if args.placement_mode == "whole_map" else None, "placement_candidate_coordinates": "normalized_landscape_bbox" if args.placement_mode == "whole_map" else "world_xz", "placement_candidates_xz": candidate_groups, "frames_per_position": args.frames_per_position, "max_height_range": args.max_height_range,
             "camera_distance_range": args.camera_distance_range, "camera_elevation_range": args.camera_elevation_range,
             "camera_attempts": args.camera_attempts, "camera_height_range": args.camera_height_range, "cameras": orbit_plan}, indent=2) + "\n", encoding="utf-8")
-        entries.extend((f"frame_count:i={args.count}", f"camera_attempts:i={args.camera_attempts}"))
+        journal = out / JOURNAL
+        entries.extend((f"frame_count:i={args.count}", f"camera_attempts:i={args.camera_attempts}",
+                        f'metadata_journal:t="{dagor_path(journal)}"'))
         for i, camera_candidates in enumerate(orbit_plan):
             for j, camera in enumerate(camera_candidates):
                 entries.append(f"camera_offset_{i}_{j}:p3={numbers(camera['offset'])}")
                 if "height_above_ground" in camera:
                     entries.append(f"camera_height_{i}_{j}:r={numbers([camera['height_above_ground']])}")
-            entries.extend((f'output_{i}:t="{dagor_path(images / f"{i:06d}.png")}"',
-                f'metadata_{i}:t="{dagor_path(out / f"frame-{i:06d}.pending.blk")}"'))
+            entries.append(f'output_{i}:t="{dagor_path(images / f"{i:06d}.png")}"')
     if args.eye:
         entries.append(f'eye:p3={numbers(args.eye)}')
     config.write_text("\n".join(entries) + "\n", encoding="ascii")
@@ -764,10 +771,17 @@ def frame(args, game, cdk):
                f"-rootdir:{dagor_path(out)}", f"-addpath:{dagor_path(game)}", f"-addpath:{dagor_path(cdk)}",
                "-enable:Scene view", "-disable:Landscape", r"-exclude_dll_re:heightmapLand-aces-dev\.dll$",
                f"-ws:{workspace_name}", project, batch]
-    if args.collect_clipmap_tiles:
-        tile_dir = out / "ke-clipmap-tiles"
-        tile_dir.mkdir()
-        command.insert(-2, f"-ke-collect-clipmap:{dagor_path(tile_dir)}")
+    map_capture = None
+    if args.capture_last_clip:
+        map_image = out.parent / "maps" / f"{LEVEL.stem}.png"
+        if map_image.resolve().is_relative_to(game) or map_image.resolve().is_relative_to(cdk):
+            raise ValueError("Keep the maps cache outside War Thunder")
+        if map_image.is_file():
+            print(f"[KE] Reusing map {map_image}", flush=True)
+        else:
+            map_image.parent.mkdir(exist_ok=True)
+            map_capture = out / "terrain-last-clip.pending.png"
+            command.insert(-2, f"-ke-last-clip-output:{dagor_path(map_capture)}")
     if args.keep_open:
         command.remove("-quiet")
         print("[KE] Editor remains open. Close its window to finalize the frame and report.", flush=True)
@@ -796,6 +810,25 @@ def frame(args, game, cdk):
         run_logged(command, out / "host-stdout.log", out, None if args.keep_open else args.timeout)
     except (ValueError, subprocess.TimeoutExpired) as exc:
         raise ValueError(editor_failure(out, str(exc))) from exc
+    if map_capture is not None:
+        if map_capture.is_file() and map_capture.stat().st_size >= 45:
+            with map_capture.open("rb") as image:
+                signature = image.read(8)
+                image.seek(-12, os.SEEK_END)
+                trailer = image.read(12)
+            if signature != b"\x89PNG\r\n\x1a\n" or trailer != b"\x00\x00\x00\x00IEND\xaeB`\x82":
+                print(f"[KE] Map capture incomplete: {map_capture}", flush=True)
+                map_capture = None
+        else:
+            print("[KE] Map capture missing; check Dagor build and RENDER_DEBUG terrain_last_clip in the engine log.", flush=True)
+            map_capture = None
+        if map_capture is not None:
+            try:
+                # On Windows rename publishes the completed PNG without overwriting a concurrent capture.
+                map_capture.rename(map_image)
+            except FileExistsError:
+                map_capture.unlink()
+            print(f"[KE] Map available at {map_image}", flush=True)
     error_log = out / "probe.dcmd.err"
     if error_log.is_file():
         raise ValueError(editor_failure(out, f"Dagor reported errors. See {error_log}."))
@@ -814,14 +847,17 @@ def frame(args, game, cdk):
     if args.count > 1:
         if f"[KE] SEQUENCE_OK frames={args.count}" not in log or log.count("[KE] FRAME_OK ") != args.count or log.count("[KE] ORBIT_FRAME ") != args.count:
             raise ValueError("Sequence incomplete or old editor build: check SEQUENCE_OK and FRAME_OK in logs")
-        from ke_annotation import read_annotation
+        if not journal.is_file():
+            raise ValueError("Frame journal missing; rebuild Dagor with current code")
+        metadata = read_journal(journal)
+        if set(metadata) != set(range(args.count)):
+            raise ValueError("Frame journal does not contain all frames")
         records = []
         for i, camera_candidates in enumerate(orbit_plan):
             image_path = images / f"{i:06d}.png"
-            source = out / f"frame-{i:06d}.pending.blk"
             verify_png(image_path, args.width, args.height)
-            annotation = read_annotation(require_file(source))
-            raw_metadata = source.read_text(encoding="utf-8")
+            raw_metadata = metadata[i]
+            annotation = parse_annotation(raw_metadata)
             camera_attempt, camera = select_camera_attempt(raw_metadata, camera_candidates)
             composition_match = re.search(r"^composition_index:i=(\d+)\s*$", raw_metadata, re.MULTILINE)
             expected_composition = i // args.frames_per_position
@@ -833,9 +869,10 @@ def frame(args, game, cdk):
                 "planned_camera_offset": camera["offset"], "planned_height_above_ground": camera.get("height_above_ground"), "camera_attempt": camera_attempt,
                 "image": f"images/{i:06d}.png", "annotation": annotation["annotations"][0],
                 "dagor_frame_metadata_blk": raw_metadata})
-        (out / "metadata.jsonl").write_text("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in records), encoding="utf-8")
-        for i in range(args.count):
-            (out / f"frame-{i:06d}.pending.blk").unlink()
+        manifest_pending = out / "metadata.jsonl.tmp"
+        manifest_pending.write_text("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in records), encoding="utf-8")
+        manifest_pending.replace(out / "metadata.jsonl")
+        journal.unlink()
         print(f"[KE] SEQUENCE_WRITTEN {len(records)} frames in {out}")
         return
     verify_png(png, args.width, args.height)
@@ -845,7 +882,7 @@ def frame(args, game, cdk):
     print(f"[KE] FRAME_WRITTEN {final}  SHA256={hashlib.sha256(final.read_bytes()).hexdigest()}")
     if args.render_debug:
         print(f"[KE] Render diagnostics: {debug_dir}")
-        for name in ("terrain-last-clip.png", "static-albedo.png", "static-depth-mask.png"):
+        for name in ("static-albedo.png", "static-depth-mask.png"):
             if not (debug_dir / name).is_file():
                 print(f"[KE] Diagnostic image missing: {name}. See RENDER_DEBUG in .logs.")
     print("[KE] Visual verification is still required.")
@@ -893,7 +930,7 @@ def main():
     frame_cmd.add_argument("--width", type=int, default=1280)
     frame_cmd.add_argument("--height", type=int, default=720)
     frame_cmd.add_argument("--renderdoc-cli", type=Path, help="renderdoccmd.exe; manual GPU capture requires --keep-open")
-    frame_cmd.add_argument("--collect-clipmap-tiles", action="store_true", help="Experimentally collect terrain clipmap tiles seen during rendering")
+    frame_cmd.add_argument("--capture-last-clip", action="store_true", help="Save the overview PNG once in the shared maps directory")
     frame_cmd.add_argument("--keep-open", action="store_true", help="Keep editor open until window is closed; no process timeout")
     frame_cmd.add_argument("--timeout", type=int, default=360)
     frame_cmd.add_argument("--dx11-trace", action="store_true", help="Log native DX11 draw state for terrain and clipmap updates")

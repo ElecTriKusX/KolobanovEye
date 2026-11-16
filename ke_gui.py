@@ -49,8 +49,8 @@ class App:
         self.running = False
         self.values = {k: tk.StringVar(value=str(DEFAULTS[k])) for k, _ in FIELDS}
         self.keep_open = tk.BooleanVar(value=False)
-        self.collect_tiles = tk.BooleanVar(value=False)
         self.capture_last_clip = tk.BooleanVar(value=False)
+        self.render_debug = tk.BooleanVar(value=False)
         self.values['output'].set(str(Path(DEFAULTS['output']).parent))
         self.values['placement_mode'].set(MODE_LABELS[DEFAULTS['placement_mode']])
         self.last_run = None
@@ -102,10 +102,8 @@ class App:
         menu.add_command(label='Проверить рельеф серии…', command=self.check_terrain)
         menu.add_command(label='Восстановить метаданные после сбоя…', command=self.recover_run)
         menu.add_checkbutton(label='Сохранить обзорную текстуру карты', variable=self.capture_last_clip)
-        menu.add_command(label='Позиции на обзорной текстуре…', command=self.fixed_clip_map)
-        menu.add_checkbutton(label='Собирать тайлы земли (эксперимент)', variable=self.collect_tiles)
-        menu.add_command(label='Собрать карту из тайлов…', command=self.build_clipmap_map)
-        menu.add_command(label='Позиции на изображении карты…', command=self.map_run)
+        menu.add_command(label='Позиции на карте…', command=self.fixed_clip_map)
+        menu.add_checkbutton(label='Диагностика рендера (MRT, глубина и другие буферы)', variable=self.render_debug)
         menu.add_command(label='Показать рамки на копиях…', command=self.preview_run)
         menu.add_command(label='Экспортировать COCO отдельно…', command=self.coco_run)
         menu.add_separator()
@@ -170,8 +168,8 @@ class App:
             raise ValueError('Укажите родительскую папку результатов')
         data['output'] = str(next_numbered_directory(data['output']))
         data['keep_open'] = self.keep_open.get()
-        data['collect_clipmap_tiles'] = self.collect_tiles.get()
         data['capture_last_clip'] = self.capture_last_clip.get()
+        data['render_debug'] = self.render_debug.get()
         return validate_config(data)
 
     def open_config(self):
@@ -180,8 +178,8 @@ class App:
         try:
             data = validate_config(json.loads(Path(path).read_text(encoding='utf-8')))
             self.keep_open.set(data['keep_open'])
-            self.collect_tiles.set(data['collect_clipmap_tiles'])
             self.capture_last_clip.set(data['capture_last_clip'])
+            self.render_debug.set(data['render_debug'])
             for k, v in data.items():
                 if k in self.values:
                     self.values[k].set(str(Path(v).parent) if k == 'output' else MODE_LABELS.get(v, v) if k == 'placement_mode' else str(v))
@@ -209,7 +207,6 @@ class App:
     def show_help(self):
         messagebox.showinfo('Справка',
             'Открыть папку — показывает последний успешный результат в Проводнике. Копировать журнал — копирует выделенный текст или весь журнал.\n\n'
-            'Сбор тайлов земли — эксперимент: записывает загруженные участки clipmap, может занять много места. Карта собирается отдельно через меню; покрытие не гарантировано.\n\n'
             'При открытом редакторе проверка и экспорт начнутся после закрытия его окна.\n\n'
             'Основная кнопка: создаёт новую папку ke-generate-XX, рендерит кадры, проверяет их и создаёт COCO в подпапке coco.\n\n'
             'Проверить серию — проверяет файлы и границы рамок существующей серии.\n'
@@ -242,19 +239,16 @@ class App:
         run = self.choose_run()
         if run: self.start_tool('ke_recover.py', ['--run', run])
 
-    def build_clipmap_map(self):
-        run = self.choose_run()
-        if not run: return
-        try: out = next_numbered_directory(Path(run), 'terrain-map-')
-        except ValueError as exc: messagebox.showerror('Ошибка', str(exc)); return
-        self.start_tool('ke_clipmap_map.py', ['--run', run, '--out', str(out)])
-
     def fixed_clip_map(self):
         run = self.choose_run()
         if not run: return
-        image = Path(run) / 'render-debug' / 'terrain-last-clip.png'
+        from kolobanoveye import LEVEL
+        run = Path(run).resolve()
+        image = run / 'render-debug' / 'terrain-last-clip.png'
         if not image.is_file():
-            messagebox.showerror('Нет текстуры', 'В серии нет terrain-last-clip.png. Включите сохранение обзорной текстуры и создайте новую серию.')
+            image = run.parent / 'maps' / f'{LEVEL.stem}.png'
+        if not image.is_file():
+            messagebox.showerror('Нет текстуры', 'Включите «Сохранить обзорную текстуру карты» и создайте серию в этой папке результатов.')
             return
         try:
             from ke_map import read_landscape_bounds
@@ -263,23 +257,7 @@ class App:
             out.mkdir()
         except (OSError, ValueError, KeyError) as exc:
             messagebox.showerror('Нет границ текстуры', str(exc)); return
-        self.start_tool('ke_map.py', ['--run', run, '--image', str(image), '--out', str(out / 'positions.html'), '--fixed-clip'])
-
-    def map_run(self):
-        run = self.choose_run()
-        if not run: return
-        image = filedialog.askopenfilename(title='Изображение карты', filetypes=[('Изображение', '*.png *.jpg *.jpeg')])
-        if not image: return
-        from ke_map import read_landscape_bounds
-        try:
-            bounds = read_landscape_bounds(Path(run))
-        except (OSError, ValueError, KeyError) as exc:
-            messagebox.showerror('Нет границ карты', str(exc)); return
-        messagebox.showinfo('Границы ландшафта',
-            f'Из метаданных Dagor: X {bounds[0]:.1f} … {bounds[1]:.1f}; Z {bounds[2]:.1f} … {bounds[3]:.1f}.\n\n'
-            'Метки будут рассчитаны относительно этих границ. Изображение должно охватывать тот же прямоугольник; его ориентация не проверена.')
-        out = filedialog.asksaveasfilename(title='Сохранить карту позиций', defaultextension='.html', filetypes=[('HTML', '*.html')])
-        if out: self.start_tool('ke_map.py', ['--run', run, '--image', image, '--out', out])
+        self.start_tool('ke_map.py', ['--run', str(run), '--image', str(image), '--out', str(out / 'positions.html'), '--fixed-clip', '--link-image'])
 
     def preview_run(self):
         run = self.choose_run()

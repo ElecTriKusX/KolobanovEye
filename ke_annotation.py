@@ -6,8 +6,12 @@ from pathlib import Path
 
 
 def read_annotation(path):
+    return parse_annotation(Path(path).read_text(encoding='utf-8'))
+
+
+def parse_annotation(text):
     entries = {}
-    for line in Path(path).read_text(encoding='utf-8').splitlines():
+    for line in text.splitlines():
         match = re.fullmatch(r'([\w]+):([\w]+)=(.*)', line.strip())
         if match:
             entries[match.group(1)] = match.group(3).strip().strip('"')

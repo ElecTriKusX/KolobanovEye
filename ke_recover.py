@@ -4,7 +4,8 @@ import json
 import re
 import sys
 from pathlib import Path
-from ke_annotation import read_annotation
+from ke_annotation import parse_annotation
+from ke_frame_journal import JOURNAL, read_journal
 from ke_pixel_debug import load_png
 from kolobanoveye import select_camera_attempt, verify_png
 
@@ -24,21 +25,24 @@ def recover(run):
     summary_path = run / 'recovery-report.json'
     if target.exists() or summary_path.exists():
         raise ValueError('Отчёт восстановления уже существует; файлы не перезаписаны')
+    journal = run / JOURNAL
+    journal_records = read_journal(journal, allow_truncated=True) if journal.is_file() else None
     records, failures = [], []
     for i, candidates in enumerate(cams):
         image = run / 'images' / f'{i:06d}.png'
         meta = run / f'frame-{i:06d}.pending.blk'
-        if not image.is_file() and not meta.is_file():
+        has_meta = i in journal_records if journal_records is not None else meta.is_file()
+        if not image.is_file() and not has_meta:
             continue
         try:
-            if not image.is_file() or not meta.is_file():
+            if not image.is_file() or not has_meta:
                 raise ValueError('Отсутствует PNG или соответствующий BLK')
-            ann = read_annotation(meta)
+            raw = journal_records[i] if journal_records is not None else meta.read_text(encoding='utf-8')
+            ann = parse_annotation(raw)
             verify_png(image, ann['width'], ann['height'])
             w, h, _ = load_png(image)
             if (w, h) != (ann['width'], ann['height']):
                 raise ValueError('Размер изображения не соответствует метаданным')
-            raw = meta.read_text(encoding='utf-8')
             attempt, camera = select_camera_attempt(raw, candidates)
             m = re.search(r'^composition_index:i=(\d+)\s*$', raw, re.MULTILINE)
             if not m or int(m.group(1)) != i // per:
