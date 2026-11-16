@@ -46,6 +46,7 @@ SCENE_QUALITY_PATCH = HERE / "patches/dagor-scene-quality.patch"
 OFFSCREEN_STREAMING_PATCH = HERE / "patches/dagor-offscreen-streaming.patch"
 TEXTURE_PUMP_PATCH = HERE / "patches/dagor-offscreen-texture-pump.patch"
 OFFSCREEN_FRAME_CLOCK_PATCH = HERE / "patches/dagor-offscreen-frame-clock.patch"
+OFFSCREEN_SERIAL_STREAMING_PATCH = HERE / "patches/dagor-offscreen-serial-streaming.patch"
 CLIPMAP_TILE_PATCH = HERE / "patches/dagor-clipmap-tile-readback.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
@@ -84,6 +85,7 @@ PATCHES = (
     OFFSCREEN_STREAMING_PATCH,
     TEXTURE_PUMP_PATCH,
     OFFSCREEN_FRAME_CLOCK_PATCH,
+    OFFSCREEN_SERIAL_STREAMING_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -521,11 +523,15 @@ def build(dagor, ooz=None):
         input=SCENE_QUALITY_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     offscreen_streaming_applied = subprocess.run([*apply, "--reverse", "--check"],
         input=OFFSCREEN_STREAMING_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
-    offscreen_frame_clock_applied = subprocess.run([*apply, "--reverse", "--check"],
+    serial_streaming_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=OFFSCREEN_SERIAL_STREAMING_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    offscreen_frame_clock_applied = serial_streaming_applied or subprocess.run([*apply, "--reverse", "--check"],
         input=OFFSCREEN_FRAME_CLOCK_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     texture_pump_applied = offscreen_frame_clock_applied or subprocess.run([*apply, "--reverse", "--check"],
         input=TEXTURE_PUMP_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     for patch in patches:
+        if serial_streaming_applied and patch == OFFSCREEN_FRAME_CLOCK_PATCH:
+            continue
         if (texture_pump_applied and patch == OFFSCREEN_STREAMING_PATCH) or (offscreen_frame_clock_applied and patch == TEXTURE_PUMP_PATCH):
             continue
         if (offscreen_streaming_applied or texture_pump_applied) and patch == SCENE_QUALITY_PATCH:
@@ -865,8 +871,9 @@ def frame(args, game, cdk):
         lines = error_log.read_text(encoding="utf-8", errors="replace").splitlines()
         failure = next((line.strip() for line in reversed(lines) if "[KE] FAIL " in line), "Dagor reported errors.")
         streaming = next((line.strip() for line in reversed(lines) if "[KE] STREAMING_PUMP " in line), "")
-        if streaming and "FAIL STREAMING:" in failure:
-            failure += f"\n{streaming}"
+        if "FAIL STREAMING:" in failure:
+            serial = next((line.strip() for line in reversed(lines) if "[KE] STREAMING_SERIAL " in line), "")
+            failure = "\n".join(line for line in (failure, serial, streaming) if line)
         raise ValueError(editor_failure(out, f"{failure}\nSee {error_log}."))
     log_path = out / "probe.dcmd.log"
     if args.keep_open and not log_path.is_file():
