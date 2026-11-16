@@ -1,0 +1,114 @@
+diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+--- a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
++++ b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+@@ -11,6 +11,8 @@
+ #include <3d/dag_lockTexture.h>
+ #include <3d/dag_texIdSet.h>
+ #include <3d/dag_texMgr.h>
++#include <drv/3d/dag_commands.h>
++#include <drv/3d/dag_driver.h>
+ #include <drv/3d/dag_info.h>
+ #include <drv/3d/dag_lock.h>
+ #include <gameRes/dag_gameResSystem.h>
+@@ -33,6 +35,14 @@
+ #include <cmath>
+ #include <cstring>
+ #include <EASTL/unique_ptr.h>
++
++// Dagor's work cycle uses this hook at present, and also when it skips presenting.
++namespace tql
++{
++extern void (*on_frame_finished)();
++}
++
++void ke_set_render_debug_dir(const char *dir);
+ 
+ namespace
+ {
+@@ -467,9 +477,17 @@
+ 
+   ScopedTankRender binding{*plugin};
+   auto *skies = queryEditorInterface<ISkiesService>();
++  auto captureFrame = [&](const char *debugDir) {
++    const bool previousSkipRenderObjects = skipRenderObjects;
++    skipRenderObjects = true;
++    ke_set_render_debug_dir(debugDir);
++    TexPtr captured = renderInTex(width, height, nullptr, true);
++    ke_set_render_debug_dir(nullptr);
++    skipRenderObjects = previousSkipRenderObjects;
++    return captured;
++  };
+   TexPtr frame;
+   int frames = 0;
+-  int readyPasses = 0;
+   for (; frames < 48; ++frames)
+   {
+     scene.update(eye, 1.f / 60.f);
+@@ -477,18 +495,18 @@
+     if (skies)
+       skies->updateSkies(1.f / 60.f);
+     plugin->setKolobanovEyeModel(&model);
+-    // renderObjects/renderTransObjects are editor overlays, including renderGrid().
+-    // Preserve the previous setting; scene geometry is rendered in the deferred pass.
+-    const bool previousSkipRenderObjects = skipRenderObjects;
+-    skipRenderObjects = true;
+-    frame = renderInTex(width, height, nullptr, true);
+-    skipRenderObjects = previousSkipRenderObjects;
++    frame = captureFrame(nullptr);
+     if (!frame)
+       return fail("RENDER", "Offscreen texture creation or render failed");
+-    const bool ready = (!scene.getSsm() || !scene.getSsm()->isLoading()) &&
+-      get_managed_textures_streaming_pending_count() == 0 && (!skies || skies->areCloudTexturesReady());
+-    readyPasses = ready ? readyPasses + 1 : 0;
+-    if (frames >= 15 && readyPasses >= 3)
++    const int pendingBefore = get_managed_textures_streaming_pending_count();
++    if (tql::on_frame_finished)
++    {
++      d3d::GpuAutoLock gpuLock;
++      tql::on_frame_finished();
++      d3d::driver_command(Drv3dCommand::PROCESS_PENDING_RESOURCE_UPDATED);
++    }
++    if (frames >= 7 && (!scene.getSsm() || !scene.getSsm()->isLoading()) && pendingBefore == 0 &&
++        get_managed_textures_streaming_pending_count() == 0 && (!skies || skies->areCloudTexturesReady()))
+       break;
+     sleep_msec(20);
+   }
+@@ -497,6 +515,16 @@
+   console->addMessage(ILogWriter::NOTE, "[KE] ENV_LIGHT_READY %d", renderer->isEnvironmentLightingReady() ? 1 : 0);
+   if (frames == 48)
+     return fail("STREAMING", "Map or sky did not settle within 48 warm-up renders");
++  char renderDebugKey[32];
++  snprintf(renderDebugKey, sizeof(renderDebugKey), "render_debug_%d", frameIndex);
++  const char *renderDebugDir = config.getStr(renderDebugKey, "");
++  if (*renderDebugDir)
++  {
++    frame = captureFrame(renderDebugDir);
++    if (!frame)
++      return fail("RENDER_DEBUG", "Offscreen texture creation or diagnostic render failed");
++    console->addMessage(ILogWriter::NOTE, "[KE] RENDER_DEBUG_FRAME index=%d path=%s", frameIndex, renderDebugDir);
++  }
+   const char *buildingScan = config.getStr("building_scan", "");
+   if (frameIndex == 0 && *buildingScan)
+   {
+diff --git a/prog/tools/sceneTools/daEditorX/services/dynRenderSrv/dynRender.cpp b/prog/tools/sceneTools/daEditorX/services/dynRenderSrv/dynRender.cpp
+--- a/prog/tools/sceneTools/daEditorX/services/dynRenderSrv/dynRender.cpp
++++ b/prog/tools/sceneTools/daEditorX/services/dynRenderSrv/dynRender.cpp
+@@ -108,6 +108,9 @@
+ static constexpr int SPARSE_SHADOW_UPDATE_FRAME = 4;
+ static const uint32_t EXPOSURE_BUF_SIZE = 8;
+ static TexStreamingContext currentTexCtx = {0};
++static const char *keRenderDebugDir = nullptr;
++
++void ke_set_render_debug_dir(const char *dir) { keRenderDebugDir = dir; }
+ 
+ extern CachedRenderViewports *ec_cached_viewports;
+ extern void ec_init_stat3d();
+@@ -876,7 +879,7 @@
+       TMatrix4 projTm;
+       d3d::gettm(TM_VIEW, viewTm);
+       d3d::gettm(TM_PROJ, &projTm);
+-      deferredRender(viewTm, projTm, false, dgs_get_argv("ke-render-debug"));
++      deferredRender(viewTm, projTm, false, rt_ready ? keRenderDebugDir : nullptr);
+     }
+     if (!rt_ready)
+     {

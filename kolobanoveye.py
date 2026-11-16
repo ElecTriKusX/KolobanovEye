@@ -43,6 +43,7 @@ REMOVE_CLIPMAP_EXPORT_PATCH = HERE / "patches/dagor-remove-clipmap-export.patch"
 LAST_CLIP_OUTPUT_PATCH = HERE / "patches/dagor-last-clip-output.patch"
 FRAME_JOURNAL_PATCH = HERE / "patches/dagor-frame-journal.patch"
 SCENE_QUALITY_PATCH = HERE / "patches/dagor-scene-quality.patch"
+OFFSCREEN_STREAMING_PATCH = HERE / "patches/dagor-offscreen-streaming.patch"
 CLIPMAP_TILE_PATCH = HERE / "patches/dagor-clipmap-tile-readback.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
@@ -78,6 +79,7 @@ PATCHES = (
     LAST_CLIP_OUTPUT_PATCH,
     FRAME_JOURNAL_PATCH,
     SCENE_QUALITY_PATCH,
+    OFFSCREEN_STREAMING_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -513,8 +515,12 @@ def build(dagor, ooz=None):
     last_clip_bounds_applied = subprocess.run([*apply, "--reverse", "--check"], input=LAST_CLIP_BOUNDS_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     scene_quality_applied = subprocess.run([*apply, "--reverse", "--check"],
         input=SCENE_QUALITY_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    offscreen_streaming_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=OFFSCREEN_STREAMING_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     for patch in patches:
-        if scene_quality_applied and patch == CLEAN_CAPTURE_PATCH:
+        if offscreen_streaming_applied and patch == SCENE_QUALITY_PATCH:
+            continue
+        if (scene_quality_applied or offscreen_streaming_applied) and patch in (CLEAN_CAPTURE_PATCH, FRAME_JOURNAL_PATCH):
             continue
         if last_clip_bounds_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH, WATER_PROBE_PATCH, MULTI_COMPOSITION_PATCH, CAMERA_HEIGHT_PATCH, MAP_PLACEMENT_PATCH, WATER_FILTER_PATCH)):
             continue
@@ -759,6 +765,13 @@ def frame(args, game, cdk):
         entries.append(f'building_scan:t="{dagor_path(out / "scene-instances.tsv")}"')
     if args.eye:
         entries.append(f'eye:p3={numbers(args.eye)}')
+    render_debug = args.render_debug or args.indirection == "cpu" or args.dx11_trace
+    if render_debug:
+        debug_dir = out / "render-debug"
+        for i in range(args.count):
+            frame_dir = debug_dir / f"{i:06d}"
+            frame_dir.mkdir(parents=True)
+            entries.append(f'render_debug_{i}:t="{dagor_path(frame_dir)}"')
     config.write_text("\n".join(entries) + "\n", encoding="ascii")
     batch = out / "probe.dcmd"
     batch.write_text(f"wait.frame 8\nkolobanoveye.frame {dagor_path(config)}\n" + ("" if args.keep_open else "exit no\n"), encoding="ascii")
@@ -798,16 +811,11 @@ def frame(args, game, cdk):
     if args.clipmap_feedback == "software":
         command.insert(-2, "-ke-clipmap-software")
     if args.indirection == "cpu":
-        args.render_debug = True
         command.insert(-2, "-ke-indirection-cpu")
     if args.dx11_trace:
-        args.render_debug = True
         command.insert(-2, "-ke-dx11-trace")
-    if args.render_debug:
-        debug_dir = out / "render-debug"
-        debug_path = dagor_path(debug_dir)
-        debug_dir.mkdir()
-        command.insert(-2, f"-ke-render-debug:{debug_path}")
+    if render_debug:
+        command.insert(-2, f"-ke-render-debug:{dagor_path(debug_dir)}")
     if args.renderdoc_cli:
         if not args.keep_open:
             raise ValueError("--renderdoc-cli requires --keep-open")
@@ -850,6 +858,8 @@ def frame(args, game, cdk):
         debug_logs = sorted((out / ".logs").glob("daEditor3x-dev.exe-*/debug"), key=lambda p: p.stat().st_mtime)
         log_path = debug_logs[-1] if debug_logs else log_path
     log = require_file(log_path).read_text(encoding="utf-8", errors="replace")
+    if render_debug and log.count("[KE] RENDER_DEBUG_FRAME ") != args.count:
+        raise ValueError("Missing per-frame render diagnostics; rebuild Dagor and check the capture log")
     if "[KE] WATER_GROUND_FILTER " not in log:
         raise ValueError("Water ground filter missing: rebuild Dagor with current code")
     if args.placement_mode == "whole_map" and "[KE] MAP_BOUNDS " not in log:
@@ -897,10 +907,10 @@ def frame(args, game, cdk):
     require_file(meta).rename(out / "frame.blk")
     final = png.rename(out / "frame.png")
     print(f"[KE] FRAME_WRITTEN {final}  SHA256={hashlib.sha256(final.read_bytes()).hexdigest()}")
-    if args.render_debug:
-        print(f"[KE] Render diagnostics: {debug_dir}")
+    if render_debug:
+        print(f"[KE] Render diagnostics: {debug_dir / '000000'}")
         for name in ("static-albedo.png", "static-depth-mask.png"):
-            if not (debug_dir / name).is_file():
+            if not (debug_dir / "000000" / name).is_file():
                 print(f"[KE] Diagnostic image missing: {name}. See RENDER_DEBUG in .logs.")
     print("[KE] Visual verification is still required.")
 

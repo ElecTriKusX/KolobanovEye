@@ -170,8 +170,11 @@ def analyze(run, dagor=None, game=None):
         add(category, 'warning' if lines else ('ok' if debug else 'unknown'),
             'Reported log messages are leads, not established causes.' if lines else 'No matching messages in analyzed log.', lines[:30])
     files = {}
-    for rel in ('frame.png', 'render-debug/static-albedo.png', 'render-debug/static-depth-mask.png', 'render-debug/terrain-last-clip.png', 'render-debug/resolve-input-mrt0.png', 'render-debug/resolve-input-mrt1.png', 'render-debug/resolve-input-mrt2.png', 'render-debug/resolve-output.png'):
-        p = run / rel
+    debug_images = {'static-albedo.png', 'static-depth-mask.png', 'terrain-last-clip.png', 'resolve-input-mrt0.png',
+                    'resolve-input-mrt1.png', 'resolve-input-mrt2.png', 'resolve-output.png'}
+    paths = [run / 'frame.png', *sorted(p for p in (run / 'render-debug').rglob('*.png') if p.name in debug_images)]
+    for p in paths:
+        rel = p.relative_to(run).as_posix()
         if not p.is_file():
             continue
         item = {'bytes': p.stat().st_size, 'sha256': sha256(p)}
@@ -225,7 +228,7 @@ def write_outputs(run, report):
         for folder in (run, run / 'render-debug', run / '.logs'):
             if not folder.is_dir():
                 continue
-            for p in (folder.rglob('*') if folder.name == '.logs' else folder.iterdir()):
+            for p in (folder.rglob('*') if folder != run else folder.iterdir()):
                 if p.is_file() and not p.is_symlink() and p.name in allowed and p.stat().st_size <= 100 * 1024 * 1024:
                     z.write(p, p.relative_to(run).as_posix())
     return dest, archive
