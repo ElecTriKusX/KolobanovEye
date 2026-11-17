@@ -59,7 +59,9 @@ class App:
         self.wait_sky_convergence = tk.BooleanVar(value=DEFAULTS['wait_sky_convergence'])
         self.scan_buildings = tk.BooleanVar(value=False)
         self.values['output'].set(str(Path(DEFAULTS['output']).parent))
-        self.values['placement_mode'].set(MODE_LABELS[DEFAULTS['placement_mode']])
+        # The GUI opts into the new tank-map sampler; old CLI configurations keep their defaults.
+        self.values['placement_mode'].set(MODE_LABELS['tank_map'])
+        self.values['map_margin_percent'].set('0.0')
         self.last_run = None
         self.detected_maps = []
         self.selected_maps = None
