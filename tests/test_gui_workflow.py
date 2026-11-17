@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from ke_gui import App, next_numbered_directory
-from ke_coco import export
+from tools.ke_coco import export
 from tests.test_coco import make_run
 
 
