@@ -29,7 +29,7 @@ def main():
     out.mkdir(parents=True, exist_ok=False)
     angles = plan(args.seed, args.count)
     (out / 'plan.json').write_text(json.dumps({'seed': args.seed, 'yaw_degrees': angles}, indent=2) + '\n', encoding='utf-8')
-    script = Path(__file__).resolve().with_name('kolobanoveye.py')
+    script = Path(__file__).resolve().parent.parent / 'kolobanoveye.py'
     for i, angle in enumerate(angles):
         frame_out = out / f'frame_{i:04d}'
         cmd = [sys.executable, str(script), 'frame', '--dagor', str(args.dagor), '--game', str(game),
