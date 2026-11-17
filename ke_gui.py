@@ -14,7 +14,7 @@ from ke_maps import scan_maps, load_whitelist, save_whitelist, initial_whitelist
 
 FIELDS = [
  ('dagor', 'Папка Dagor Engine'), ('game', 'Папка War Thunder'), ('output', 'Родительская папка результатов'),
- ('count', 'Количество кадров (2–1000)'), ('frames_per_position', 'Кадров на позицию'), ('seed', 'Seed'),
+ ('count', 'Количество кадров (1–1000)'), ('frames_per_position', 'Кадров на позицию'), ('seed', 'Seed'),
  ('width', 'Ширина'), ('height', 'Высота'), ('fov', 'Горизонтальный FOV, °'),
  ('placement_mode', 'Где размещать танк'), ('map_margin_percent', 'Отступ от краёв карты, %'),
  ('tank_x', 'Центр поиска X'), ('tank_z', 'Центр поиска Z'), ('tank_yaw', 'Ориентация корпуса, °'),
@@ -79,7 +79,7 @@ class App:
         self.active_map_combo = ttk.Combobox(map_bar, textvariable=self.active_map,
                                              state='readonly', width=27)
         self.active_map_combo.pack(side='left')
-        ttk.Label(main, text='Пока генерируем только на одной выбранной карте за запуск. Модель: Tiger H1.').pack(anchor='w')
+        ttk.Label(main, text='Одна карта: текущий выбор; несколько: равные квоты по whitelist. Модель: Tiger H1.').pack(anchor='w')
         ttk.Label(main, text='Выберите папку результатов: ke-generate-01, 02… создаются автоматически.').pack(anchor='w', pady=(2, 8))
         form = ttk.Frame(main)
         form.pack(fill='x')
@@ -283,6 +283,7 @@ class App:
         data['wait_sky_convergence'] = self.wait_sky_convergence.get()
         data['scan_buildings'] = self.scan_buildings.get()
         data['map_id'] = self.active_map.get()
+        data['map_ids'] = available_whitelist(self.detected_maps, self.selected_maps or [])
         return validate_config(data)
 
     def open_config(self):
@@ -324,7 +325,9 @@ class App:
             return
         try:
             data = self.get_config()
-            cmd = command(data)
+            cmd = (command(data) if len(data['map_ids']) <= 1 else
+                   [sys.executable, '-u', str(Path(__file__).resolve().with_name('ke_multi_generate.py')),
+                    '--config-json', json.dumps(data, ensure_ascii=False)])
         except ValueError as exc:
             messagebox.showerror('Ошибка настроек', str(exc)); return
         self.running = True; self.run_button.config(state='disabled'); self.state.set(f"Генерация {data['map_id']}: {data['output']}")
@@ -435,6 +438,10 @@ class App:
                 for line in proc.stdout: self.events.put(('line', line))
                 code = proc.wait()
                 if code: raise RuntimeError(f'{stage}: код {code}. Результаты: {run}')
+            if len(data.get('map_ids', [])) > 1:
+                execute('Многокартовая генерация (с проверкой и COCO)', cmd)
+                self.events.put(('success', str(run)))
+                return
             execute('1/4 Генерация', cmd)
             with (run / 'generation-config.json').open('x', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2); f.write('\n')
