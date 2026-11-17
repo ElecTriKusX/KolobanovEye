@@ -18,3 +18,26 @@ jobs:
         run: python -m compileall -q .
       - name: Run all tests
         run: python -m unittest discover -v
+      - name: Check region-renderer patch against pinned Dagor sources
+        run: |
+          python - <<'PY'
+          import pathlib, subprocess, tempfile, urllib.request
+          source = 'https://raw.githubusercontent.com/ElecTriKusX/DagorEngine/9639942de5a8e5b01d91977f60ed82cda22d5f41/'
+          paths = [
+            'prog/gameLibs/publicInclude/landMesh/lastClip.h',
+            'prog/gameLibs/landMesh/lastClip.cpp',
+            'prog/tools/sceneTools/daEditorX/binSceneView/strmLevel.cpp',
+          ]
+          with tempfile.TemporaryDirectory() as temp:
+              root = pathlib.Path(temp)
+              for path in paths:
+                  file = root / path
+                  file.parent.mkdir(parents=True, exist_ok=True)
+                  with urllib.request.urlopen(source + path, timeout=30) as response:
+                      file.write_bytes(response.read())
+              patch = pathlib.Path.cwd() / 'patches/dagor-tank-map-render.patch'
+              subprocess.run(['git', 'apply', '--check', str(patch)], cwd=root, check=True)
+              subprocess.run(['git', 'apply', str(patch)], cwd=root, check=True)
+              subprocess.run(['git', 'apply', '--reverse', '--check', str(patch)], cwd=root, check=True)
+              print('ROI renderer patch applies and reverses cleanly.')
+          PY
