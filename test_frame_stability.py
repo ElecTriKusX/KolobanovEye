@@ -41,20 +41,32 @@ class FrameStabilityTest(unittest.TestCase):
             ke.read_articulation("turret_yaw_deg:r=15\ngun_pitch_deg:r=2\n", (15, 3))
 
     def test_warmup_pipeline_on_predecessor_and_second_run(self):
-        previous = ke.OFFSCREEN_STREAMING_WAIT_PATCH.read_bytes()
-        hunks = re.findall(rb'(?ms)^@@ [^\n]*\n(.*?)(?=^@@ |\Z)', previous)
-        fragments = [b''.join(line[1:] for line in hunk.splitlines(keepends=True)
-                              if line.startswith((b' ', b'+'))) for hunk in hunks]
+        def normalize(data):
+            return data.replace(b'\r\n', b'\n')
+
         with tempfile.TemporaryDirectory() as temp:
-            source = Path(temp) / 'kolobanovEye.cpp'
+            root = Path(temp)
+            source = root / 'kolobanovEye.cpp'
             self.assertFalse(ke.is_upgraded_offscreen_capture(source))
-            source.write_bytes(b'\n'.join(fragments).replace(b'\n', b'\r\n'))
-            ke.apply_haze_capture_pipeline(source, ke.HAZE_CONVERGENCE_PATCH, ke.HAZE_STABILITY_PATCH)
-            upgraded = source.read_bytes()
-            self.assertIn(b'FRAME_STABILITY_FINAL', upgraded)
-            self.assertNotIn(b'\n', upgraded.replace(b'\r\n', b''))
-            ke.apply_haze_capture_pipeline(source, ke.HAZE_CONVERGENCE_PATCH, ke.HAZE_STABILITY_PATCH)
-            self.assertEqual(source.read_bytes(), upgraded)
+            for ending in (b'\n', b'\r\n'):
+                with self.subTest(patch_line_ending=ending):
+                    previous = normalize(ke.OFFSCREEN_STREAMING_WAIT_PATCH.read_bytes()).replace(b'\n', ending)
+                    hunks = re.findall(rb'(?ms)^@@ [^\n]*\n(.*?)(?=^@@ |\Z)', normalize(previous))
+                    fragments = [b''.join(line[1:] for line in hunk.splitlines(keepends=True)
+                                          if line.startswith((b' ', b'+'))) for hunk in hunks]
+                    source.write_bytes(b'\n'.join(fragments).replace(b'\n', b'\r\n'))
+                    convergence, stability = [
+                        root / patch_path.name for patch_path in (ke.HAZE_CONVERGENCE_PATCH, ke.HAZE_STABILITY_PATCH)
+                    ]
+                    for src, dst in ((ke.HAZE_CONVERGENCE_PATCH, convergence), (ke.HAZE_STABILITY_PATCH, stability)):
+                        dst.write_bytes(normalize(src.read_bytes()).replace(b'\n', ending))
+                    ke.apply_haze_capture_pipeline(source, convergence, stability)
+                    upgraded = source.read_bytes()
+                    self.assertIn(b'FRAME_STABILITY_FINAL', upgraded)
+                    self.assertNotIn(b'\n', upgraded.replace(b'\r\n', b''))
+                    self.assertNotIn(b'\r', upgraded.replace(b'\r\n', b''))
+                    ke.apply_haze_capture_pipeline(source, convergence, stability)
+                    self.assertEqual(source.read_bytes(), upgraded)
             source.write_bytes(b'[KE] HAZE_CONVERGENCE ')
             with self.assertRaisesRegex(ValueError, 'Partial offscreen-capture upgrade'):
                 ke.is_upgraded_offscreen_capture(source)
