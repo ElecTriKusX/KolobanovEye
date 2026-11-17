@@ -13,9 +13,9 @@ import subprocess
 import sys
 import tempfile
 
-from ke_annotation import parse_annotation, write_annotation
-from ke_frame_journal import JOURNAL, read_journal
-from ke_maps import MAP_ID, parse_tank_bounds_log
+from tools.ke_annotation import parse_annotation, write_annotation
+from tools.ke_frame_journal import JOURNAL, read_journal
+from tools.ke_maps import MAP_ID, parse_tank_bounds_log
 from tools.vendor_ooz import VENDOR as OOZ_VENDOR, verify_vendor as verify_vendor_ooz, install as install_vendor_ooz
 
 REV = "9639942de5a8e5b01d91977f60ed82cda22d5f41"
@@ -1153,7 +1153,7 @@ def frame(args, game, cdk):
         if f"[KE] {marker}" not in log:
             raise ValueError(f"{marker} missing from probe.dcmd.log")
     if args.scan_buildings:
-        from ke_urban import write_report
+        from tools.ke_urban import write_report
         report = write_report(require_file(out / "scene-instances.tsv"), out / "urban-zones.json")
         print(f"[KE] Urban candidates: {len(report['zones'])}; {out / 'urban-zones.json'}", flush=True)
     if args.seed is not None:
