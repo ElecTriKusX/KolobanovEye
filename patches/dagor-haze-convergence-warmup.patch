@@ -12,9 +12,9 @@ diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/scene
 +    const bool lightingReady = !skies || skies->isLightingConverged();
 +    const bool sceneReady = frames >= minWarmupRenders && !mapLoading && skyReady &&
 +      (!waitSkyConvergence || lightingReady);
-@@ -590,1 +590,4 @@
--  console->addMessage(ILogWriter::NOTE, "[KE] WARMUP passes=%d pending_textures=%d settled=%d", frames, pendingAfter, int(ready));
-+  console->addMessage(ILogWriter::NOTE, "[KE] WARMUP passes=%d pending_textures=%d settled=%d", frames, pendingAfter, int(ready));
+@@ -590,2 +590,5 @@
+   console->addMessage(ILogWriter::NOTE, "[KE] WARMUP passes=%d pending_textures=%d settled=%d", frames, pendingAfter, int(ready));
 +  console->addMessage(ILogWriter::NOTE,
 +    "[KE] HAZE_CONVERGENCE min_renders=%d wait_lighting=%d lighting_ready=%d sky_ready=%d passes=%d",
 +    minWarmupRenders, int(waitSkyConvergence), int(!skies || skies->isLightingConverged()), int(skyReady), frames);
+   console->addMessage(ILogWriter::NOTE, "[KE] ENV_LIGHT_READY %d", renderer->isEnvironmentLightingReady() ? 1 : 0);
