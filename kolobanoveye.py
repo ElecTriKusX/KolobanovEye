@@ -54,6 +54,7 @@ HAZE_CONVERGENCE_PATCH = HERE / "patches/dagor-haze-convergence-warmup.patch"
 HAZE_STABILITY_PATCH = HERE / "patches/dagor-haze-frame-stability.patch"
 TANK_ARTICULATION_PATCH = HERE / "patches/dagor-tank-articulation.patch"
 TANK_MAP_PATCH = HERE / "patches/dagor-tank-map-bounds.patch"
+TANK_MAP_RENDER_PATCH = HERE / "patches/dagor-tank-map-render.patch"
 CLIPMAP_TILE_PATCH = HERE / "patches/dagor-clipmap-tile-readback.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
@@ -672,6 +673,11 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
     diff = TANK_MAP_PATCH.read_bytes().replace(b"\r\n", b"\n")
     if subprocess.run([*apply, "--reverse", "--check"], input=diff, cwd=dagor, capture_output=True).returncode:
         print(f"[KE] Applying {TANK_MAP_PATCH.name}", flush=True)
+        subprocess.run([*apply, "--check"], input=diff, cwd=dagor, check=True)
+        subprocess.run(apply, input=diff, cwd=dagor, check=True)
+    diff = TANK_MAP_RENDER_PATCH.read_bytes().replace(b"\r\n", b"\n")
+    if subprocess.run([*apply, "--reverse", "--check"], input=diff, cwd=dagor, capture_output=True).returncode:
+        print(f"[KE] Applying {TANK_MAP_RENDER_PATCH.name}", flush=True)
         subprocess.run([*apply, "--check"], input=diff, cwd=dagor, check=True)
         subprocess.run(apply, input=diff, cwd=dagor, check=True)
 
