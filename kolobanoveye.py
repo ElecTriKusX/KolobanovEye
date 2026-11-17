@@ -966,6 +966,11 @@ def frame(args, game, cdk):
                f"-rootdir:{dagor_path(out)}", f"-addpath:{dagor_path(game)}", f"-addpath:{dagor_path(cdk)}",
                "-enable:Scene view", "-disable:Landscape", r"-exclude_dll_re:heightmapLand-aces-dev\.dll$",
                f"-ws:{workspace_name}", project, batch]
+    tank_map_pending = out / "tank-map.pending.png" if args.capture_tank_map else None
+    if tank_map_pending is not None:
+        (out / "maps").mkdir(exist_ok=True)
+        command.insert(-2, f"-ke-tank-map-output:{dagor_path(tank_map_pending)}")
+        command.insert(-2, f"-ke-tank-map-size:{args.tank_map_resolution}")
     map_capture = None
     if args.capture_last_clip:
         map_image = out / "maps" / f"{level.stem}.png"
@@ -1055,6 +1060,21 @@ def frame(args, game, cdk):
     (out / "tank-map-bounds.json").write_text(
         json.dumps(bounds_report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"[KE] TANK_MAP {bounds_report['status']}: {out / 'tank-map-bounds.json'}", flush=True)
+    if tank_map_pending is not None:
+        if bounds_report['status'] != "available":
+            raise ValueError("Cannot render tank overview without valid tankMapCoord0/1")
+        if not tank_map_pending.is_file():
+            raise ValueError("Dagor did not save the tank-square overview: check TANK_MAP_RENDER in .logs/debug")
+        verify_png(tank_map_pending, args.tank_map_resolution, args.tank_map_resolution)
+        overview = out / "maps" / f"{level.stem}-tank.png"
+        tank_map_pending.replace(overview)
+        (out / "maps" / f"{level.stem}-tank.json").write_text(
+            json.dumps({**bounds_report, "image": overview.name,
+                        "resolution": args.tank_map_resolution,
+                        "orientation": "verify_in_editor",
+                        "render_method": "Dagor.render_last_clip_region_to_tex"},
+                       indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        print(f"[KE] TANK_MAP_IMAGE {overview}", flush=True)
     if args.placement_mode == "tank_map" and bounds_report["status"] != "available":
         raise ValueError("Tank placement requires valid tankMapCoord0/1")
     for marker in ("MAP_OK", "MODEL_OK", "PLACEMENT_OK", "WATER_PROXY", "CAMERA_TERRAIN", "SUPPORT_HEIGHTS", "CAMERA_OK", "FRAME_OK"):
