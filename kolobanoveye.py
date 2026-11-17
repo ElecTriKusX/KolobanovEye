@@ -51,6 +51,7 @@ OFFSCREEN_STREAMING_WAIT_PATCH = HERE / "patches/dagor-offscreen-streaming-wait.
 OFFSCREEN_RESOLVE_CAMERA_PATCH = HERE / "patches/dagor-offscreen-resolve-camera.patch"
 HAZE_CONVERGENCE_PATCH = HERE / "patches/dagor-haze-convergence-warmup.patch"
 HAZE_STABILITY_PATCH = HERE / "patches/dagor-haze-frame-stability.patch"
+TANK_ARTICULATION_PATCH = HERE / "patches/dagor-tank-articulation.patch"
 CLIPMAP_TILE_PATCH = HERE / "patches/dagor-clipmap-tile-readback.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
@@ -661,6 +662,11 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
             subprocess.run(apply, input=diff, cwd=dagor, check=True)
 
     apply_haze_capture_pipeline(capture_cpp, HAZE_CONVERGENCE_PATCH, HAZE_STABILITY_PATCH)
+    diff = TANK_ARTICULATION_PATCH.read_bytes().replace(b"\r\n", b"\n")
+    if subprocess.run([*apply, "--reverse", "--check"], input=diff, cwd=dagor, capture_output=True).returncode:
+        print(f"[KE] Applying {TANK_ARTICULATION_PATCH.name}", flush=True)
+        subprocess.run([*apply, "--check"], input=diff, cwd=dagor, check=True)
+        subprocess.run(apply, input=diff, cwd=dagor, check=True)
 
 
 def build(dagor, ooz=None):
@@ -763,6 +769,34 @@ def select_camera_attempt(raw_metadata, candidates):
     return index, candidates[index]
 
 
+def plan_articulation(seed, count, turret_range, pitch_range):
+    # Separate RNGs keep camera, placement and either joint independent.
+    for label, (low, high), (minimum, maximum) in (
+            ("turret yaw", turret_range, (-180, 180)), ("gun pitch", pitch_range, (-8, 15))):
+        if not all(math.isfinite(x) for x in (low, high)) or not minimum <= low <= high <= maximum:
+            raise ValueError(f"Invalid {label} range: expected {minimum} <= min <= max <= {maximum}")
+    if tuple(turret_range) == tuple(pitch_range) == (0, 0):
+        return []
+    if seed is None:
+        if turret_range[0] != turret_range[1] or pitch_range[0] != pitch_range[1]:
+            raise ValueError("Random turret or gun pose requires --seed")
+        return [(turret_range[0], pitch_range[0])] * count
+    turret_rng = random.Random(f"turret-yaw:{seed}")
+    pitch_rng = random.Random(f"gun-pitch:{seed}")
+    return [(round(turret_rng.uniform(*turret_range), 5), round(pitch_rng.uniform(*pitch_range), 5))
+            for _ in range(count)]
+
+
+def read_articulation(metadata, expected):
+    angles = []
+    for key, angle in zip(("turret_yaw_deg", "gun_pitch_deg"), expected):
+        match = re.search(rf"^{key}:r=([^\r\n]+)", metadata, re.MULTILINE)
+        if not match or not math.isclose(float(match.group(1)), angle, rel_tol=1e-5, abs_tol=1e-4):
+            raise ValueError(f"Missing or mismatched {key} in Dagor metadata; rebuild the editor")
+        angles.append(float(match.group(1)))
+    return dict(zip(("turret_yaw_deg", "gun_pitch_deg"), angles))
+
+
 def frame(args, game, cdk):
     if os.name != "nt":
         raise ValueError("DX11 capture requires Windows x64")
@@ -801,6 +835,7 @@ def frame(args, game, cdk):
         raise ValueError("Placement search requires --seed")
     if args.timeout <= 0:
         raise ValueError("Timeout must be positive")
+    poses = plan_articulation(args.seed, args.count, args.turret_yaw_range, args.gun_pitch_range)
     out = args.out.resolve()
     if out.is_relative_to(game) or out.is_relative_to(cdk) or args.dagor.is_relative_to(game) or args.dagor.is_relative_to(cdk):
         raise ValueError("Keep Dagor and the output directory outside War Thunder")
@@ -818,6 +853,8 @@ def frame(args, game, cdk):
     run_logged([dump, game / GRP, "-dumpR"], grp_log, out, 60)
     resources = parse_resources(grp_log.read_text(encoding="utf-8", errors="replace"))
     model, skeleton = choose_resources(resources, GRP.stem, args.model, args.skeleton)
+    if poses and (model.casefold() != "pzkpfw_vi_ausf_h1_tiger" or skeleton.casefold() != model.casefold() + "_skeleton"):
+        raise ValueError("Turret and gun articulation currently require Tiger H1 and its matching skeleton")
     print(f"[KE] DynModel={model}, GeomNodeTree={skeleton or '(unresolved)'}", flush=True)
 
     project = out / "probe.level.blk"
@@ -853,6 +890,9 @@ def frame(args, game, cdk):
         f'yaw:r={numbers([args.yaw])}',
         f'tank:p3={numbers((args.tank_xz[0], args.ground_offset, args.tank_xz[1]))}',
     ]
+    if poses:
+        entries.append("articulate_tank:b=yes")
+        entries.extend(f"articulation_{i}:p2={numbers(angles)}" for i, angles in enumerate(poses))
     for scene_index, candidates in enumerate(candidate_groups):
         for i, (x, z) in enumerate(candidates):
             entries.append(f'candidate_{scene_index}_{i}:p3={numbers((x, args.ground_offset, z))}')
@@ -868,7 +908,8 @@ def frame(args, game, cdk):
         (out / "plan.json").write_text(json.dumps({"schema_version": 3, "seed": args.seed,
             "tank_yaw_deg": args.yaw, "placement_mode": args.placement_mode, "map_margin_percent": args.map_margin_percent if args.placement_mode == "whole_map" else None, "placement_candidate_coordinates": "normalized_landscape_bbox" if args.placement_mode == "whole_map" else "world_xz", "placement_candidates_xz": candidate_groups, "frames_per_position": args.frames_per_position, "max_height_range": args.max_height_range,
             "camera_distance_range": args.camera_distance_range, "camera_elevation_range": args.camera_elevation_range,
-            "camera_attempts": args.camera_attempts, "camera_height_range": args.camera_height_range, "cameras": orbit_plan}, indent=2) + "\n", encoding="utf-8")
+            "camera_attempts": args.camera_attempts, "camera_height_range": args.camera_height_range, "cameras": orbit_plan,
+            **({"tank_articulation_deg": poses} if poses else {})}, indent=2) + "\n", encoding="utf-8")
         journal = out / JOURNAL
         entries.extend((f"frame_count:i={args.count}", f"camera_attempts:i={args.camera_attempts}",
                         f'metadata_journal:t="{dagor_path(journal)}"'))
@@ -1021,7 +1062,7 @@ def frame(args, game, cdk):
                 "planned_camera_elevation_deg": camera["elevation_deg"] if args.camera_height_range is None else None,
                 "planned_camera_offset": camera["offset"], "planned_height_above_ground": camera.get("height_above_ground"), "camera_attempt": camera_attempt,
                 "image": f"images/{i:06d}.png", "annotation": annotation["annotations"][0],
-                "dagor_frame_metadata_blk": raw_metadata})
+                "dagor_frame_metadata_blk": raw_metadata, **(read_articulation(raw_metadata, poses[i]) if poses else {})})
         manifest_pending = out / "metadata.jsonl.tmp"
         manifest_pending.write_text("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in records), encoding="utf-8")
         manifest_pending.replace(out / "metadata.jsonl")
@@ -1029,6 +1070,8 @@ def frame(args, game, cdk):
         print(f"[KE] SEQUENCE_WRITTEN {len(records)} frames in {out}")
         return
     verify_png(png, args.width, args.height)
+    if poses:
+        read_articulation(require_file(meta).read_text(encoding="utf-8"), poses[0])
     write_annotation(require_file(meta), out / "annotation.json")
     require_file(meta).rename(out / "frame.blk")
     final = png.rename(out / "frame.png")
@@ -1088,6 +1131,10 @@ def main():
     frame_cmd.add_argument("--keep-open", action="store_true", help="Keep editor open until window is closed; no process timeout")
     frame_cmd.add_argument("--timeout", type=int, default=360)
     frame_cmd.add_argument("--dx11-trace", action="store_true", help="Log native DX11 draw state for terrain and clipmap updates")
+    frame_cmd.add_argument("--turret-yaw-range", type=float, nargs=2, default=(0, 0), metavar=("MIN", "MAX"),
+                           help="Tiger H1 turret yaw relative to hull, degrees")
+    frame_cmd.add_argument("--gun-pitch-range", type=float, nargs=2, default=(0, 0), metavar=("MIN", "MAX"),
+                           help="Tiger H1 gun pitch relative to neutral pose, positive raises muzzle")
     frame_cmd.add_argument("--min-warmup-renders", type=int, default=8,
                            help="Minimum offscreen renders before checking frame readiness (8–64)")
     frame_cmd.add_argument("--wait-sky-convergence", action="store_true",

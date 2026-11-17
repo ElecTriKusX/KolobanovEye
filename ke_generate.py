@@ -6,7 +6,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from kolobanoveye import plan_camera_orbits
+from kolobanoveye import plan_articulation, plan_camera_orbits
 
 DEFAULTS = {
     'dagor': r'D:\Projects\DagorEngine', 'game': r'D:\Games\WarThunder',
@@ -15,11 +15,12 @@ DEFAULTS = {
     'tank_yaw': 20.0, 'ground_offset': 0.05, 'minimum_ground_y': 0.5, 'camera_clearance': 0.5,
     'placement_mode': 'whole_map', 'map_margin_percent': 15.0, 'placement_radius': 0.0, 'placement_attempts': 24, 'frames_per_position': 6, 'max_height_range': 0.5, 'camera_attempts': 8,
     'camera_height_min': 4.0, 'camera_height_max': 16.0, 'distance_min': 18.0, 'distance_max': 35.0, 'elevation_min': 10.0, 'elevation_max': 25.0,
+    'turret_yaw_min': 0.0, 'turret_yaw_max': 0.0, 'gun_pitch_min': 0.0, 'gun_pitch_max': 0.0,
     'min_warmup_renders': 8, 'wait_sky_convergence': False, 'wait_frame_stability': True,
     'keep_open': False, 'render_debug': False, 'scan_buildings': False, 'capture_last_clip': False, 'clipmap_feedback': 'software', 'timeout': 360,
 }
 INTS = {'count', 'seed', 'width', 'height', 'timeout', 'placement_attempts', 'camera_attempts', 'frames_per_position', 'min_warmup_renders'}
-FLOATS = {'fov', 'tank_x', 'tank_z', 'tank_yaw', 'ground_offset', 'camera_clearance',
+FLOATS = {'turret_yaw_min', 'turret_yaw_max', 'gun_pitch_min', 'gun_pitch_max', 'fov', 'tank_x', 'tank_z', 'tank_yaw', 'ground_offset', 'camera_clearance',
           'minimum_ground_y', 'distance_min', 'distance_max', 'elevation_min', 'elevation_max', 'placement_radius', 'max_height_range', 'camera_height_min', 'camera_height_max', 'map_margin_percent'}
 
 
@@ -74,6 +75,7 @@ def validate_config(raw):
             raise ValueError(f'{key}: требуется true или false')
     if c['clipmap_feedback'] not in ('software', 'hardware'):
         raise ValueError('clipmap_feedback: software или hardware')
+    plan_articulation(c['seed'], 0, (c['turret_yaw_min'], c['turret_yaw_max']), (c['gun_pitch_min'], c['gun_pitch_max']))
     plan_camera_orbits(c['seed'], 0, (c['distance_min'], c['distance_max']), (c['elevation_min'], c['elevation_max']))
     return c
 
@@ -90,6 +92,8 @@ def command(c):
             '--camera-elevation-range', str(c['elevation_min']), str(c['elevation_max']),
             '--clipmap-feedback', c['clipmap_feedback'], '--timeout', str(c['timeout'])] + (['--keep-open'] if c['keep_open'] else []) + (['--capture-last-clip'] if c['capture_last_clip'] else []) + (['--render-debug'] if c['render_debug'] else []) + (['--scan-buildings'] if c['scan_buildings'] else []))
 
+    args.extend(('--turret-yaw-range', str(c['turret_yaw_min']), str(c['turret_yaw_max']),
+                 '--gun-pitch-range', str(c['gun_pitch_min']), str(c['gun_pitch_max'])))
     args.extend(('--min-warmup-renders', str(c['min_warmup_renders']),
                  '--wait-frame-stability' if c['wait_frame_stability'] else '--no-wait-frame-stability'))
     if c['wait_sky_convergence']:

@@ -27,9 +27,12 @@ def parse_annotation(text):
             raise ValueError('unexpected class')
     except (KeyError, ValueError) as exc:
         raise ValueError(f'Invalid frame annotation: {exc}') from exc
+    method = ('projected_conservative_joint_envelope_depth_clipped_and_frame_clamped'
+              if entries.get('pose_bounds_method') == 'conservative_joint_envelope'
+              else 'projected_local_3d_aabb_depth_clipped_and_frame_clamped')
     return {'schema_version': 1, 'image': 'frame.png', 'width': width, 'height': height,
             'annotations': [{'class': 'tank', 'bbox_xywh': box,
-                             'bbox_method': 'projected_local_3d_aabb_depth_clipped_and_frame_clamped',
+                             'bbox_method': method,
                              'bbox_kind': 'approximate_amodal', 'visibility': None}],
             'source_metadata': 'frame.blk'}
 
