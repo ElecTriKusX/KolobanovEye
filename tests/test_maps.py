@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ke_maps import (
+from tools.ke_maps import (
     scan_maps, load_whitelist, save_whitelist, initial_whitelist,
     available_whitelist, plan_equal_allocation, parse_tank_bounds_log,
 )
