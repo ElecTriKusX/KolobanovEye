@@ -1,0 +1,26 @@
+diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+--- a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
++++ b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+@@ -322,7 +322,7 @@
+     snprintf(offsetKey, sizeof(offsetKey), "camera_offset_%d_%d", frameIndex, cameraAttempt);
+     snprintf(legacyKey, sizeof(legacyKey), "camera_offset_%d", frameIndex);
+     const Point3 legacy = config.getPoint3(legacyKey, config.getPoint3("eye", aim + Point3(12, 5, 16)) - aim);
+-    const Point3 candidateEye = aim + config.getPoint3(offsetKey, legacy);
++    Point3 candidateEye = aim + config.getPoint3(offsetKey, legacy);
+     if (!finite_point(candidateEye) || lengthSq(aim - candidateEye) < 0.01f ||
+         lengthSq(Point3(0, 1, 0) % (aim - candidateEye)) < 0.01f)
+     {
+@@ -336,6 +336,13 @@
+       console->addMessage(ILogWriter::NOTE, "[KE] CAMERA_REJECT index=%d attempt=%d reason=height_unknown", frameIndex, cameraAttempt);
+       continue;
+     }
++    char heightKey[64];
++    snprintf(heightKey, sizeof(heightKey), "camera_height_%d_%d", frameIndex, cameraAttempt);
++    const float desiredHeight = config.getReal(heightKey, -1.f);
++    if (!std::isfinite(desiredHeight))
++      return fail("CONFIG", "Invalid requested camera height");
++    if (desiredHeight >= 0.f)
++      candidateEye.y = candidateGround + desiredHeight;
+     const float clearance = candidateEye.y - candidateGround;
+     if (clearance < minCameraClearance)
+     {

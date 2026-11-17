@@ -1,0 +1,56 @@
+diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+--- a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
++++ b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+@@ -11,8 +11,7 @@
+ #include <3d/dag_lockTexture.h>
+ #include <3d/dag_texIdSet.h>
+ #include <3d/dag_texMgr.h>
+-#include <drv/3d/dag_commands.h>
+-#include <drv/3d/dag_driver.h>
++#include <3d/dag_texPackMgr2.h>
+ #include <drv/3d/dag_info.h>
+ #include <drv/3d/dag_lock.h>
+ #include <gameRes/dag_gameResSystem.h>
+@@ -36,11 +36,11 @@
+ #include <cstring>
+ #include <EASTL/unique_ptr.h>
+ 
+-// Dagor's work cycle uses this hook at present, and also when it skips presenting.
+-namespace tql
+-{
+-extern void (*on_frame_finished)();
+-}
++// The texture manager uses this during synchronous prefetch on the main thread.
++namespace texmgr_internal
++{
++void do_per_frame_updates_while_waiting_on_main_thread();
++}
+ 
+ void ke_set_render_debug_dir(const char *dir);
+ 
+@@ -499,14 +499,17 @@
+     if (!frame)
+       return fail("RENDER", "Offscreen texture creation or render failed");
+     const int pendingBefore = get_managed_textures_streaming_pending_count();
+-    if (tql::on_frame_finished)
+-    {
+-      d3d::GpuAutoLock gpuLock;
+-      tql::on_frame_finished();
+-      d3d::driver_command(Drv3dCommand::PROCESS_PENDING_RESOURCE_UPDATED);
+-    }
+-    if (frames >= 7 && (!scene.getSsm() || !scene.getSsm()->isLoading()) && pendingBefore == 0 &&
+-        get_managed_textures_streaming_pending_count() == 0 && (!skies || skies->areCloudTexturesReady()))
++    const bool loadOnDemand = is_managed_textures_streaming_load_on_demand();
++    if (!loadOnDemand)
++      ddsx::tex_pack2_perform_delayed_data_loading();
++    texmgr_internal::do_per_frame_updates_while_waiting_on_main_thread();
++    const int pendingAfter = get_managed_textures_streaming_pending_count();
++    const bool mapLoading = scene.getSsm() && scene.getSsm()->isLoading();
++    const bool skyReady = !skies || skies->areCloudTexturesReady();
++    if (frames == 0 || frames == 47)
++      console->addMessage(ILogWriter::NOTE, "[KE] STREAMING_PUMP index=%d pass=%d pending_before=%d pending_after=%d on_demand=%d map_loading=%d sky_ready=%d",
++        frameIndex, frames + 1, pendingBefore, pendingAfter, int(loadOnDemand), int(mapLoading), int(skyReady));
++    if (frames >= 7 && !mapLoading && pendingBefore == 0 && pendingAfter == 0 && skyReady)
+       break;
+     sleep_msec(20);
+   }

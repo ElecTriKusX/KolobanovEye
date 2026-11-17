@@ -1,0 +1,97 @@
+diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+--- a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
++++ b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+@@ -112,7 +112,7 @@
+   const char *metadata = config.getStr("metadata", "");
+   const int width = config.getInt("width", 1280);
+   const int height = config.getInt("height", 720);
+-  const Point3 requested = config.getPoint3("tank", Point3(0, 0, 0));
++  Point3 requested = config.getPoint3("tank", Point3(0, 0, 0));
+   const float defaultYaw = config.getReal("yaw", 0.f);
+   const int frameCount = config.getInt("frame_count", 1);
+   const float fov = config.getReal("fov", 55.f);
+@@ -140,10 +140,7 @@
+     return fail("MAP", "Binary dump did not produce a terrain renderer");
+   float ground = 0.f;
+   Point3 groundNormal;
+-  if (!scene.getHeightmapAtPoint(requested.x, requested.z, ground, &groundNormal) || !std::isfinite(ground))
+-    return fail("TERRAIN", "No terrain at requested X/Z. Choose a different point.");
+-  console->addMessage(ILogWriter::NOTE, "[KE] MAP_OK terrain_y=%.3f normal_y=%.3f static_collision=%d", ground, groundNormal.y,
+-    scene.hasStaticScene() ? 1 : 0);
++
+ 
+   console->addMessage(ILogWriter::NOTE, "[KE] MODEL_BEGIN %s", modelName);
+   debug("[KE] MODEL_BEGIN %s", modelName);
+@@ -175,6 +172,63 @@
+   if (!finite_point(bounds[0]) || !finite_point(bounds[1]) || bounds[0].x >= bounds[1].x || bounds[0].y >= bounds[1].y ||
+       bounds[0].z >= bounds[1].z)
+     return fail("MODEL_BOUNDS", "Invalid DynModel bounds");
++  // Heightmap-only placement: water and obstacle collisions remain unverified.
++  const int candidateCount = config.getInt("candidate_count", 1);
++  const float maxHeightRange = config.getReal("max_height_range", 0.5f);
++  if (candidateCount < 1 || candidateCount > 64 || !std::isfinite(maxHeightRange) || maxHeightRange < 0.f || maxHeightRange > 100.f)
++    return fail("CONFIG", "Invalid placement search settings");
++  bool placementFound = false;
++  int selectedCandidate = -1;
++  const float placeYaw = defaultYaw * DEG_TO_RAD;
++  const float placeCs = cosf(placeYaw), placeSn = sinf(placeYaw);
++  for (int attempt = 0; attempt < candidateCount; ++attempt)
++  {
++    char key[32];
++    snprintf(key, sizeof(key), "candidate_%d", attempt);
++    const Point3 candidate = config.getPoint3(key, requested);
++    if (!finite_point(candidate))
++      return fail("CONFIG", "Invalid candidate coordinates");
++    float h = 0.f;
++    Point3 normal;
++    if (!scene.getHeightmapAtPoint(candidate.x, candidate.z, h, &normal) || !std::isfinite(h))
++    {
++      console->addMessage(ILogWriter::NOTE, "[KE] PLACEMENT_REJECT attempt=%d reason=center_height_unknown", attempt);
++      continue;
++    }
++    float hmin = 0.f, hmax = 0.f;
++    int samples = 0;
++    for (int corner = 0; corner < 4; ++corner)
++    {
++      const float x = bounds[(corner & 1) != 0].x;
++      const float z = bounds[(corner & 2) != 0].z;
++      const float wx = candidate.x + placeCs * x + placeSn * z;
++      const float wz = candidate.z - placeSn * x + placeCs * z;
++      float ch = 0.f;
++      Point3 cn;
++      if (scene.getHeightmapAtPoint(wx, wz, ch, &cn) && std::isfinite(ch))
++      {
++        if (samples == 0) hmin = hmax = ch;
++        else { hmin = fminf(hmin, ch); hmax = fmaxf(hmax, ch); }
++        ++samples;
++      }
++    }
++    if (samples != 4 || hmax - hmin > maxHeightRange)
++    {
++      console->addMessage(ILogWriter::NOTE, "[KE] PLACEMENT_REJECT attempt=%d samples=%d range=%.3f", attempt, samples, hmax - hmin);
++      continue;
++    }
++    requested = candidate;
++    ground = h;
++    groundNormal = normal;
++    placementFound = true;
++    selectedCandidate = attempt;
++    console->addMessage(ILogWriter::NOTE, "[KE] PLACEMENT_OK attempt=%d x=%.3f z=%.3f range=%.3f water=unknown obstacles=unknown", attempt, candidate.x, candidate.z, hmax-hmin);
++    break;
++  }
++  if (!placementFound)
++    return fail("PLACEMENT", "No candidate passed the heightmap checks");
++  console->addMessage(ILogWriter::NOTE, "[KE] MAP_OK terrain_y=%.3f normal_y=%.3f static_collision=%d", ground, groundNormal.y,
++    scene.hasStaticScene() ? 1 : 0);
+   console->addMessage(ILogWriter::NOTE, "[KE] SEQUENCE_BEGIN frames=%d map_loads=1 model_loads=1", frameCount);
+   for (int frameIndex = 0; frameIndex < frameCount; ++frameIndex)
+   {
+@@ -381,6 +435,8 @@
+   result.setStr("skeleton", skeletonName);
+   result.setStr("pack", pack);
+   result.setReal("terrain_y", ground);
++  result.setInt("placement_candidate", selectedCandidate);
++  result.setStr("placement_check", "heightmap_only_water_and_obstacles_unknown");
+   result.setInt("width", width);
+   result.setInt("height", height);
+   result.setInt("lod", lod);

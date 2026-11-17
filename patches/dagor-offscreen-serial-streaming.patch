@@ -1,0 +1,45 @@
+diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+--- a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
++++ b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+@@ -490,6 +490,9 @@
+   };
+   TexPtr frame;
+   int frames = 0;
++  int previousPending = 0;
++  int unchangedPasses = 0;
++  bool triedSerialLoad = false;
+   for (; frames < 48; ++frames)
+   {
+     scene.update(eye, 1.f / 60.f);
+@@ -508,7 +511,30 @@
+     if (!loadOnDemand)
+       ddsx::tex_pack2_perform_delayed_data_loading();
+     texmgr_internal::do_per_frame_updates_while_waiting_on_main_thread();
+-    const int pendingAfter = get_managed_textures_streaming_pending_count();
++    int pendingAfter = get_managed_textures_streaming_pending_count();
++    unchangedPasses = pendingAfter > 0 && pendingAfter == previousPending ? unchangedPasses + 1 : 0;
++    previousPending = pendingAfter;
++    if (loadOnDemand && unchangedPasses >= 7 && !triedSerialLoad)
++    {
++      triedSerialLoad = true;
++      const bool interrupted = ddsx::interrupt_texq_loading();
++      if (interrupted)
++      {
++        // DDSx flag for serial decoding. The caller already owns the queue pause.
++        constexpr int serialDecode = 0x100;
++        ddsx::tex_pack2_perform_delayed_data_loading(serialDecode);
++        const int hqPriority = ddsx::hq_tex_priority;
++        if (hqPriority && texmgr_internal::get_pending_tex_prio(hqPriority))
++          ddsx::tex_pack2_perform_delayed_data_loading(serialDecode | hqPriority);
++        texmgr_internal::do_per_frame_updates_while_waiting_on_main_thread();
++        ddsx::restore_texq_loading(interrupted);
++      }
++      const int pendingAfterSerial = get_managed_textures_streaming_pending_count();
++      console->addMessage(ILogWriter::NOTE,
++        "[KE] STREAMING_SERIAL index=%d pass=%d interrupted=%d pending_before=%d pending_after=%d",
++        frameIndex, frames + 1, int(interrupted), pendingAfter, pendingAfterSerial);
++      pendingAfter = pendingAfterSerial;
++    }
+     const bool mapLoading = scene.getSsm() && scene.getSsm()->isLoading();
+     const bool skyReady = !skies || skies->areCloudTexturesReady();
+     const bool ready = frames >= 7 && !mapLoading && pendingBefore == 0 && pendingAfter == 0 && skyReady;

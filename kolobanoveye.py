@@ -6,11 +6,15 @@ import math
 import os
 from pathlib import Path
 import re
+import random
 import shutil
 import struct
 import subprocess
 import sys
 import tempfile
+
+from ke_annotation import parse_annotation, write_annotation
+from ke_frame_journal import JOURNAL, read_journal
 
 REV = "9639942de5a8e5b01d91977f60ed82cda22d5f41"
 HERE = Path(__file__).resolve().parent
@@ -23,6 +27,32 @@ RESOLVE_PASS_PATCH = HERE / "patches/dagor-resolve-pass-capture.patch"
 RESOLVE_FLOAT_PATCH = HERE / "patches/dagor-resolve-float-capture.patch"
 DX11_TRACE_PATCH = HERE / "patches/dagor-dx11-terrain-trace.patch"
 CLIPMAP_LEGACY_PATCH = HERE / "patches/dagor-clipmap-legacy-color.patch"
+SEQUENCE_PATCH = HERE / "patches/dagor-sequence.patch"
+ORBIT_PATCH = HERE / "patches/dagor-orbit-camera.patch"
+CLEAN_CAPTURE_PATCH = HERE / "patches/dagor-clean-capture.patch"
+CAMERA_TERRAIN_PATCH = HERE / "patches/dagor-camera-terrain.patch"
+PLACEMENT_PATCH = HERE / "patches/dagor-placement-search.patch"
+CAMERA_RETRY_PATCH = HERE / "patches/dagor-camera-retry.patch"
+WATER_PROBE_PATCH = HERE / "patches/dagor-water-probe.patch"
+MULTI_COMPOSITION_PATCH = HERE / "patches/dagor-multi-composition.patch"
+CAMERA_HEIGHT_PATCH = HERE / "patches/dagor-camera-ground-height.patch"
+MAP_PLACEMENT_PATCH = HERE / "patches/dagor-map-placement.patch"
+WATER_FILTER_PATCH = HERE / "patches/dagor-water-ground-filter.patch"
+LAST_CLIP_BOUNDS_PATCH = HERE / "patches/dagor-last-clip-bounds.patch"
+REMOVE_CLIPMAP_EXPORT_PATCH = HERE / "patches/dagor-remove-clipmap-export.patch"
+LAST_CLIP_OUTPUT_PATCH = HERE / "patches/dagor-last-clip-output.patch"
+FRAME_JOURNAL_PATCH = HERE / "patches/dagor-frame-journal.patch"
+SCENE_QUALITY_PATCH = HERE / "patches/dagor-scene-quality.patch"
+OFFSCREEN_STREAMING_PATCH = HERE / "patches/dagor-offscreen-streaming.patch"
+TEXTURE_PUMP_PATCH = HERE / "patches/dagor-offscreen-texture-pump.patch"
+OFFSCREEN_FRAME_CLOCK_PATCH = HERE / "patches/dagor-offscreen-frame-clock.patch"
+OFFSCREEN_SERIAL_STREAMING_PATCH = HERE / "patches/dagor-offscreen-serial-streaming.patch"
+OFFSCREEN_STREAMING_WAIT_PATCH = HERE / "patches/dagor-offscreen-streaming-wait.patch"
+OFFSCREEN_RESOLVE_CAMERA_PATCH = HERE / "patches/dagor-offscreen-resolve-camera.patch"
+HAZE_CONVERGENCE_PATCH = HERE / "patches/dagor-haze-convergence-warmup.patch"
+HAZE_STABILITY_PATCH = HERE / "patches/dagor-haze-frame-stability.patch"
+TANK_ARTICULATION_PATCH = HERE / "patches/dagor-tank-articulation.patch"
+CLIPMAP_TILE_PATCH = HERE / "patches/dagor-clipmap-tile-readback.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
     HERE / "patches/dagor-editor-unused-parameters.patch",
@@ -32,7 +62,7 @@ PATCHES = (
     RENDER_DEBUG_PATCH,
     DIRECT_DEPTH_PATCH,
     HERE / "patches/dagor-clipmap-software-feedback.patch",
-    HERE / "patches/dagor-clipmap-tile-readback.patch",
+    CLIPMAP_TILE_PATCH,
     HERE / "patches/dagor-deferred-terrain-view-rays.patch",
     INDIRECTION_PATCH,
     INDIRECTION_FIX_PATCH,
@@ -42,6 +72,27 @@ PATCHES = (
     RESOLVE_FLOAT_PATCH,
     DX11_TRACE_PATCH,
     CLIPMAP_LEGACY_PATCH,
+    SEQUENCE_PATCH,
+    ORBIT_PATCH,
+    CLEAN_CAPTURE_PATCH,
+    CAMERA_TERRAIN_PATCH,
+    PLACEMENT_PATCH,
+    CAMERA_RETRY_PATCH,
+    WATER_PROBE_PATCH,
+    MULTI_COMPOSITION_PATCH,
+    CAMERA_HEIGHT_PATCH,
+    MAP_PLACEMENT_PATCH,
+    WATER_FILTER_PATCH,
+    LAST_CLIP_BOUNDS_PATCH,
+    LAST_CLIP_OUTPUT_PATCH,
+    FRAME_JOURNAL_PATCH,
+    SCENE_QUALITY_PATCH,
+    OFFSCREEN_STREAMING_PATCH,
+    TEXTURE_PUMP_PATCH,
+    OFFSCREEN_FRAME_CLOCK_PATCH,
+    OFFSCREEN_SERIAL_STREAMING_PATCH,
+    OFFSCREEN_STREAMING_WAIT_PATCH,
+    OFFSCREEN_RESOLVE_CAMERA_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
 OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
@@ -421,19 +472,85 @@ def prepare_ooz(ooz, logs):
     return require_file(library)
 
 
-def build(dagor, ooz=None):
-    if os.name != "nt":
-        raise ValueError("Build requires Windows x64")
-    actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=dagor, text=True).strip()
-    if actual != REV:
-        raise ValueError(f"Expected Dagor {REV}, got {actual}")
-    require_file(dagor / "prog/platform.jam")
-    require_file(dagor / "tools/dagor_cdk/commonData/guiShaders.ps40.shdump.bin")
-    jam = shutil.which("jam")
-    if not jam:
-        raise ValueError("jam.exe missing from PATH. Run Dagor make_devtools.py first.")
+def apply_warmup_patch(source: Path, patch: Path, *, label: str):
+    """Apply unique hunk contexts without relying on Dagor line numbers."""
+    diff = patch.read_bytes().replace(b"\r\n", b"\n")
+    hunks = re.findall(rb"(?ms)^@@ [^\n]*\n(.*?)(?=^@@ |\Z)", diff)
+    if len(hunks) != 3:
+        raise ValueError("Invalid offscreen warm-up patch: expected 3 hunks")
+    raw = source.read_bytes()
+    crlf = b"\r\n" in raw
+    data = raw.replace(b"\r\n", b"\n")
+    changed = 0
+    for index, hunk in enumerate(hunks, 1):
+        lines = hunk.splitlines(keepends=True)
+        if any(not line or line[:1] not in (b" ", b"-", b"+") for line in lines):
+            raise ValueError(f"Malformed offscreen warm-up patch hunk {index}")
+        old = b"".join(line[1:] for line in lines if line.startswith((b" ", b"-")))
+        new = b"".join(line[1:] for line in lines if line.startswith((b" ", b"+")))
+        before, after = data.count(old), data.count(new)
+        if before == 1 and after == 0:
+            data = data.replace(old, new, 1)
+            changed += 1
+        elif before == 0 and after == 1:
+            pass  # already upgraded
+        else:
+            raise ValueError(f"Ambiguous offscreen warm-up patch hunk {index}: old={before} new={after}; "
+                             "do not reset Dagor, inspect the offscreen capture source")
+    if changed:
+        source.write_bytes(data.replace(b"\n", b"\r\n") if crlf else data)
+        print(f"[KE] {label} applied={changed}/3 source={source}", flush=True)
+    else:
+        print(f"[KE] {label} already_applied=1", flush=True)
+
+
+def apply_haze_capture_pipeline(source: Path, convergence_patch: Path, stability_patch: Path):
+    """Apply successive warm-up patches, including when the later patch supersedes a prior hunk.
+
+    The stability patch replaces the sceneReady line installed by the convergence patch.
+    Therefore reverse/apply checks of the older patch alone are NOT an idempotence test
+    after the successor has been installed. Validate the complete successor instead.
+    """
+    existing = source.read_bytes()
+    if b'[KE] FRAME_STABILITY_FINAL ' in existing:
+        required = (b'wait_frame_stability', b'[KE] HAZE_CONVERGENCE ',
+                    b'const bool lightingReady =', b'keStableChecks >= 3',
+                    b'[KE] FRAME_STABILITY frame=')
+        missing = [marker.decode('ascii', errors='replace') for marker in required if marker not in existing]
+        if missing:
+            raise ValueError(f"Incomplete already-applied adaptive patch in {source}: {missing}")
+        print("[KE] HAZE_CONVERGENCE_PATCH superseded_by=HAZE_STABILITY_PATCH", flush=True)
+    else:
+        apply_warmup_patch(source, convergence_patch, label="HAZE_CONVERGENCE_PATCH")
+    apply_warmup_patch(source, stability_patch, label="HAZE_STABILITY_PATCH")
+
+
+def is_upgraded_offscreen_capture(source: Path) -> bool:
+    """Recognize an already-upgraded capture loop; never skip predecessors blindly."""
+    if not source.is_file():
+        return False
+    contents = source.read_bytes()
+    if b'[KE] HAZE_CONVERGENCE ' not in contents:
+        return False
+    required = (
+        b'const auto textureWorkerBusy = [&]()',
+        b'const auto texturesIdle = [&]()',
+        b'frame = captureFrame(nullptr);',
+        b'const bool previousSkipRenderObjects = skipRenderObjects;',
+        b'metadataJournal',
+        b'[KE] STREAMING_PUMP ',
+        b'const int minWarmupRenders = config.getInt("min_warmup_renders", 8);',
+    )
+    missing = [marker.decode('ascii', errors='replace') for marker in required if marker not in contents]
+    if missing:
+        raise ValueError(f"Partial offscreen-capture upgrade in {source}: missing {missing}; "
+                         "do not reset Dagor; inspect the existing file")
+    return True
+
+
+def apply_dagor_patches(dagor, *, with_ooz=False):
     apply = ["git", "apply", "--whitespace=error-all"]
-    patches = (*PATCHES, OOZ_PATCH) if ooz else PATCHES
+    patches = (*PATCHES, OOZ_PATCH) if with_ooz else PATCHES
     direct_depth_diff = DIRECT_DEPTH_PATCH.read_bytes().replace(b"\r\n", b"\n")
     direct_depth_applied = subprocess.run([*apply, "--reverse", "--check"], input=direct_depth_diff, cwd=dagor,
                                           capture_output=True).returncode == 0
@@ -452,7 +569,76 @@ def build(dagor, ooz=None):
     legacy_clip_applied = subprocess.run([*apply, "--reverse", "--check"],
         input=CLIPMAP_LEGACY_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor,
         capture_output=True).returncode == 0
+    sequence_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=SEQUENCE_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    terrain_patch_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=CAMERA_TERRAIN_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    placement_patch_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=PLACEMENT_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    camera_retry_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=CAMERA_RETRY_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    water_probe_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=WATER_PROBE_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    multi_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=MULTI_COMPOSITION_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    camera_height_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=CAMERA_HEIGHT_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    map_placement_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=MAP_PLACEMENT_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    # Remove the former experimental tile writer when upgrading an existing Dagor tree.
+    removal = REMOVE_CLIPMAP_EXPORT_PATCH.read_bytes().replace(b"\r\n", b"\n")
+    if subprocess.run([*apply, "--check"], input=removal, cwd=dagor, capture_output=True).returncode == 0:
+        print("[KE] Removing the experimental clipmap tile exporter", flush=True)
+        subprocess.run(apply, input=removal, cwd=dagor, check=True)
+    water_filter_applied = subprocess.run([*apply, "--reverse", "--check"], input=WATER_FILTER_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    last_clip_bounds_applied = subprocess.run([*apply, "--reverse", "--check"], input=LAST_CLIP_BOUNDS_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    scene_quality_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=SCENE_QUALITY_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    offscreen_streaming_applied = subprocess.run([*apply, "--reverse", "--check"],
+        input=OFFSCREEN_STREAMING_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    capture_cpp = dagor / "prog/tools/sceneTools/daEditorX/kolobanovEye.cpp"
+    upgraded_capture = is_upgraded_offscreen_capture(capture_cpp)
+    streaming_wait_applied = upgraded_capture or subprocess.run([*apply, "--reverse", "--check"],
+        input=OFFSCREEN_STREAMING_WAIT_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    serial_streaming_applied = streaming_wait_applied or subprocess.run([*apply, "--reverse", "--check"],
+        input=OFFSCREEN_SERIAL_STREAMING_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    offscreen_frame_clock_applied = serial_streaming_applied or subprocess.run([*apply, "--reverse", "--check"],
+        input=OFFSCREEN_FRAME_CLOCK_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    texture_pump_applied = offscreen_frame_clock_applied or subprocess.run([*apply, "--reverse", "--check"],
+        input=TEXTURE_PUMP_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     for patch in patches:
+        if upgraded_capture and patch == OFFSCREEN_STREAMING_WAIT_PATCH:
+            continue
+        if streaming_wait_applied and patch == OFFSCREEN_SERIAL_STREAMING_PATCH:
+            continue
+        if serial_streaming_applied and patch == OFFSCREEN_FRAME_CLOCK_PATCH:
+            continue
+        if (texture_pump_applied and patch == OFFSCREEN_STREAMING_PATCH) or (offscreen_frame_clock_applied and patch == TEXTURE_PUMP_PATCH):
+            continue
+        if (offscreen_streaming_applied or texture_pump_applied) and patch == SCENE_QUALITY_PATCH:
+            continue
+        if (scene_quality_applied or offscreen_streaming_applied or texture_pump_applied) and patch in (CLEAN_CAPTURE_PATCH, FRAME_JOURNAL_PATCH):
+            continue
+        if last_clip_bounds_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH, WATER_PROBE_PATCH, MULTI_COMPOSITION_PATCH, CAMERA_HEIGHT_PATCH, MAP_PLACEMENT_PATCH, WATER_FILTER_PATCH)):
+            continue
+        if water_filter_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH, WATER_PROBE_PATCH, MULTI_COMPOSITION_PATCH, CAMERA_HEIGHT_PATCH, MAP_PLACEMENT_PATCH)):
+            continue
+        if map_placement_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH, WATER_PROBE_PATCH, MULTI_COMPOSITION_PATCH, CAMERA_HEIGHT_PATCH)):
+            continue
+        if camera_height_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH, WATER_PROBE_PATCH, MULTI_COMPOSITION_PATCH)):
+            continue
+        if multi_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH, WATER_PROBE_PATCH)):
+            continue
+        if water_probe_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH, CAMERA_RETRY_PATCH)):
+            continue
+        if camera_retry_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH, PLACEMENT_PATCH)):
+            continue
+        if placement_patch_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH, CAMERA_TERRAIN_PATCH)):
+            continue
+        if terrain_patch_applied and (patch.name == "dagor-phase0.patch" or patch in (SEQUENCE_PATCH, ORBIT_PATCH)):
+            continue
+        if sequence_applied and patch.name == "dagor-phase0.patch":
+            continue
         if legacy_clip_applied and patch in (INDIRECTION_PATCH, INDIRECTION_FIX_PATCH, INDIRECTION_CPU_PATCH, DX11_TRACE_PATCH,
                                              CLIPMAP_LEGACY_PATCH):
             continue
@@ -475,6 +661,27 @@ def build(dagor, ooz=None):
             subprocess.run([*apply, "--check"], input=diff, cwd=dagor, check=True)
             subprocess.run(apply, input=diff, cwd=dagor, check=True)
 
+    apply_haze_capture_pipeline(capture_cpp, HAZE_CONVERGENCE_PATCH, HAZE_STABILITY_PATCH)
+    diff = TANK_ARTICULATION_PATCH.read_bytes().replace(b"\r\n", b"\n")
+    if subprocess.run([*apply, "--reverse", "--check"], input=diff, cwd=dagor, capture_output=True).returncode:
+        print(f"[KE] Applying {TANK_ARTICULATION_PATCH.name}", flush=True)
+        subprocess.run([*apply, "--check"], input=diff, cwd=dagor, check=True)
+        subprocess.run(apply, input=diff, cwd=dagor, check=True)
+
+
+def build(dagor, ooz=None):
+    if os.name != "nt":
+        raise ValueError("Build requires Windows x64")
+    actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=dagor, text=True).strip()
+    if actual != REV:
+        raise ValueError(f"Expected Dagor {REV}, got {actual}")
+    require_file(dagor / "prog/platform.jam")
+    require_file(dagor / "tools/dagor_cdk/commonData/guiShaders.ps40.shdump.bin")
+    jam = shutil.which("jam")
+    if not jam:
+        raise ValueError("jam.exe missing from PATH. Run Dagor make_devtools.py first.")
+    apply_dagor_patches(dagor, with_ooz=bool(ooz))
+
     logs = HERE / "build-logs"
     logs.mkdir(exist_ok=True)
     args = [jam, "-sRoot=../..", "-sPlatformArch=x86_64", "-sConfig=dev"]
@@ -494,13 +701,141 @@ def build(dagor, ooz=None):
     print(f"[KE] BUILD_OK {require_file(dagor / BIN / 'daEditor3x-dev.exe')}")
 
 
+def camera_orbit_offset(azimuth_deg, horizontal_distance=20.0, height=5.0):
+    """Offset relative to the actual world-space model center (Y is up)."""
+    a = math.radians(azimuth_deg)
+    return (round(horizontal_distance * math.sin(a), 6), height, round(horizontal_distance * math.cos(a), 6))
+
+
+def plan_camera_orbits(seed, count, distance_range, elevation_range):
+    """Sample horizontal distance and elevation relative to the model center."""
+    dmin, dmax = distance_range
+    emin, emax = elevation_range
+    if not all(math.isfinite(v) for v in (dmin, dmax, emin, emax)):
+        raise ValueError("Camera ranges must be finite")
+    if not (2 <= dmin <= dmax <= 10000):
+        raise ValueError("Horizontal camera distance must satisfy 2 <= min <= max <= 10000")
+    if not (0 <= emin <= emax <= 80):
+        raise ValueError("Camera elevation must satisfy 0 <= min <= max <= 80 degrees")
+    rng = random.Random(seed)
+    result = []
+    for _ in range(count):
+        azimuth = round(rng.uniform(-180, 180), 4)
+        distance = round(rng.uniform(dmin, dmax), 4)
+        elevation = round(rng.uniform(emin, emax), 4)
+        height = round(distance * math.tan(math.radians(elevation)), 6)
+        result.append({"azimuth_deg": azimuth, "horizontal_distance": distance,
+                       "elevation_deg": elevation,
+                       "offset": camera_orbit_offset(azimuth, distance, height)})
+    return result
+
+
+def plan_placements(seed, center, radius, attempts):
+    if not math.isfinite(radius) or not 0 <= radius <= 10000 or not 1 <= attempts <= 64:
+        raise ValueError("Placement radius must be 0–10000; attempts must be 1–64")
+    if radius == 0:
+        return [(center[0], center[1])]
+    rng = random.Random(f"placement:{seed}")
+    return [(round(center[0] + radius * math.sqrt(u) * math.cos(a), 5),
+             round(center[1] + radius * math.sqrt(u) * math.sin(a), 5))
+            for u, a in ((rng.random(), rng.uniform(-math.pi, math.pi)) for _ in range(attempts))]
+
+
+def plan_compositions(seed, center, radius, attempts, count, frames_per_position):
+    if not 1 <= frames_per_position <= 1000 or not 1 <= count <= 1000:
+        raise ValueError("Frames and frames per position must be 1–1000")
+    scene_count = (count + frames_per_position - 1) // frames_per_position
+    return [plan_placements(seed if i == 0 else f"{seed}:scene:{i}", center, radius, attempts)
+            for i in range(scene_count)]
+
+
+def plan_map_compositions(seed, margin_percent, attempts, count, frames_per_position):
+    """Sample reproducible normalized X/Z coordinates inside the landscape bounds."""
+    if not math.isfinite(margin_percent) or not 0 <= margin_percent < 50:
+        raise ValueError("Map edge margin must be between 0 and 50 percent")
+    if not 1 <= attempts <= 64 or not 1 <= count <= 1000 or not 1 <= frames_per_position <= 1000:
+        raise ValueError("Invalid placement count or attempts")
+    rng = random.Random(f"map-placement:{seed}")
+    margin = margin_percent / 100
+    return [[(round(rng.uniform(margin, 1-margin), 6), round(rng.uniform(margin, 1-margin), 6))
+             for _ in range(attempts)] for _ in range((count + frames_per_position - 1) // frames_per_position)]
+
+
+def select_camera_attempt(raw_metadata, candidates):
+    match = re.search(r"^camera_attempt:i=(\d+)\s*$", raw_metadata, re.MULTILINE)
+    if not match or int(match.group(1)) >= len(candidates):
+        raise ValueError("Missing or invalid camera_attempt in Dagor metadata; rebuild the editor")
+    index = int(match.group(1))
+    return index, candidates[index]
+
+
+def plan_articulation(seed, count, turret_range, pitch_range):
+    # Separate RNGs keep camera, placement and either joint independent.
+    for label, (low, high), (minimum, maximum) in (
+            ("turret yaw", turret_range, (-180, 180)), ("gun pitch", pitch_range, (-8, 15))):
+        if not all(math.isfinite(x) for x in (low, high)) or not minimum <= low <= high <= maximum:
+            raise ValueError(f"Invalid {label} range: expected {minimum} <= min <= max <= {maximum}")
+    if tuple(turret_range) == tuple(pitch_range) == (0, 0):
+        return []
+    if seed is None:
+        if turret_range[0] != turret_range[1] or pitch_range[0] != pitch_range[1]:
+            raise ValueError("Random turret or gun pose requires --seed")
+        return [(turret_range[0], pitch_range[0])] * count
+    turret_rng = random.Random(f"turret-yaw:{seed}")
+    pitch_rng = random.Random(f"gun-pitch:{seed}")
+    return [(round(turret_rng.uniform(*turret_range), 5), round(pitch_rng.uniform(*pitch_range), 5))
+            for _ in range(count)]
+
+
+def read_articulation(metadata, expected):
+    angles = []
+    for key, angle in zip(("turret_yaw_deg", "gun_pitch_deg"), expected):
+        match = re.search(rf"^{key}:r=([^\r\n]+)", metadata, re.MULTILINE)
+        if not match or not math.isclose(float(match.group(1)), angle, rel_tol=1e-5, abs_tol=1e-4):
+            raise ValueError(f"Missing or mismatched {key} in Dagor metadata; rebuild the editor")
+        angles.append(float(match.group(1)))
+    return dict(zip(("turret_yaw_deg", "gun_pitch_deg"), angles))
+
+
 def frame(args, game, cdk):
     if os.name != "nt":
         raise ValueError("DX11 capture requires Windows x64")
     if not (64 <= args.width <= 4096 and 64 <= args.height <= 4096 and 15 <= args.fov <= 100):
         raise ValueError("Frame sides must be 64–4096 pixels and horizontal FOV 15–100 degrees")
+    if not 1 <= args.count <= 1000 or (args.count > 1 and args.seed is None):
+        raise ValueError("Sequence count must be 1–1000 and requires --seed for multiple frames")
+    if args.count > 1:
+        plan_camera_orbits(args.seed, 0, args.camera_distance_range, args.camera_elevation_range)
+    if args.camera_height_range:
+        low, high = args.camera_height_range
+        if not all(math.isfinite(x) for x in (low, high)) or not 0 <= low <= high <= 10000:
+            raise ValueError("Camera height above ground range must be between 0 and 10000")
+    if not 8 <= args.min_warmup_renders <= 64:
+        raise ValueError("--min-warmup-renders must be between 8 and 64")
+    if not 1 <= args.frames_per_position <= 1000:
+        raise ValueError("Frames per position must be 1–1000")
+    if not 1 <= args.camera_attempts <= 64:
+        raise ValueError("Camera attempts must be 1–64")
+    if args.count > 1 and args.eye:
+        raise ValueError("--eye is for a single frame; sequences choose camera offsets around the tank")
+    if not math.isfinite(args.camera_clearance) or not 0 <= args.camera_clearance <= 100:
+        raise ValueError("Camera clearance must be finite and between 0 and 100")
+    if not math.isfinite(args.minimum_ground_y) or abs(args.minimum_ground_y) > 100000:
+        raise ValueError("Minimum ground height must be finite and within ±100000")
+    if not math.isfinite(args.max_height_range) or not 0 <= args.max_height_range <= 100:
+        raise ValueError("Maximum terrain height range must be 0–100")
+    if args.placement_mode == "whole_map":
+        if args.seed is None:
+            raise ValueError("Whole-map search requires --seed")
+        candidate_groups = plan_map_compositions(args.seed, args.map_margin_percent, args.placement_attempts, args.count, args.frames_per_position)
+    else:
+        candidate_groups = plan_compositions(args.seed, args.tank_xz, args.placement_radius,
+            args.placement_attempts, args.count, args.frames_per_position)
+    if args.placement_radius > 0 and args.seed is None:
+        raise ValueError("Placement search requires --seed")
     if args.timeout <= 0:
         raise ValueError("Timeout must be positive")
+    poses = plan_articulation(args.seed, args.count, args.turret_yaw_range, args.gun_pitch_range)
     out = args.out.resolve()
     if out.is_relative_to(game) or out.is_relative_to(cdk) or args.dagor.is_relative_to(game) or args.dagor.is_relative_to(cdk):
         raise ValueError("Keep Dagor and the output directory outside War Thunder")
@@ -518,6 +853,8 @@ def frame(args, game, cdk):
     run_logged([dump, game / GRP, "-dumpR"], grp_log, out, 60)
     resources = parse_resources(grp_log.read_text(encoding="utf-8", errors="replace"))
     model, skeleton = choose_resources(resources, GRP.stem, args.model, args.skeleton)
+    if poses and (model.casefold() != "pzkpfw_vi_ausf_h1_tiger" or skeleton.casefold() != model.casefold() + "_skeleton"):
+        raise ValueError("Turret and gun articulation currently require Tiger H1 and its matching skeleton")
     print(f"[KE] DynModel={model}, GeomNodeTree={skeleton or '(unresolved)'}", flush=True)
 
     project = out / "probe.level.blk"
@@ -541,11 +878,58 @@ def frame(args, game, cdk):
         f'width:i={args.width}',
         f'height:i={args.height}',
         f'fov:r={numbers([args.fov])}',
+        f'camera_clearance:r={numbers([args.camera_clearance])}',
+        f'max_height_range:r={numbers([args.max_height_range])}',
+        f'minimum_ground_y:r={numbers([args.minimum_ground_y])}',
+        f'candidate_count:i={len(candidate_groups[0])}',
+        f'placement_whole_map:b={"yes" if args.placement_mode == "whole_map" else "no"}',
+        f'frames_per_position:i={args.frames_per_position}',
+        f'min_warmup_renders:i={args.min_warmup_renders}',
+        f'wait_sky_convergence:b={"yes" if args.wait_sky_convergence else "no"}',
+        f'wait_frame_stability:b={"yes" if args.wait_frame_stability else "no"}',
         f'yaw:r={numbers([args.yaw])}',
         f'tank:p3={numbers((args.tank_xz[0], args.ground_offset, args.tank_xz[1]))}',
     ]
+    if poses:
+        entries.append("articulate_tank:b=yes")
+        entries.extend(f"articulation_{i}:p2={numbers(angles)}" for i, angles in enumerate(poses))
+    for scene_index, candidates in enumerate(candidate_groups):
+        for i, (x, z) in enumerate(candidates):
+            entries.append(f'candidate_{scene_index}_{i}:p3={numbers((x, args.ground_offset, z))}')
+    if args.count > 1:
+        images = out / "images"
+        images.mkdir()
+        flat_orbits = plan_camera_orbits(args.seed, args.count * args.camera_attempts, args.camera_distance_range, args.camera_elevation_range)
+        if args.camera_height_range:
+            hrng = random.Random(f"camera-ground-height:{args.seed}")
+            for camera in flat_orbits:
+                camera["height_above_ground"] = round(hrng.uniform(*args.camera_height_range), 5)
+        orbit_plan = [flat_orbits[i * args.camera_attempts:(i + 1) * args.camera_attempts] for i in range(args.count)]
+        (out / "plan.json").write_text(json.dumps({"schema_version": 3, "seed": args.seed,
+            "tank_yaw_deg": args.yaw, "placement_mode": args.placement_mode, "map_margin_percent": args.map_margin_percent if args.placement_mode == "whole_map" else None, "placement_candidate_coordinates": "normalized_landscape_bbox" if args.placement_mode == "whole_map" else "world_xz", "placement_candidates_xz": candidate_groups, "frames_per_position": args.frames_per_position, "max_height_range": args.max_height_range,
+            "camera_distance_range": args.camera_distance_range, "camera_elevation_range": args.camera_elevation_range,
+            "camera_attempts": args.camera_attempts, "camera_height_range": args.camera_height_range, "cameras": orbit_plan,
+            **({"tank_articulation_deg": poses} if poses else {})}, indent=2) + "\n", encoding="utf-8")
+        journal = out / JOURNAL
+        entries.extend((f"frame_count:i={args.count}", f"camera_attempts:i={args.camera_attempts}",
+                        f'metadata_journal:t="{dagor_path(journal)}"'))
+        for i, camera_candidates in enumerate(orbit_plan):
+            for j, camera in enumerate(camera_candidates):
+                entries.append(f"camera_offset_{i}_{j}:p3={numbers(camera['offset'])}")
+                if "height_above_ground" in camera:
+                    entries.append(f"camera_height_{i}_{j}:r={numbers([camera['height_above_ground']])}")
+            entries.append(f'output_{i}:t="{dagor_path(images / f"{i:06d}.png")}"')
+    if args.scan_buildings:
+        entries.append(f'building_scan:t="{dagor_path(out / "scene-instances.tsv")}"')
     if args.eye:
         entries.append(f'eye:p3={numbers(args.eye)}')
+    render_debug = args.render_debug or args.indirection == "cpu" or args.dx11_trace
+    if render_debug:
+        debug_dir = out / "render-debug"
+        for i in range(args.count):
+            frame_dir = debug_dir / f"{i:06d}"
+            frame_dir.mkdir(parents=True)
+            entries.append(f'render_debug_{i}:t="{dagor_path(frame_dir)}"')
     config.write_text("\n".join(entries) + "\n", encoding="ascii")
     batch = out / "probe.dcmd"
     batch.write_text(f"wait.frame 8\nkolobanoveye.frame {dagor_path(config)}\n" + ("" if args.keep_open else "exit no\n"), encoding="ascii")
@@ -566,6 +950,17 @@ def frame(args, game, cdk):
                f"-rootdir:{dagor_path(out)}", f"-addpath:{dagor_path(game)}", f"-addpath:{dagor_path(cdk)}",
                "-enable:Scene view", "-disable:Landscape", r"-exclude_dll_re:heightmapLand-aces-dev\.dll$",
                f"-ws:{workspace_name}", project, batch]
+    map_capture = None
+    if args.capture_last_clip:
+        map_image = out / "maps" / f"{LEVEL.stem}.png"
+        map_cache = (out.parent / ".ke-map-cache" / map_image.name).resolve()
+        if map_cache.is_relative_to(game) or map_cache.is_relative_to(cdk):
+            raise ValueError("Keep the maps cache outside War Thunder")
+        map_image.parent.mkdir()
+        if not map_cache.is_file():
+            map_cache.parent.mkdir(exist_ok=True)
+            map_capture = out / "terrain-last-clip.pending.png"
+            command.insert(-2, f"-ke-last-clip-output:{dagor_path(map_capture)}")
     if args.keep_open:
         command.remove("-quiet")
         print("[KE] Editor remains open. Close its window to finalize the frame and report.", flush=True)
@@ -574,16 +969,11 @@ def frame(args, game, cdk):
     if args.clipmap_feedback == "software":
         command.insert(-2, "-ke-clipmap-software")
     if args.indirection == "cpu":
-        args.render_debug = True
         command.insert(-2, "-ke-indirection-cpu")
     if args.dx11_trace:
-        args.render_debug = True
         command.insert(-2, "-ke-dx11-trace")
-    if args.render_debug:
-        debug_dir = out / "render-debug"
-        debug_path = dagor_path(debug_dir)
-        debug_dir.mkdir()
-        command.insert(-2, f"-ke-render-debug:{debug_path}")
+    if render_debug:
+        command.insert(-2, f"-ke-render-debug:{dagor_path(debug_dir)}")
     if args.renderdoc_cli:
         if not args.keep_open:
             raise ValueError("--renderdoc-cli requires --keep-open")
@@ -594,25 +984,102 @@ def frame(args, game, cdk):
         run_logged(command, out / "host-stdout.log", out, None if args.keep_open else args.timeout)
     except (ValueError, subprocess.TimeoutExpired) as exc:
         raise ValueError(editor_failure(out, str(exc))) from exc
+    if map_capture is not None:
+        if map_capture.is_file() and map_capture.stat().st_size >= 45:
+            with map_capture.open("rb") as image:
+                signature = image.read(8)
+                image.seek(-12, os.SEEK_END)
+                trailer = image.read(12)
+            if signature != b"\x89PNG\r\n\x1a\n" or trailer != b"\x00\x00\x00\x00IEND\xaeB`\x82":
+                print(f"[KE] Map capture incomplete: {map_capture}", flush=True)
+                map_capture = None
+        else:
+            print("[KE] Map capture missing; check Dagor build and RENDER_DEBUG terrain_last_clip in the engine log.", flush=True)
+            map_capture = None
+        if map_capture is not None:
+            try:
+                # On Windows rename publishes the completed PNG without overwriting a concurrent capture.
+                map_capture.rename(map_cache)
+            except FileExistsError:
+                map_capture.unlink()
+    if args.capture_last_clip and map_cache.is_file():
+        try:
+            os.link(map_cache, map_image)
+        except OSError:
+            shutil.copyfile(map_cache, map_image)
+        print(f"[KE] Map available at {map_image}", flush=True)
     error_log = out / "probe.dcmd.err"
     if error_log.is_file():
-        raise ValueError(editor_failure(out, f"Dagor reported errors. See {error_log}."))
+        lines = error_log.read_text(encoding="utf-8", errors="replace").splitlines()
+        failure = next((line.strip() for line in reversed(lines) if "[KE] FAIL " in line), "Dagor reported errors.")
+        streaming = next((line.strip() for line in reversed(lines) if "[KE] STREAMING_PUMP " in line), "")
+        if "FAIL STREAMING:" in failure:
+            serial = next((line.strip() for line in reversed(lines) if "[KE] STREAMING_SERIAL " in line), "")
+            failure = "\n".join(line for line in (failure, serial, streaming) if line)
+        raise ValueError(editor_failure(out, f"{failure}\nSee {error_log}."))
     log_path = out / "probe.dcmd.log"
     if args.keep_open and not log_path.is_file():
         debug_logs = sorted((out / ".logs").glob("daEditor3x-dev.exe-*/debug"), key=lambda p: p.stat().st_mtime)
         log_path = debug_logs[-1] if debug_logs else log_path
     log = require_file(log_path).read_text(encoding="utf-8", errors="replace")
-    for marker in ("MAP_OK", "MODEL_OK", "CAMERA_OK", "FRAME_OK"):
+    if args.wait_frame_stability and len(re.findall(
+            r"\[KE\] FRAME_STABILITY_FINAL enabled=1 stable=1\b", log)) != args.count:
+        raise ValueError("Missing frame stability confirmation; check the capture log and rebuild Dagor")
+    if render_debug and log.count("[KE] RENDER_DEBUG_FRAME ") != args.count:
+        raise ValueError("Missing per-frame render diagnostics; rebuild Dagor and check the capture log")
+    if "[KE] WATER_GROUND_FILTER " not in log:
+        raise ValueError("Water ground filter missing: rebuild Dagor with current code")
+    if args.placement_mode == "whole_map" and "[KE] MAP_BOUNDS " not in log:
+        raise ValueError("Whole-map mode requires the updated Dagor build; rebuild the editor")
+    for marker in ("MAP_OK", "MODEL_OK", "PLACEMENT_OK", "WATER_PROXY", "CAMERA_TERRAIN", "SUPPORT_HEIGHTS", "CAMERA_OK", "FRAME_OK"):
         if f"[KE] {marker}" not in log:
             raise ValueError(f"{marker} missing from probe.dcmd.log")
+    if args.scan_buildings:
+        from ke_urban import write_report
+        report = write_report(require_file(out / "scene-instances.tsv"), out / "urban-zones.json")
+        print(f"[KE] Urban candidates: {len(report['zones'])}; {out / 'urban-zones.json'}", flush=True)
+    if args.count > 1:
+        if f"[KE] SEQUENCE_OK frames={args.count}" not in log or log.count("[KE] FRAME_OK ") != args.count or log.count("[KE] ORBIT_FRAME ") != args.count:
+            raise ValueError("Sequence incomplete or old editor build: check SEQUENCE_OK and FRAME_OK in logs")
+        if not journal.is_file():
+            raise ValueError("Frame journal missing; rebuild Dagor with current code")
+        metadata = read_journal(journal)
+        if set(metadata) != set(range(args.count)):
+            raise ValueError("Frame journal does not contain all frames")
+        records = []
+        for i, camera_candidates in enumerate(orbit_plan):
+            image_path = images / f"{i:06d}.png"
+            verify_png(image_path, args.width, args.height)
+            raw_metadata = metadata[i]
+            annotation = parse_annotation(raw_metadata)
+            camera_attempt, camera = select_camera_attempt(raw_metadata, camera_candidates)
+            composition_match = re.search(r"^composition_index:i=(\d+)\s*$", raw_metadata, re.MULTILINE)
+            expected_composition = i // args.frames_per_position
+            if not composition_match or int(composition_match.group(1)) != expected_composition:
+                raise ValueError("Missing or invalid composition_index in Dagor metadata; rebuild the editor")
+            records.append({"seed": args.seed, "frame_index": i, "composition_index": expected_composition, "tank_yaw_deg": args.yaw,
+                "camera_azimuth_deg": camera["azimuth_deg"], "camera_horizontal_distance": camera["horizontal_distance"],
+                "planned_camera_elevation_deg": camera["elevation_deg"] if args.camera_height_range is None else None,
+                "planned_camera_offset": camera["offset"], "planned_height_above_ground": camera.get("height_above_ground"), "camera_attempt": camera_attempt,
+                "image": f"images/{i:06d}.png", "annotation": annotation["annotations"][0],
+                "dagor_frame_metadata_blk": raw_metadata, **(read_articulation(raw_metadata, poses[i]) if poses else {})})
+        manifest_pending = out / "metadata.jsonl.tmp"
+        manifest_pending.write_text("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in records), encoding="utf-8")
+        manifest_pending.replace(out / "metadata.jsonl")
+        journal.unlink()
+        print(f"[KE] SEQUENCE_WRITTEN {len(records)} frames in {out}")
+        return
     verify_png(png, args.width, args.height)
+    if poses:
+        read_articulation(require_file(meta).read_text(encoding="utf-8"), poses[0])
+    write_annotation(require_file(meta), out / "annotation.json")
     require_file(meta).rename(out / "frame.blk")
     final = png.rename(out / "frame.png")
     print(f"[KE] FRAME_WRITTEN {final}  SHA256={hashlib.sha256(final.read_bytes()).hexdigest()}")
-    if args.render_debug:
-        print(f"[KE] Render diagnostics: {debug_dir}")
-        for name in ("terrain-last-clip.png", "static-albedo.png", "static-depth-mask.png"):
-            if not (debug_dir / name).is_file():
+    if render_debug:
+        print(f"[KE] Render diagnostics: {debug_dir / '000000'}")
+        for name in ("static-albedo.png", "static-depth-mask.png"):
+            if not (debug_dir / "000000" / name).is_file():
                 print(f"[KE] Diagnostic image missing: {name}. See RENDER_DEBUG in .logs.")
     print("[KE] Visual verification is still required.")
 
@@ -639,13 +1106,41 @@ def main():
     frame_cmd.add_argument("--ground-offset", type=float, default=0.05)
     frame_cmd.add_argument("--eye", nargs=3, type=float)
     frame_cmd.add_argument("--yaw", type=float, default=20)
+    frame_cmd.add_argument("--count", type=int, default=1, help="Experimental single-process sequence count")
+    frame_cmd.add_argument("--seed", type=int, help="Seed for the sequence camera angles and distances")
     frame_cmd.add_argument("--fov", type=float, default=55)
+    frame_cmd.add_argument("--frames-per-position", type=int, default=6, help="Number of camera views per selected tank position")
+    frame_cmd.add_argument("--camera-height-range", nargs=2, type=float, metavar=("MIN", "MAX"), help="Actual camera height above local heightmap for sequences")
+    frame_cmd.add_argument("--camera-attempts", type=int, default=8, help="Maximum camera candidates per frame")
+    frame_cmd.add_argument("--placement-mode", choices=("around_point", "whole_map"), default="around_point")
+    frame_cmd.add_argument("--map-margin-percent", type=float, default=15.0, help="Margin on each landscape edge in percent, 0 <= value < 50")
+    frame_cmd.add_argument("--placement-radius", type=float, default=0, help="Search radius around tank X/Z; 0 keeps fixed position")
+    frame_cmd.add_argument("--placement-attempts", type=int, default=24, help="Up to 64 heightmap candidates")
+    frame_cmd.add_argument("--minimum-ground-y", type=float, default=0.5, help="Reject terrain below this world Y (Normandy sea-level proxy)")
+    frame_cmd.add_argument("--max-height-range", type=float, default=0.5, help="Allowed heightmap range across AABB corners")
+    frame_cmd.add_argument("--camera-clearance", type=float, default=0.5, help="Minimum height above heightmap; not obstacle checking")
+    frame_cmd.add_argument("--camera-distance-range", nargs=2, type=float, default=(18, 35), metavar=("MIN", "MAX"),
+                           help="Horizontal distance from tank center for sequences (default: 18 35)")
+    frame_cmd.add_argument("--camera-elevation-range", nargs=2, type=float, default=(10, 25), metavar=("MIN", "MAX"),
+                           help="Elevation in degrees above tank center for sequences (default: 10 25)")
     frame_cmd.add_argument("--width", type=int, default=1280)
     frame_cmd.add_argument("--height", type=int, default=720)
     frame_cmd.add_argument("--renderdoc-cli", type=Path, help="renderdoccmd.exe; manual GPU capture requires --keep-open")
+    frame_cmd.add_argument("--capture-last-clip", action="store_true", help="Save the overview in the run maps directory and reuse cached pixels")
+    frame_cmd.add_argument("--scan-buildings", action="store_true", help="Report candidate urban zones from loaded scene instances")
     frame_cmd.add_argument("--keep-open", action="store_true", help="Keep editor open until window is closed; no process timeout")
     frame_cmd.add_argument("--timeout", type=int, default=360)
     frame_cmd.add_argument("--dx11-trace", action="store_true", help="Log native DX11 draw state for terrain and clipmap updates")
+    frame_cmd.add_argument("--turret-yaw-range", type=float, nargs=2, default=(0, 0), metavar=("MIN", "MAX"),
+                           help="Tiger H1 turret yaw relative to hull, degrees")
+    frame_cmd.add_argument("--gun-pitch-range", type=float, nargs=2, default=(0, 0), metavar=("MIN", "MAX"),
+                           help="Tiger H1 gun pitch relative to neutral pose, positive raises muzzle")
+    frame_cmd.add_argument("--min-warmup-renders", type=int, default=8,
+                           help="Minimum offscreen renders before checking frame readiness (8–64)")
+    frame_cmd.add_argument("--wait-sky-convergence", action="store_true",
+                           help="Require sky lighting convergence even without adaptive RGB sampling")
+    frame_cmd.add_argument("--wait-frame-stability", action=argparse.BooleanOptionalAction, default=True,
+                           help="Wait for stable RGB samples before saving (enabled by default)")
     frame_cmd.add_argument("--render-debug", action="store_true", help="Export terrain and static G-buffer diagnostics")
     frame_cmd.add_argument("--clipmap-abi", choices=("legacy-color", "native-int"), default="legacy-color",
                            help="Clipmap table encoding required by the loaded CDK shaders")

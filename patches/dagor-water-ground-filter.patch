@@ -1,0 +1,36 @@
+diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+--- a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
++++ b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+@@ -195,6 +195,10 @@
+   const bool waterPlaneAvailable = scene.getKolobanovEyeWaterPlane(waterPlane) && std::isfinite(waterPlane);
+   console->addMessage(ILogWriter::NOTE, "[KE] WATER_PROXY available=%d level=%.3f method=scene_water_plane_unverified",
+     waterPlaneAvailable ? 1 : 0, waterPlane);
++  const float minimumGroundY = config.getReal("minimum_ground_y", 0.5f);
++  if (!std::isfinite(minimumGroundY))
++    return fail("CONFIG", "Invalid minimum ground height");
++  console->addMessage(ILogWriter::NOTE, "[KE] WATER_GROUND_FILTER minimum_y=%.3f method=heightmap_threshold", minimumGroundY);
+   bool placementFound = false;
+   int selectedCandidate = -1;
+   const float placeYaw = defaultYaw * DEG_TO_RAD;
+@@ -240,6 +244,11 @@
+     if (samples != 4 || hmax - hmin > maxHeightRange)
+     {
+       console->addMessage(ILogWriter::NOTE, "[KE] PLACEMENT_REJECT attempt=%d samples=%d range=%.3f", attempt, samples, hmax - hmin);
++      continue;
++    }
++    if (h < minimumGroundY || hmin < minimumGroundY)
++    {
++      console->addMessage(ILogWriter::NOTE, "[KE] PLACEMENT_REJECT attempt=%d reason=below_water_threshold center=%.3f min=%.3f threshold=%.3f", attempt, h, hmin, minimumGroundY);
+       continue;
+     }
+     requested = candidate;
+@@ -517,7 +526,8 @@
+   result.setInt("placement_candidate", selectedCandidate);
+   result.setStr("placement_check", "heightmap_only_water_and_obstacles_unknown");
+   result.setStr("water_proxy_method", "scene_water_plane_unverified");
+-  result.setStr("water_check", "unknown");
++  result.setStr("water_check", "heightmap_y_threshold_only");
++  result.setReal("minimum_ground_y", minimumGroundY);
+   if (waterPlaneAvailable)
+   {
+     result.setReal("water_plane_y", waterPlane);

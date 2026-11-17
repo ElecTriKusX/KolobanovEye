@@ -1,0 +1,39 @@
+diff --git a/prog/tools/sceneTools/daEditorX/binSceneView/strmlevel.h b/prog/tools/sceneTools/daEditorX/binSceneView/strmlevel.h
+--- a/prog/tools/sceneTools/daEditorX/binSceneView/strmlevel.h
++++ b/prog/tools/sceneTools/daEditorX/binSceneView/strmlevel.h
+@@ -97,6 +97,7 @@
+   bool getHeightmapAtPoint(float x, float z, float &out_height, Point3 *out_normal);
+   bool isInited() { return intited; }
+   bool hasKolobanovEyeTerrain() const { return bindumpHandle && lmeshMgr && lmeshRenderer; }
++  bool getKolobanovEyeWaterPlane(float &level) const { if (!hasWater) return false; level = waterLevel; return true; }
+ 
+   LandMeshManager *lmeshMgr;
+ 
+diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+--- a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
++++ b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+@@ -177,6 +177,10 @@
+   const float maxHeightRange = config.getReal("max_height_range", 0.5f);
+   if (candidateCount < 1 || candidateCount > 64 || !std::isfinite(maxHeightRange) || maxHeightRange < 0.f || maxHeightRange > 100.f)
+     return fail("CONFIG", "Invalid placement search settings");
++  float waterPlane = 0.f;
++  const bool waterPlaneAvailable = scene.getKolobanovEyeWaterPlane(waterPlane) && std::isfinite(waterPlane);
++  console->addMessage(ILogWriter::NOTE, "[KE] WATER_PROXY available=%d level=%.3f method=scene_water_plane_unverified",
++    waterPlaneAvailable ? 1 : 0, waterPlane);
+   bool placementFound = false;
+   int selectedCandidate = -1;
+   const float placeYaw = defaultYaw * DEG_TO_RAD;
+@@ -478,6 +482,13 @@
+   result.setReal("terrain_y", ground);
+   result.setInt("placement_candidate", selectedCandidate);
+   result.setStr("placement_check", "heightmap_only_water_and_obstacles_unknown");
++  result.setStr("water_proxy_method", "scene_water_plane_unverified");
++  result.setStr("water_check", "unknown");
++  if (waterPlaneAvailable)
++  {
++    result.setReal("water_plane_y", waterPlane);
++    result.setReal("terrain_above_water_plane", ground - waterPlane);
++  }
+   result.setInt("width", width);
+   result.setInt("height", height);
+   result.setInt("lod", lod);

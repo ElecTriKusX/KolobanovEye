@@ -1,0 +1,23 @@
+diff --git a/prog/tools/sceneTools/daEditorX/binSceneView/strmLevel.cpp b/prog/tools/sceneTools/daEditorX/binSceneView/strmLevel.cpp
+--- a/prog/tools/sceneTools/daEditorX/binSceneView/strmLevel.cpp
++++ b/prog/tools/sceneTools/daEditorX/binSceneView/strmLevel.cpp
+@@ -1056,7 +1056,7 @@
+   lmeshRenderer->setLMeshRenderingMode(oldm);
+   ShaderGlobal::enableAutoBlockChange(true);
+ 
+-  if (const char *dir = dgs_get_argv("ke-render-debug"); dir && *dir)
++  if (const char *path = dgs_get_argv("ke-last-clip-output"); path && *path && !dd_file_exist(path))
+   {
+     Texture *clip = last_clip.getTex2D();
+     TextureInfo info;
+@@ -1065,8 +1065,8 @@
+     {
+       const auto pixels = lock_texture<const TexPixel32>(clip, 0, TEXLOCK_READ);
+       if (pixels)
+-        saved = save_png32(String(0, "%s/terrain-last-clip.png", dir), reinterpret_cast<const TexPixel32 *>(pixels.get()),
+-          pixels.getWidthInElems(), pixels.getHeightInElems(), pixels.getByteStride(), nullptr, 0, false);
++        saved = save_png32(path, reinterpret_cast<const TexPixel32 *>(pixels.get()), pixels.getWidthInElems(),
++          pixels.getHeightInElems(), pixels.getByteStride(), nullptr, 0, false);
+     }
+     debug("[KE] RENDER_DEBUG terrain_last_clip=%d landscape_plugin=%d grass_color_tex=%d", saved,
+       DAGORED2->getPluginByName("heightmapLand") != nullptr,

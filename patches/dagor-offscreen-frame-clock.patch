@@ -1,0 +1,65 @@
+diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+--- a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
++++ b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+@@ -24,8 +24,10 @@
+ #include <memory/dag_mem.h>
+ #include <rendInst/rendInstAccess.h>
+ #include <rendInst/rendInstCollision.h>
++#include <osApiWrappers/dag_cpuJobs.h>
+ #include <osApiWrappers/dag_direct.h>
+ #include <osApiWrappers/dag_miscApi.h>
+ #include <shaders/dag_dynSceneRes.h>
+ #include <shaders/dag_shaders.h>
++#include <startup/dag_globalSettings.h>
+ #include <util/dag_delayedAction.h>
+@@ -39,6 +41,7 @@
+ namespace texmgr_internal
+ {
+ void do_per_frame_updates_while_waiting_on_main_thread();
++int get_pending_tex_prio(int prio);
+ }
+ 
+ void ke_set_render_debug_dir(const char *dir);
+@@ -496,27 +499,37 @@
+     plugin->setKolobanovEyeModel(&model);
+     frame = captureFrame(nullptr);
+     if (!frame)
+       return fail("RENDER", "Offscreen texture creation or render failed");
++    // The viewport renderer advances Dagor's frame counter after drawing. Screenshots do not.
++    dagor_frame_no_increment();
++    cpujobs::release_done_jobs();
+     const int pendingBefore = get_managed_textures_streaming_pending_count();
+     const bool loadOnDemand = is_managed_textures_streaming_load_on_demand();
+     if (!loadOnDemand)
+       ddsx::tex_pack2_perform_delayed_data_loading();
+     texmgr_internal::do_per_frame_updates_while_waiting_on_main_thread();
+     const int pendingAfter = get_managed_textures_streaming_pending_count();
+     const bool mapLoading = scene.getSsm() && scene.getSsm()->isLoading();
+     const bool skyReady = !skies || skies->areCloudTexturesReady();
+-    if (frames == 0 || frames == 47)
+-      console->addMessage(ILogWriter::NOTE, "[KE] STREAMING_PUMP index=%d pass=%d pending_before=%d pending_after=%d on_demand=%d map_loading=%d sky_ready=%d",
+-        frameIndex, frames + 1, pendingBefore, pendingAfter, int(loadOnDemand), int(mapLoading), int(skyReady));
++    const bool ready = frames >= 7 && !mapLoading && pendingBefore == 0 && pendingAfter == 0 && skyReady;
++    if (frames == 0 || frames == 47 || ready)
++    {
++      const int hqPriority = ddsx::hq_tex_priority;
++      console->addMessage(ILogWriter::NOTE,
++        "[KE] STREAMING_PUMP index=%d pass=%d engine_frame=%u pending_before=%d pending_after=%d "
++        "pending_base=%d pending_hq=%d hq_prio=%d on_demand=%d map_loading=%d sky_ready=%d",
++        frameIndex, frames + 1, dagor_frame_no(), pendingBefore, pendingAfter, texmgr_internal::get_pending_tex_prio(0),
++        hqPriority ? texmgr_internal::get_pending_tex_prio(hqPriority) : 0, hqPriority, int(loadOnDemand), int(mapLoading), int(skyReady));
++    }
+-    if (frames >= 7 && !mapLoading && pendingBefore == 0 && pendingAfter == 0 && skyReady)
++    if (ready)
+       break;
+     sleep_msec(20);
+   }
+   console->addMessage(ILogWriter::NOTE, "[KE] WARMUP passes=%d pending_textures=%d settled=%d", frames < 48 ? frames + 1 : frames,
+     get_managed_textures_streaming_pending_count(), frames < 48 ? 1 : 0);
+   console->addMessage(ILogWriter::NOTE, "[KE] ENV_LIGHT_READY %d", renderer->isEnvironmentLightingReady() ? 1 : 0);
+   if (frames == 48)
+-    return fail("STREAMING", "Map or sky did not settle within 48 warm-up renders");
++    return fail("STREAMING", "Scene, textures or sky did not settle within 48 warm-up renders");
+   char renderDebugKey[32];
+   snprintf(renderDebugKey, sizeof(renderDebugKey), "render_debug_%d", frameIndex);
+   const char *renderDebugDir = config.getStr(renderDebugKey, "");
