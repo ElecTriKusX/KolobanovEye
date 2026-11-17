@@ -15,7 +15,7 @@ import tempfile
 
 from ke_annotation import parse_annotation, write_annotation
 from ke_frame_journal import JOURNAL, read_journal
-from ke_maps import MAP_ID
+from ke_maps import MAP_ID, parse_tank_bounds_log
 
 REV = "9639942de5a8e5b01d91977f60ed82cda22d5f41"
 HERE = Path(__file__).resolve().parent
@@ -1049,6 +1049,12 @@ def frame(args, game, cdk):
         raise ValueError("Water ground filter missing: rebuild Dagor with current code")
     if args.placement_mode in ("whole_map", "tank_map") and "[KE] MAP_BOUNDS " not in log:
         raise ValueError("Whole-map mode requires the updated Dagor build; rebuild the editor")
+    bounds_report = parse_tank_bounds_log(log, map_id)
+    (out / "tank-map-bounds.json").write_text(
+        json.dumps(bounds_report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"[KE] TANK_MAP {bounds_report['status']}: {out / 'tank-map-bounds.json'}", flush=True)
+    if args.placement_mode == "tank_map" and bounds_report["status"] != "available":
+        raise ValueError("Tank placement requires valid tankMapCoord0/1")
     for marker in ("MAP_OK", "MODEL_OK", "PLACEMENT_OK", "WATER_PROXY", "CAMERA_TERRAIN", "SUPPORT_HEIGHTS", "CAMERA_OK", "FRAME_OK"):
         if f"[KE] {marker}" not in log:
             raise ValueError(f"{marker} missing from probe.dcmd.log")
