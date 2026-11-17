@@ -12,7 +12,7 @@ from ke_maps import MAP_ID
 DEFAULTS = {
     'dagor': r'D:\Projects\DagorEngine', 'game': r'D:\Games\WarThunder',
     'output': r'D:\Projects\ke-generate-01', 'count': 6, 'seed': 42,
-    'map_id': 'levels/avg_normandy.bin',
+    'map_id': 'levels/avg_normandy.bin', 'map_ids': [], 'capture_tank_map': True, 'tank_map_resolution': 1024,
     'width': 1280, 'height': 720, 'fov': 55.0, 'tank_x': 0.0, 'tank_z': 0.0,
     'tank_yaw': 20.0, 'ground_offset': 0.05, 'minimum_ground_y': 0.5, 'camera_clearance': 0.5,
     'placement_mode': 'whole_map', 'map_margin_percent': 15.0, 'placement_radius': 0.0, 'placement_attempts': 24, 'frames_per_position': 6, 'max_height_range': 0.5, 'camera_attempts': 8,
@@ -21,7 +21,7 @@ DEFAULTS = {
     'min_warmup_renders': 8, 'wait_sky_convergence': False, 'wait_frame_stability': True,
     'keep_open': False, 'render_debug': False, 'scan_buildings': False, 'capture_last_clip': False, 'clipmap_feedback': 'software', 'timeout': 360,
 }
-INTS = {'count', 'seed', 'width', 'height', 'timeout', 'placement_attempts', 'camera_attempts', 'frames_per_position', 'min_warmup_renders'}
+INTS = {'count', 'seed', 'width', 'height', 'timeout', 'placement_attempts', 'camera_attempts', 'frames_per_position', 'min_warmup_renders', 'tank_map_resolution'}
 FLOATS = {'turret_yaw_min', 'turret_yaw_max', 'gun_pitch_min', 'gun_pitch_max', 'fov', 'tank_x', 'tank_z', 'tank_yaw', 'ground_offset', 'camera_clearance',
           'minimum_ground_y', 'distance_min', 'distance_max', 'elevation_min', 'elevation_max', 'placement_radius', 'max_height_range', 'camera_height_min', 'camera_height_max', 'map_margin_percent'}
 
@@ -42,6 +42,14 @@ def validate_config(raw):
     if unknown:
         raise ValueError('Неизвестные параметры: ' + ', '.join(sorted(unknown)))
     c = {**DEFAULTS, **raw}
+    if not isinstance(c['map_ids'], list) or len(c['map_ids']) != len(set(str(x).casefold() for x in c['map_ids'])):
+        raise ValueError('map_ids: требуется список уникальных карт')
+    if any(not isinstance(x, str) or MAP_ID.fullmatch(x) is None for x in c['map_ids']):
+        raise ValueError('map_ids: неправильный идентификатор карты')
+    if not isinstance(c['capture_tank_map'], bool):
+        raise ValueError('capture_tank_map: требуется true или false')
+    if not 256 <= c['tank_map_resolution'] <= 4096 or c['tank_map_resolution'] & (c['tank_map_resolution'] - 1):
+        raise ValueError('tank_map_resolution: степень двойки от 256 до 4096')
     if not isinstance(c['map_id'], str) or MAP_ID.fullmatch(c['map_id']) is None:
         raise ValueError('map_id: требуется levels/avg_имя.bin')
     for key in ('dagor', 'game', 'output'):
@@ -58,8 +66,8 @@ def validate_config(raw):
         raise ValueError('min_warmup_renders: требуется целое число 8–64')
     if not 1 <= c['frames_per_position'] <= 1000:
         raise ValueError('Кадров на позицию: 1–1000')
-    if not 2 <= c['count'] <= 1000 or not 64 <= c['width'] <= 4096 or not 64 <= c['height'] <= 4096:
-        raise ValueError('Количество кадров: 2–1000; стороны изображения: 64–4096')
+    if not 1 <= c['count'] <= 1000 or not 64 <= c['width'] <= 4096 or not 64 <= c['height'] <= 4096:
+        raise ValueError('Количество кадров: 1–1000; стороны изображения: 64–4096')
     if not 15 <= c['fov'] <= 100 or not 0 <= c['camera_clearance'] <= 100 or c['timeout'] <= 0:
         raise ValueError('FOV: 15–100; высота камеры: 0–100; таймаут положительный')
     if any(abs(c[k]) > 100000 for k in ('tank_x', 'tank_z', 'tank_yaw', 'ground_offset', 'minimum_ground_y')):
@@ -87,14 +95,14 @@ def validate_config(raw):
 def command(c):
     c = validate_config(c)
     args = ([sys.executable, '-u', str(Path(__file__).resolve().with_name('kolobanoveye.py')), 'frame',
-            '--dagor', c['dagor'], '--game', c['game'], '--level', c['map_id'], '--out', c['output'],
+            '--dagor', c['dagor'], '--game', c['game'], '--level', c['map_id'], '--out', c['output'], '--tank-map-resolution', str(c['tank_map_resolution']),
             '--count', str(c['count']), '--seed', str(c['seed']), '--width', str(c['width']),
             '--height', str(c['height']), '--fov', str(c['fov']), '--tank-xz', str(c['tank_x']), str(c['tank_z']),
             '--yaw', str(c['tank_yaw']), '--ground-offset', str(c['ground_offset']),
             '--placement-mode', c['placement_mode'], '--map-margin-percent', str(c['map_margin_percent']), '--frames-per-position', str(c['frames_per_position']), '--camera-attempts', str(c['camera_attempts']), '--placement-radius', str(c['placement_radius']), '--placement-attempts', str(c['placement_attempts']),
             '--max-height-range', str(c['max_height_range']), '--minimum-ground-y', str(c['minimum_ground_y']), '--camera-clearance', str(c['camera_clearance']), '--camera-height-range', str(c['camera_height_min']), str(c['camera_height_max']), '--camera-distance-range', str(c['distance_min']), str(c['distance_max']),
             '--camera-elevation-range', str(c['elevation_min']), str(c['elevation_max']),
-            '--clipmap-feedback', c['clipmap_feedback'], '--timeout', str(c['timeout'])] + (['--keep-open'] if c['keep_open'] else []) + (['--capture-last-clip'] if c['capture_last_clip'] else []) + (['--render-debug'] if c['render_debug'] else []) + (['--scan-buildings'] if c['scan_buildings'] else []))
+            '--clipmap-feedback', c['clipmap_feedback'], '--timeout', str(c['timeout'])] + (['--keep-open'] if c['keep_open'] else []) + (['--capture-last-clip'] if c['capture_last_clip'] else []) + (['--render-debug'] if c['render_debug'] else []) + (['--scan-buildings'] if c['scan_buildings'] else []) + (['--capture-tank-map'] if c['capture_tank_map'] else []))
 
     args.extend(('--turret-yaw-range', str(c['turret_yaw_min']), str(c['turret_yaw_max']),
                  '--gun-pitch-range', str(c['gun_pitch_min']), str(c['gun_pitch_max'])))
