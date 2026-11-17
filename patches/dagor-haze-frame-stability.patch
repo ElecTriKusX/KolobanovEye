@@ -72,7 +72,10 @@ diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/scene
 +    const bool sceneReady = frames >= minWarmupRenders && !mapLoading && skyReady &&
 +      (!waitSkyConvergence || lightingReady) && (!waitFrameStability || (lightingReady && keStableChecks >= 3));
      if (sceneReady && idleBeforeRender && texturesIdle())
-@@ -610,1 +610,4 @@
+@@ -610,4 +610,7 @@
+   console->addMessage(ILogWriter::NOTE,
+     "[KE] HAZE_CONVERGENCE min_renders=%d wait_lighting=%d lighting_ready=%d sky_ready=%d passes=%d",
+     minWarmupRenders, int(waitSkyConvergence), int(!skies || skies->isLightingConverged()), int(skyReady), frames);
 +  console->addMessage(ILogWriter::NOTE, "[KE] FRAME_STABILITY_FINAL enabled=%d stable=%d checks=%d mean_delta=%.4f max_delta=%.1f passes=%d",
 +    int(waitFrameStability), int(!waitFrameStability || keStableChecks >= 3),
 +    keStableChecks, keMeanDelta, keMaxDelta, frames);
