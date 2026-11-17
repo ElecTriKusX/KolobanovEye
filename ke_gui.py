@@ -10,7 +10,7 @@ from tkinter import ttk, filedialog, messagebox, simpledialog
 from pathlib import Path
 
 from ke_generate import DEFAULTS, INTS, FLOATS, validate_config, command
-from ke_maps import scan_maps, load_whitelist, save_whitelist, initial_whitelist, available_whitelist
+from tools.ke_maps import scan_maps, load_whitelist, save_whitelist, initial_whitelist, available_whitelist
 
 FIELDS = [
  ('dagor', 'Папка Dagor Engine'), ('game', 'Папка War Thunder'), ('output', 'Родительская папка результатов'),
@@ -419,7 +419,7 @@ class App:
             messagebox.showerror('Нет текстуры', 'Для старой карты last_clip включите диагностику всего ландшафта и создайте новую серию.')
             return
         try:
-            from ke_map import read_landscape_bounds
+            from tools.ke_map import read_landscape_bounds
             read_landscape_bounds(Path(run), fixed_clip=True)
             out = next_numbered_directory(Path(run), 'fixed-clip-map-')
             out.mkdir()
@@ -444,7 +444,7 @@ class App:
     def start_tool(self, script, arguments):
         if self.running: return
         self.running = True; self.run_button.config(state='disabled'); self.state.set('Проверка выполняется…')
-        cmd = [sys.executable, '-u', str(Path(__file__).resolve().with_name(script)), *arguments]
+        cmd = [sys.executable, '-u', '-m', f'tools.{Path(script).stem}', *arguments]
         threading.Thread(target=self.tool_worker, args=(cmd,), daemon=True).start()
 
     def tool_worker(self, cmd):
