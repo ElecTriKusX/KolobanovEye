@@ -9,10 +9,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import kolobanoveye as ke
-from ke_coco import export
+from tools.ke_coco import export
 from ke_generate import command, validate_config
-from ke_review import write_rgb_png
-from ke_validate import validate
+from tools.ke_review import write_rgb_png
+from tools.ke_validate import validate
 
 
 class FrameStabilityTest(unittest.TestCase):
