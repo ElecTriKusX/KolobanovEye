@@ -5,7 +5,7 @@ import math
 import sys
 from pathlib import Path
 from kolobanoveye import verify_png
-from ke_png_fast import validate_rgb_png
+from tools.ke_png_fast import validate_rgb_png
 
 
 def validate(run):
