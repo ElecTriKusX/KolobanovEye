@@ -1,7 +1,7 @@
 {
   "dagor": "D:\\Projects\\DagorEngine",
   "game": "D:\\Games\\WarThunder",
-  "output": "D:\\Projects\\ke-generate-01",
+  "output": "dataset",
   "count": 6,
   "seed": 42,
   "width": 1280,
