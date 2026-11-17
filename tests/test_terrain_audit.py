@@ -1,5 +1,5 @@
 import unittest
-from ke_terrain_audit import analyze
+from tools.ke_terrain_audit import analyze
 
 
 class TerrainAuditTest(unittest.TestCase):
