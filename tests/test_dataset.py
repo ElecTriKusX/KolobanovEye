@@ -7,7 +7,7 @@ from pathlib import Path
 from ke_dataset import run_dataset
 from ke_generate import DEFAULTS
 from tools.ke_review import write_rgb_png
-from kolobanoveye import ensure_level_settings_accessor
+from kolobanoveye import ensure_level_settings_accessor, has_last_clip_bounds
 
 
 def fake_editor(argv):
@@ -92,6 +92,31 @@ class DatasetTests(unittest.TestCase):
         self.assertFalse(any(self.dataset.glob(".raw-backup-*")))
         self.assertFalse(any(self.dataset.glob(".raw-staging-*")))
 
+
+
+class LegacyClipBoundsTests(unittest.TestCase):
+    def test_detects_installed_last_clip_bounds_even_after_successor(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "kolobanovEye.cpp"
+            source.write_text('''
+  const auto cellOrigin = scene.lmeshMgr->getCellOrigin();
+  const float lastClipX0 = cellOrigin.x * cellSize;
+  const float lastClipZ1 = 256.f;
+  return fail("LAST_CLIP_BOUNDS", "Invalid fixed clip bounds");
+  result.setPoint3("last_clip_min", Point3(lastClipX0, 0.f, 0.f));
+  result.setPoint3("last_clip_max", Point3(256.f, 0.f, lastClipZ1));
+  result.setPoint3("tank_map_min", Point3(0.f, 0.f, 0.f));
+''', encoding='utf-8')
+            self.assertTrue(has_last_clip_bounds(source))
+            source.write_text('just baseline source', encoding='utf-8')
+            self.assertFalse(has_last_clip_bounds(source))
+
+    def test_rejects_partial_last_clip_bounds(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "kolobanovEye.cpp"
+            source.write_text('  result.setPoint3("last_clip_min", Point3(0,0,0));', encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'Partial last-clip bounds'):
+                has_last_clip_bounds(source)
 
 class DagorAccessorTests(unittest.TestCase):
     def test_safe_injection_accepts_modified_header_and_is_idempotent(self):
