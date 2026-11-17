@@ -111,6 +111,41 @@ def plan_equal_allocation(total, map_ids):
     return [(map_id, base + (i < remainder)) for i, map_id in enumerate(ids)]
 
 
+
+TANK_BOUNDS_LINE = re.compile(
+    r"\[KE\] TANK_BOUNDS min_x=([-+0-9.eE]+) max_x=([-+0-9.eE]+)"
+    r" min_z=([-+0-9.eE]+) max_z=([-+0-9.eE]+)"
+)
+
+
+def parse_tank_bounds_log(log, map_id):
+    """Extract tank rectangle + maximal centered square from Dagor's loaded BLK."""
+    import math
+
+    if not isinstance(map_id, str) or MAP_ID.fullmatch(map_id) is None:
+        raise ValueError("Invalid map ID")
+    matches = TANK_BOUNDS_LINE.findall(log)
+    if len(matches) > 1 and len(set(matches)) != 1:
+        raise ValueError("Conflicting tank bounds in Dagor log")
+    base = {"map_id": map_id, "source": "Dagor AcesScene.levelSettingsBlk"}
+    if not matches:
+        if "[KE] TANK_BOUNDS_UNAVAILABLE " in log:
+            return {**base, "status": "unavailable", "tank_rect": None, "tank_square": None}
+        raise ValueError("TANK_BOUNDS status missing from Dagor: rebuild the editor")
+    min_x, max_x, min_z, max_z = (float(x) for x in matches[0])
+    if not all(map(math.isfinite, (min_x, max_x, min_z, max_z))) or min_x >= max_x or min_z >= max_z:
+        raise ValueError("Invalid tank rectangle in Dagor level settings")
+    side = min(max_x - min_x, max_z - min_z)
+    center_x, center_z = (min_x + max_x) / 2, (min_z + max_z) / 2
+    return {**base,
+            "status": "available",
+            "tank_rect": {"min_x": min_x, "max_x": max_x,
+                          "min_z": min_z, "max_z": max_z},
+            "tank_square": {"min_x": center_x - side / 2,
+                            "max_x": center_x + side / 2,
+                            "min_z": center_z - side / 2,
+                            "max_z": center_z + side / 2}}
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--game", type=Path, default=Path(r"D:\Games\WarThunder"))
