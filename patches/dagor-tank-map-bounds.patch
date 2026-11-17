@@ -1,14 +1,3 @@
-diff --git a/prog/tools/sceneTools/daEditorX/binSceneView/strmlevel.h b/prog/tools/sceneTools/daEditorX/binSceneView/strmlevel.h
---- a/prog/tools/sceneTools/daEditorX/binSceneView/strmlevel.h
-+++ b/prog/tools/sceneTools/daEditorX/binSceneView/strmlevel.h
-@@ -96,6 +96,7 @@ public:
-   bool tracerayNormalizedHeightmap(const Point3 &p0, const Point3 &dir, float &t, Point3 *norm);
-   bool getHeightmapAtPoint(float x, float z, float &out_height, Point3 *out_normal);
-   bool isInited() { return intited; }
-+  const DataBlock &getKolobanovEyeLevelSettings() const { return levelSettingsBlk; }
- 
-   LandMeshManager *lmeshMgr;
- 
 diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
 --- a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
 +++ b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
