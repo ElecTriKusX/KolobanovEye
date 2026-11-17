@@ -24,3 +24,8 @@ venv/
 # Only the description of its layout is tracked.
 /dataset/*
 !/dataset/README.md
+
+# Frozen local-only decoder source snapshot. No clear redistribution license upstream.
+# Never commit third-party source or build artifacts until distribution rights are cleared.
+/vendor/ooz/
+/vendor/ooz.pending.*/
