@@ -266,7 +266,7 @@ def main():
             parser.error('--capture requires --dagor and --game')
         if run.exists():
             parser.error('--capture requires a new --run directory')
-        cmd = [sys.executable, str(Path(__file__).with_name('kolobanoveye.py')), 'frame', '--dagor', str(args.dagor),
+        cmd = [sys.executable, str(Path(__file__).resolve().parent.parent / 'kolobanoveye.py'), 'frame', '--dagor', str(args.dagor),
                '--game', str(args.game), '--out', str(run), '--model', args.model, '--skeleton', args.skeleton,
                '--tank-xz', str(args.tank_xz[0]), str(args.tank_xz[1]), '--clipmap-feedback', args.clipmap_feedback,
                '--clipmap-abi', args.clipmap_abi, '--indirection', args.indirection, '--render-debug']
@@ -294,7 +294,7 @@ def main():
         parser.error('--ooz-exe requires --game')
     probe = None
     if args.ooz_exe:
-        probe_cmd = [sys.executable, str(Path(__file__).with_name('kolobanoveye.py')), 'probe-ooz',
+        probe_cmd = [sys.executable, str(Path(__file__).resolve().parent.parent / 'kolobanoveye.py'), 'probe-ooz',
                      '--game', str(args.game), '--ooz-exe', str(args.ooz_exe)]
         try:
             result = subprocess.run(probe_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
