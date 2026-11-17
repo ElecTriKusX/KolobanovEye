@@ -1,5 +1,28 @@
 # KolobanovEye 2.0 — генератор синтетического датасета
 
+## Быстрый запуск актуальной ветки
+
+```powershell
+cd D:\Projects\KolobanovEye
+git fetch origin
+git switch feature/avg-map-catalog-whitelist
+git pull --ff-only origin feature/avg-map-catalog-whitelist
+python -m unittest discover -v
+
+# Один раз закрепить OOZ из локального build-logs/ooz-local:
+python -m tools.vendor_ooz
+
+# Дальше внешний D:\Projects\ooz не нужен:
+python .\kolobanoveye.py build --dagor D:\Projects\DagorEngine
+python .\ke_gui.py
+```
+
+Новый исходный датасет записывается **только в `dataset/raw/`** после успешного прохождения всех проверок. Прежний `raw` заменяется по подтверждению. Полные логи каждой попытки — в `dataset/runs/`. Вторичные инструменты расположены в `tools/` и запускаются `python -m tools.ke_<имя>`; C++-патчи — в `engine/patches/`.
+
+OOZ закреплён по SHA-256 и локально хранится в `vendor/ooz/` (исходники не публикуются в Git из-за невыясненного разрешения на распространение; см. `vendor/README.md`).
+
+См. [текущее дерево проекта](docs/project-layout.md), [формат dataset](dataset/README.md) и [состояние реализации](docs/project-status.md). Ниже сохранено описание отдельных исследовательских этапов; некоторые старые примеры используют технические пути `ke-run-*`.
+
 > **Текущий рабочий путь (ноябрь 2026):** `python ke_gui.py` или `python ke_generate.py --config config.example.json` создают **единый несегментированный** набор в `KolobanovEye/dataset/raw`. Запуск Dagor, диагностика и журналы — в `dataset/runs`. Перед заменой существующего `raw` требуется подтверждение. Python-тесты — в `tests/`, патчи Dagor — в `engine/patches/`. См. [структуру проекта](docs/project-layout.md), [схему dataset](dataset/README.md) и [статус реализации](docs/project-status.md).
 
 > Разделы ниже сохраняют историю технического прототипа и могут содержать старые пути `ke-run-*`. Для обычной генерации используйте команды из текущего раздела, а не устаревшие примеры.
@@ -15,7 +38,7 @@
 Экспериментальная серия (каждый кадр заново запускает редактор и загружает карту; это не пакетный генератор по ТЗ):
 
 ```powershell
-python .\ke_pilot.py --dagor D:\Projects\DagorEngine --game D:\Games\WarThunder --out D:\Projects\ke-pilot-01 --seed 42 --count 3
+python -m tools.ke_pilot --dagor D:\Projects\DagorEngine --game D:\Games\WarThunder --out D:\Projects\ke-pilot-01 --seed 42 --count 3
 ```
 
 Скрипт заранее пишет `plan.json`, меняет только yaw и добавляет запись в `metadata.jsonl` после успешного кадра. Воспроизводится план, а побитовая идентичность GPU-кадров не гарантируется. Скрипт и JSON-разметка проверены на Windows в `ke-pilot-01`. Возобновление, геометрические проверки, вариация камеры и погоды не реализованы.
@@ -35,7 +58,7 @@ python .\kolobanoveye.py frame --dagor D:\Projects\DagorEngine --game D:\Games\W
 После получения серии можно создать отдельные диагностические копии с зелёной рамкой:
 
 ```powershell
-python .\ke_review.py --run D:\Projects\ke-clean-01 --out D:\Projects\ke-review-01
+python -m tools.ke_review --run D:\Projects\ke-clean-01 --out D:\Projects\ke-review-01
 ```
 
 Исходные RGB не изменяются. Рамка показывает проекцию 3D AABB, может быть заметно больше силуэта и не измеряет видимость. Отчёт `report.json` включает положения танка и камеры. Для одиночного кадра этот просмотр пока не предназначен. На время снимка редакторский проход `renderObjects`/`renderTransObjects` отключается: это должно убрать сетку, но новый код и сохранность остального содержимого требуют проверки Windows.
@@ -103,7 +126,7 @@ python .\ke_generate.py --config .\config.example.json --replace-raw
 Для нескольких серий и разбиения по участкам:
 
 ```powershell
-python .\ke_coco.py --runs D:\Projects\ke-run-a D:\Projects\ke-run-b D:\Projects\ke-run-c --out D:\Projects\ke-coco-01 --split --tile-size 256 --seed 42
+python -m tools.ke_coco --runs D:\Projects\ke-run-a D:\Projects\ke-run-b D:\Projects\ke-run-c --out D:\Projects\ke-coco-01 --split --tile-size 256 --seed 42
 ```
 
 Потребуются минимум три различные группы по карте и координатной ячейке; углы камеры, yaw и seed не разделяют группу. `train.json`, `val.json`, `test.json` и `manifest.json` записываются в новую папку. Группировка по ячейкам не устраняет близость соседних сцен по обе стороны границы; отдельные карты и буферные зоны потребуют дополнительного контроля. Экспорт с путями к изображениям ещё нужно проверить на Windows и в целевом ML-фреймворке.
@@ -130,7 +153,7 @@ python .\ke_coco.py --runs D:\Projects\ke-run-a D:\Projects\ke-run-b D:\Projects
 
 ## Восстановление после сбоя (диагностика)
 
-В меню «Дополнительно → Восстановить метаданные после сбоя» выберите папку прерванной серии. Либо выполните `python .\ke_recover.py --run D:\Projects\ke-generate-01`. Скрипт проверяет уже записанные пары PNG/BLK и пишет `metadata.recovered.jsonl` и `recovery-report.json`; существующие кадры и временные BLK не изменяются. Он не продолжает рендер, не создаёт итоговый COCO и не считает прерванную серию завершённой. Восстановление повторно не перезаписывает отчёты. Поддерживаются планы schema 3 с номерами композиций; Windows-проверка ещё требуется.
+В меню «Дополнительно → Восстановить метаданные после сбоя» выберите папку прерванной серии. Либо выполните `python -m tools.ke_recover --run D:\Projects\ke-generate-01`. Скрипт проверяет уже записанные пары PNG/BLK и пишет `metadata.recovered.jsonl` и `recovery-report.json`; существующие кадры и временные BLK не изменяются. Он не продолжает рендер, не создаёт итоговый COCO и не считает прерванную серию завершённой. Восстановление повторно не перезаписывает отчёты. Поддерживаются планы schema 3 с номерами композиций; Windows-проверка ещё требуется.
 
 ## Сборка под Windows x64
 
@@ -363,26 +386,26 @@ python .\kolobanoveye.py frame --dagor D:\Projects\DagorEngine --game D:\Games\W
 `ke_diagnose.py` запускает кадр с диагностикой или анализирует существующий каталог, в том числе после неудачного запуска. Дополнительные пакеты Python не требуются. Игра используется только для чтения. Для нового запуска требуется новая папка `--run`.
 
 ```powershell
-python .\ke_diagnose.py --capture `
+python -m tools.ke_diagnose --capture `
   --run D:\Projects\ke-diagnostic-01 `
   --dagor D:\Projects\DagorEngine `
   --game D:\Games\WarThunder `
   --ooz-exe D:\Projects\ooz\x64\Release\ooz.exe
 ```
 
-Без `--capture` анализируется предыдущий каталог. Пример: `python .\ke_diagnose.py --run D:\Projects\ke-run-15 --dagor D:\Projects\DagorEngine --game D:\Games\WarThunder`. Для другой позиции добавьте `--tank-xz 128 64`; `--indirection cpu` включает экспериментальную CPU-запись. `--ooz-exe` запускает отдельную проверку одного блока lightmap и является необязательным.
+Без `--capture` анализируется предыдущий каталог. Пример: `python -m tools.ke_diagnose --run D:\Projects\ke-run-15 --dagor D:\Projects\DagorEngine --game D:\Games\WarThunder`. Для другой позиции добавьте `--tank-xz 128 64`; `--indirection cpu` включает экспериментальную CPU-запись. `--ooz-exe` запускает отдельную проверку одного блока lightmap и является необязательным.
 
 Результат: `diagnostics\report.md`, `report.json` и `diagnostics.zip`. Архив содержит логи, параметры и изображения, но не содержит игровых архивов. В нём могут присутствовать локальные пути и сведения о системе; просмотрите перед отправкой. Анализ показателей пикселей охватывает весь кадр, а не маску земли. Успешное чтение глобальных shader variables не подтверждает фактическое состояние GPU-регистров или совместимость шейдеров. Для GPU-захвата нужен отдельный графический отладчик.
 
 ### Сравнение пикселей проходов
 
-`python .\ke_pixel_debug.py --run D:\Projects\ke-run-15 --point 600 35 --point 600 300` создаёт `diagnostics\pixel-report.json` и `pixel-grid.csv`, сравнивая сохранённый albedo и итоговый RGB по сетке и выбранным экранным координатам. Размеры кадров должны совпадать. Пороговые подсчёты и средние значения описательные: это разные проходы/моменты, возможны разные цветовые пространства, объекты, оверлеи и экспозиция. Нет сегментации земли. Исходные нормали, освещение и GPU-регистры из этих PNG восстановить невозможно; отсутствующие проходы отмечаются в отчёте.
+`python -m tools.ke_pixel_debug --run D:\Projects\ke-run-15 --point 600 35 --point 600 300` создаёт `diagnostics\pixel-report.json` и `pixel-grid.csv`, сравнивая сохранённый albedo и итоговый RGB по сетке и выбранным экранным координатам. Размеры кадров должны совпадать. Пороговые подсчёты и средние значения описательные: это разные проходы/моменты, возможны разные цветовые пространства, объекты, оверлеи и экспозиция. Нет сегментации земли. Исходные нормали, освещение и GPU-регистры из этих PNG восстановить невозможно; отсутствующие проходы отмечаются в отчёте.
 
 ### Захват буферов вокруг deferred resolve
 
 После `build` и `frame --render-debug` папка кадра, например `render-debug/000000/`, содержит `resolve-input-mrt0.png`, `resolve-input-mrt1.png` и другие доступные MRT, а также `resolve-output.png`, если форматы поверхности поддерживаются. Это снимки до и сразу после `resolve` одного прохода. `PASS_CAPTURE` в журнале сообщает формат и статус каждого файла. PNG для 10-битного формата содержит масштабированные в 8 бит значения; MRT1 — сырая упаковка, её нельзя считать декодированной картой нормалей. Выход resolve — освещённый цвет, не отдельная карта освещения. Нет гарантии одинаковых цветовых пространств.
 
-`python .\ke_pixel_debug.py --run D:\Projects\ke-run-16 --resolve --point 600 35 --point 600 300` сравнивает именно эти два прохода. `ke_diagnose.py` включает сохранённые проходы в архив. Для просмотра реальных shader bindings и исполнения нужны отдельный GPU capture и воспроизведение на целевом Windows; этот код не создаёт RenderDoc capture.
+`python -m tools.ke_pixel_debug --run D:\Projects\ke-run-16 --resolve --point 600 35 --point 600 300` сравнивает именно эти два прохода. `ke_diagnose.py` включает сохранённые проходы в архив. Для просмотра реальных shader bindings и исполнения нужны отдельный GPU capture и воспроизведение на целевом Windows; этот код не создаёт RenderDoc capture.
 
 ### Открытый DaEditor и RenderDoc
 
