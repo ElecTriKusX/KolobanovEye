@@ -49,6 +49,8 @@ OFFSCREEN_FRAME_CLOCK_PATCH = HERE / "patches/dagor-offscreen-frame-clock.patch"
 OFFSCREEN_SERIAL_STREAMING_PATCH = HERE / "patches/dagor-offscreen-serial-streaming.patch"
 OFFSCREEN_STREAMING_WAIT_PATCH = HERE / "patches/dagor-offscreen-streaming-wait.patch"
 OFFSCREEN_RESOLVE_CAMERA_PATCH = HERE / "patches/dagor-offscreen-resolve-camera.patch"
+HAZE_CONVERGENCE_PATCH = HERE / "patches/dagor-haze-convergence-warmup.patch"
+HAZE_STABILITY_PATCH = HERE / "patches/dagor-haze-frame-stability.patch"
 CLIPMAP_TILE_PATCH = HERE / "patches/dagor-clipmap-tile-readback.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
@@ -469,19 +471,85 @@ def prepare_ooz(ooz, logs):
     return require_file(library)
 
 
-def build(dagor, ooz=None):
-    if os.name != "nt":
-        raise ValueError("Build requires Windows x64")
-    actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=dagor, text=True).strip()
-    if actual != REV:
-        raise ValueError(f"Expected Dagor {REV}, got {actual}")
-    require_file(dagor / "prog/platform.jam")
-    require_file(dagor / "tools/dagor_cdk/commonData/guiShaders.ps40.shdump.bin")
-    jam = shutil.which("jam")
-    if not jam:
-        raise ValueError("jam.exe missing from PATH. Run Dagor make_devtools.py first.")
+def apply_warmup_patch(source: Path, patch: Path, *, label: str):
+    """Apply unique hunk contexts without relying on Dagor line numbers."""
+    diff = patch.read_bytes().replace(b"\r\n", b"\n")
+    hunks = re.findall(rb"(?ms)^@@ [^\n]*\n(.*?)(?=^@@ |\Z)", diff)
+    if len(hunks) != 3:
+        raise ValueError("Invalid offscreen warm-up patch: expected 3 hunks")
+    raw = source.read_bytes()
+    crlf = b"\r\n" in raw
+    data = raw.replace(b"\r\n", b"\n")
+    changed = 0
+    for index, hunk in enumerate(hunks, 1):
+        lines = hunk.splitlines(keepends=True)
+        if any(not line or line[:1] not in (b" ", b"-", b"+") for line in lines):
+            raise ValueError(f"Malformed offscreen warm-up patch hunk {index}")
+        old = b"".join(line[1:] for line in lines if line.startswith((b" ", b"-")))
+        new = b"".join(line[1:] for line in lines if line.startswith((b" ", b"+")))
+        before, after = data.count(old), data.count(new)
+        if before == 1 and after == 0:
+            data = data.replace(old, new, 1)
+            changed += 1
+        elif before == 0 and after == 1:
+            pass  # already upgraded
+        else:
+            raise ValueError(f"Ambiguous offscreen warm-up patch hunk {index}: old={before} new={after}; "
+                             "do not reset Dagor, inspect the offscreen capture source")
+    if changed:
+        source.write_bytes(data.replace(b"\n", b"\r\n") if crlf else data)
+        print(f"[KE] {label} applied={changed}/3 source={source}", flush=True)
+    else:
+        print(f"[KE] {label} already_applied=1", flush=True)
+
+
+def apply_haze_capture_pipeline(source: Path, convergence_patch: Path, stability_patch: Path):
+    """Apply successive warm-up patches, including when the later patch supersedes a prior hunk.
+
+    The stability patch replaces the sceneReady line installed by the convergence patch.
+    Therefore reverse/apply checks of the older patch alone are NOT an idempotence test
+    after the successor has been installed. Validate the complete successor instead.
+    """
+    existing = source.read_bytes()
+    if b'[KE] FRAME_STABILITY_FINAL ' in existing:
+        required = (b'wait_frame_stability', b'[KE] HAZE_CONVERGENCE ',
+                    b'const bool lightingReady =', b'keStableChecks >= 3',
+                    b'[KE] FRAME_STABILITY frame=')
+        missing = [marker.decode('ascii', errors='replace') for marker in required if marker not in existing]
+        if missing:
+            raise ValueError(f"Incomplete already-applied adaptive patch in {source}: {missing}")
+        print("[KE] HAZE_CONVERGENCE_PATCH superseded_by=HAZE_STABILITY_PATCH", flush=True)
+    else:
+        apply_warmup_patch(source, convergence_patch, label="HAZE_CONVERGENCE_PATCH")
+    apply_warmup_patch(source, stability_patch, label="HAZE_STABILITY_PATCH")
+
+
+def is_upgraded_offscreen_capture(source: Path) -> bool:
+    """Recognize an already-upgraded capture loop; never skip predecessors blindly."""
+    if not source.is_file():
+        return False
+    contents = source.read_bytes()
+    if b'[KE] HAZE_CONVERGENCE ' not in contents:
+        return False
+    required = (
+        b'const auto textureWorkerBusy = [&]()',
+        b'const auto texturesIdle = [&]()',
+        b'frame = captureFrame(nullptr);',
+        b'const bool previousSkipRenderObjects = skipRenderObjects;',
+        b'metadataJournal',
+        b'[KE] STREAMING_PUMP ',
+        b'const int minWarmupRenders = config.getInt("min_warmup_renders", 8);',
+    )
+    missing = [marker.decode('ascii', errors='replace') for marker in required if marker not in contents]
+    if missing:
+        raise ValueError(f"Partial offscreen-capture upgrade in {source}: missing {missing}; "
+                         "do not reset Dagor; inspect the existing file")
+    return True
+
+
+def apply_dagor_patches(dagor, *, with_ooz=False):
     apply = ["git", "apply", "--whitespace=error-all"]
-    patches = (*PATCHES, OOZ_PATCH) if ooz else PATCHES
+    patches = (*PATCHES, OOZ_PATCH) if with_ooz else PATCHES
     direct_depth_diff = DIRECT_DEPTH_PATCH.read_bytes().replace(b"\r\n", b"\n")
     direct_depth_applied = subprocess.run([*apply, "--reverse", "--check"], input=direct_depth_diff, cwd=dagor,
                                           capture_output=True).returncode == 0
@@ -527,7 +595,9 @@ def build(dagor, ooz=None):
         input=SCENE_QUALITY_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     offscreen_streaming_applied = subprocess.run([*apply, "--reverse", "--check"],
         input=OFFSCREEN_STREAMING_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
-    streaming_wait_applied = subprocess.run([*apply, "--reverse", "--check"],
+    capture_cpp = dagor / "prog/tools/sceneTools/daEditorX/kolobanovEye.cpp"
+    upgraded_capture = is_upgraded_offscreen_capture(capture_cpp)
+    streaming_wait_applied = upgraded_capture or subprocess.run([*apply, "--reverse", "--check"],
         input=OFFSCREEN_STREAMING_WAIT_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     serial_streaming_applied = streaming_wait_applied or subprocess.run([*apply, "--reverse", "--check"],
         input=OFFSCREEN_SERIAL_STREAMING_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
@@ -536,6 +606,8 @@ def build(dagor, ooz=None):
     texture_pump_applied = offscreen_frame_clock_applied or subprocess.run([*apply, "--reverse", "--check"],
         input=TEXTURE_PUMP_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     for patch in patches:
+        if upgraded_capture and patch == OFFSCREEN_STREAMING_WAIT_PATCH:
+            continue
         if streaming_wait_applied and patch == OFFSCREEN_SERIAL_STREAMING_PATCH:
             continue
         if serial_streaming_applied and patch == OFFSCREEN_FRAME_CLOCK_PATCH:
@@ -587,6 +659,22 @@ def build(dagor, ooz=None):
             print(f"[KE] Applying {patch.name}", flush=True)
             subprocess.run([*apply, "--check"], input=diff, cwd=dagor, check=True)
             subprocess.run(apply, input=diff, cwd=dagor, check=True)
+
+    apply_haze_capture_pipeline(capture_cpp, HAZE_CONVERGENCE_PATCH, HAZE_STABILITY_PATCH)
+
+
+def build(dagor, ooz=None):
+    if os.name != "nt":
+        raise ValueError("Build requires Windows x64")
+    actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=dagor, text=True).strip()
+    if actual != REV:
+        raise ValueError(f"Expected Dagor {REV}, got {actual}")
+    require_file(dagor / "prog/platform.jam")
+    require_file(dagor / "tools/dagor_cdk/commonData/guiShaders.ps40.shdump.bin")
+    jam = shutil.which("jam")
+    if not jam:
+        raise ValueError("jam.exe missing from PATH. Run Dagor make_devtools.py first.")
+    apply_dagor_patches(dagor, with_ooz=bool(ooz))
 
     logs = HERE / "build-logs"
     logs.mkdir(exist_ok=True)
@@ -688,6 +776,8 @@ def frame(args, game, cdk):
         low, high = args.camera_height_range
         if not all(math.isfinite(x) for x in (low, high)) or not 0 <= low <= high <= 10000:
             raise ValueError("Camera height above ground range must be between 0 and 10000")
+    if not 8 <= args.min_warmup_renders <= 64:
+        raise ValueError("--min-warmup-renders must be between 8 and 64")
     if not 1 <= args.frames_per_position <= 1000:
         raise ValueError("Frames per position must be 1–1000")
     if not 1 <= args.camera_attempts <= 64:
@@ -757,6 +847,9 @@ def frame(args, game, cdk):
         f'candidate_count:i={len(candidate_groups[0])}',
         f'placement_whole_map:b={"yes" if args.placement_mode == "whole_map" else "no"}',
         f'frames_per_position:i={args.frames_per_position}',
+        f'min_warmup_renders:i={args.min_warmup_renders}',
+        f'wait_sky_convergence:b={"yes" if args.wait_sky_convergence else "no"}',
+        f'wait_frame_stability:b={"yes" if args.wait_frame_stability else "no"}',
         f'yaw:r={numbers([args.yaw])}',
         f'tank:p3={numbers((args.tank_xz[0], args.ground_offset, args.tank_xz[1]))}',
     ]
@@ -888,6 +981,9 @@ def frame(args, game, cdk):
         debug_logs = sorted((out / ".logs").glob("daEditor3x-dev.exe-*/debug"), key=lambda p: p.stat().st_mtime)
         log_path = debug_logs[-1] if debug_logs else log_path
     log = require_file(log_path).read_text(encoding="utf-8", errors="replace")
+    if args.wait_frame_stability and len(re.findall(
+            r"\[KE\] FRAME_STABILITY_FINAL enabled=1 stable=1\b", log)) != args.count:
+        raise ValueError("Missing frame stability confirmation; check the capture log and rebuild Dagor")
     if render_debug and log.count("[KE] RENDER_DEBUG_FRAME ") != args.count:
         raise ValueError("Missing per-frame render diagnostics; rebuild Dagor and check the capture log")
     if "[KE] WATER_GROUND_FILTER " not in log:
@@ -992,6 +1088,12 @@ def main():
     frame_cmd.add_argument("--keep-open", action="store_true", help="Keep editor open until window is closed; no process timeout")
     frame_cmd.add_argument("--timeout", type=int, default=360)
     frame_cmd.add_argument("--dx11-trace", action="store_true", help="Log native DX11 draw state for terrain and clipmap updates")
+    frame_cmd.add_argument("--min-warmup-renders", type=int, default=8,
+                           help="Minimum offscreen renders before checking frame readiness (8–64)")
+    frame_cmd.add_argument("--wait-sky-convergence", action="store_true",
+                           help="Require sky lighting convergence even without adaptive RGB sampling")
+    frame_cmd.add_argument("--wait-frame-stability", action=argparse.BooleanOptionalAction, default=True,
+                           help="Wait for stable RGB samples before saving (enabled by default)")
     frame_cmd.add_argument("--render-debug", action="store_true", help="Export terrain and static G-buffer diagnostics")
     frame_cmd.add_argument("--clipmap-abi", choices=("legacy-color", "native-int"), default="legacy-color",
                            help="Clipmap table encoding required by the loaded CDK shaders")
