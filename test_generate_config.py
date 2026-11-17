@@ -13,6 +13,7 @@ class ConfigTest(unittest.TestCase):
         cmd = command(config)
         self.assertEqual(cmd[cmd.index('--dagor') + 1], r'D:\My Tools\Dagor')
         self.assertEqual(cmd[cmd.index('--count') + 1], '3')
+        self.assertEqual(cmd[cmd.index('--level') + 1], 'levels/avg_normandy.bin')
         self.assertEqual(cmd[cmd.index('--camera-distance-range') + 1:cmd.index('--camera-distance-range') + 3], ['18.0', '35.0'])
 
     def test_config_rejects_bad_values(self):
@@ -20,6 +21,20 @@ class ConfigTest(unittest.TestCase):
                        {'fov': float('nan')}, {'wat': 1}, {'clipmap_feedback': 'wrong'}):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 validate_config({**DEFAULTS, **change})
+
+    def test_ground_map_id_and_tank_placement(self):
+        cfg = validate_config({
+            **DEFAULTS, 'map_id': 'levels/avg_finland.bin',
+            'placement_mode': 'tank_map', 'map_margin_percent': 0.0
+        })
+        cmd = command(cfg)
+        self.assertEqual(cmd[cmd.index('--level') + 1], 'levels/avg_finland.bin')
+        self.assertEqual(cmd[cmd.index('--placement-mode') + 1], 'tank_map')
+        for bad in ('levels/avn_fiji.bin', '../avg_finland.bin',
+                    'levels/../avg_finland.bin', 'levels/avg_a.bin/other',
+                    '', True):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                validate_config({**DEFAULTS, 'map_id': bad})
 
     def test_validator_checks_real_png_and_bounds(self):
         with tempfile.TemporaryDirectory() as temp:
