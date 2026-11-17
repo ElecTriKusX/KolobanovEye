@@ -379,7 +379,7 @@ class App:
         if not image.is_file():
             image = run.parent / 'maps' / f'{Path(map_id).stem}.png'
         if not image.is_file():
-            messagebox.showerror('Нет текстуры', 'Включите «Сохранить обзорную текстуру карты» и создайте серию в этой папке результатов.')
+            messagebox.showerror('Нет текстуры', 'Для старой карты last_clip включите диагностику всего ландшафта и создайте новую серию.')
             return
         try:
             from ke_map import read_landscape_bounds
