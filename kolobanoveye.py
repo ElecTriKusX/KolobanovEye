@@ -670,6 +670,7 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
         print(f"[KE] Applying {TANK_ARTICULATION_PATCH.name}", flush=True)
         subprocess.run([*apply, "--check"], input=diff, cwd=dagor, check=True)
         subprocess.run(apply, input=diff, cwd=dagor, check=True)
+    ensure_level_settings_accessor(dagor / "prog/tools/sceneTools/daEditorX/binSceneView/strmlevel.h")
     diff = TANK_MAP_PATCH.read_bytes().replace(b"\r\n", b"\n")
     if subprocess.run([*apply, "--reverse", "--check"], input=diff, cwd=dagor, capture_output=True).returncode:
         print(f"[KE] Applying {TANK_MAP_PATCH.name}", flush=True)
@@ -680,6 +681,30 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
         print(f"[KE] Applying {TANK_MAP_RENDER_PATCH.name}", flush=True)
         subprocess.run([*apply, "--check"], input=diff, cwd=dagor, check=True)
         subprocess.run(apply, input=diff, cwd=dagor, check=True)
+
+
+
+def ensure_level_settings_accessor(header):
+    """Add the small public accessor without depending on surrounding Dagor patch hunks.
+
+    Older patched Dagor checkouts can have a different strmlevel.h context near
+    isInited(); only the stable, unique lmeshMgr declaration is needed here.
+    Preserve original CRLF/LF and make repeated builds idempotent.
+    """
+    data = header.read_bytes()
+    getter = b"getKolobanovEyeLevelSettings"
+    if getter in data:
+        if data.count(getter) != 1:
+            raise ValueError("Multiple tank-map accessors in strmlevel.h")
+        return False
+    marker = b"  LandMeshManager *lmeshMgr;"
+    if data.count(marker) != 1 or b"  DataBlock levelSettingsBlk;" not in data:
+        raise ValueError("Cannot find unique AcesScene level-settings insertion point in strmlevel.h")
+    eol = b"\r\n" if b"\r\n" in data else b"\n"
+    insertion = b"  const DataBlock &getKolobanovEyeLevelSettings() const { return levelSettingsBlk; }" + eol + eol
+    header.write_bytes(data.replace(marker, insertion + marker, 1))
+    print(f"[KE] Inserted tank-map accessor in {header}", flush=True)
+    return True
 
 
 def build(dagor, ooz=None):
