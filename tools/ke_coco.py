@@ -8,7 +8,7 @@ import random
 import re
 import sys
 from pathlib import Path
-from ke_validate import validate
+from tools.ke_validate import validate
 
 
 def field(blk, name, typ):
