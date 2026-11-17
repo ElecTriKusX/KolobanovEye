@@ -2,8 +2,8 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from ke_coco import export, group_for, split_groups
-from ke_review import write_rgb_png
+from tools.ke_coco import export, group_for, split_groups
+from tools.ke_review import write_rgb_png
 
 
 def frame_blk(x, z, yaw=0):
@@ -53,7 +53,7 @@ class CocoTest(unittest.TestCase):
 
 class SceneMetadataTest(unittest.TestCase):
     def test_actual_camera_and_missing_optional_data(self):
-        from ke_coco import scene_metadata
+        from tools.ke_coco import scene_metadata
         blk = frame_blk(10,20,30) + 'eye:p3=1, 2, 3\nlook_at:p3=4, 5, 6\nfov_x_deg:r=55\n'
         scene = scene_metadata(blk)
         self.assertEqual(scene['tank_world_xyz'], [10,50,20])
