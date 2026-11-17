@@ -30,6 +30,7 @@ FIELDS = [
 
 
 MODE_LABELS = {'whole_map': 'Весь ландшафт', 'tank_map': 'Танковое поле', 'around_point': 'Вокруг точки'}
+DATASET_DIR = Path(__file__).resolve().parent / 'dataset'
 
 def next_numbered_directory(parent, prefix='ke-generate-'):
     parent = Path(parent)
@@ -59,7 +60,7 @@ class App:
         self.wait_frame_stability = tk.BooleanVar(value=DEFAULTS['wait_frame_stability'])
         self.wait_sky_convergence = tk.BooleanVar(value=DEFAULTS['wait_sky_convergence'])
         self.scan_buildings = tk.BooleanVar(value=False)
-        self.values['output'].set(str(Path(DEFAULTS['output']).parent))
+        self.values['output'].set(str(DATASET_DIR))
         # The GUI opts into the new tank-map sampler; old CLI configurations keep their defaults.
         self.values['placement_mode'].set(MODE_LABELS['tank_map'])
         self.values['map_margin_percent'].set('0.0')
@@ -80,12 +81,12 @@ class App:
                                              state='readonly', width=27)
         self.active_map_combo.pack(side='left')
         ttk.Label(main, text='Одна карта: текущий выбор; несколько: равные квоты по whitelist. Модель: Tiger H1.').pack(anchor='w')
-        ttk.Label(main, text='Выберите папку результатов: ke-generate-01, 02… создаются автоматически.').pack(anchor='w', pady=(2, 8))
+        ttk.Label(main, text='Датасет: KolobanovEye/dataset/raw (обновляется после успешной генерации); технические файлы: dataset/runs.').pack(anchor='w', pady=(2, 8))
         form = ttk.Frame(main)
         form.pack(fill='x')
         labels = dict(FIELDS)
         groups = [
-            ('Пути', [('dagor',), ('game',), ('output',)]),
+            ('Пути', [('dagor',), ('game',)]),
             ('Кадры', [('count',), ('frames_per_position',), ('seed',), ('width','height','Размер, пиксели: ширина / высота'), ('fov',)]),
             ('Танк и место', [('placement_mode',), ('map_margin_percent',), ('tank_x','tank_z','Центр поиска: X / Z'), ('tank_yaw',), ('turret_yaw_min','turret_yaw_max','Башня относительно корпуса, °'), ('gun_pitch_min','gun_pitch_max','Наклон орудия, °'), ('placement_radius',), ('minimum_ground_y',), ('max_height_range',), ('ground_offset',)]),
             ('Камера', [('distance_min','distance_max','Дистанция по горизонтали: от / до'),
@@ -272,9 +273,7 @@ class App:
                 data[key] = int(value) if key in INTS else float(value.replace(',', '.')) if key in FLOATS else value
             except ValueError as exc:
                 raise ValueError(f'{key}: неверное число') from exc
-        if not data['output']:
-            raise ValueError('Укажите родительскую папку результатов')
-        data['output'] = str(next_numbered_directory(data['output']))
+        data['output'] = str(DATASET_DIR)
         data['keep_open'] = self.keep_open.get()
         data['capture_last_clip'] = self.capture_last_clip.get()
         data['capture_tank_map'] = self.capture_tank_map.get()
@@ -300,7 +299,7 @@ class App:
             self.scan_buildings.set(data['scan_buildings'])
             for k, v in data.items():
                 if k in self.values:
-                    self.values[k].set(str(Path(v).parent) if k == 'output' else MODE_LABELS.get(v, v) if k == 'placement_mode' else str(v))
+                    self.values[k].set(str(DATASET_DIR) if k == 'output' else MODE_LABELS.get(v, v) if k == 'placement_mode' else str(v))
             self.refresh_maps()
             if data['map_id'] in available_whitelist(self.detected_maps, self.selected_maps or []):
                 self.active_map.set(data['map_id'])
@@ -316,21 +315,34 @@ class App:
             except OSError as exc: messagebox.showerror('Ошибка сохранения', str(exc))
 
     def run(self):
-        if self.running: return
+        if self.running:
+            return
         self.refresh_maps()
         active = available_whitelist(self.detected_maps, self.selected_maps or [])
         if not active or self.active_map.get() not in active:
             messagebox.showerror('Нет активной карты',
-                'Выберите и включите в белый список хотя бы одну карту avg_*.bin.')
+                'В белом списке должна быть хотя бы одна доступная карта avg_*.bin.')
             return
         try:
             data = self.get_config()
-            cmd = (command(data) if len(data['map_ids']) <= 1 else
-                   [sys.executable, '-u', str(Path(__file__).resolve().with_name('ke_multi_generate.py')),
-                    '--config-json', json.dumps(data, ensure_ascii=False)])
         except ValueError as exc:
-            messagebox.showerror('Ошибка настроек', str(exc)); return
-        self.running = True; self.run_button.config(state='disabled'); self.state.set(f"Генерация {data['map_id']}: {data['output']}")
+            messagebox.showerror('Ошибка настроек', str(exc))
+            return
+        replace_raw = (DATASET_DIR / 'raw').exists()
+        if replace_raw and not messagebox.askyesno(
+                'Заменить исходный датасет?',
+                'dataset/raw уже существует.\n\n'
+                'После успешной генерации новый датасет заменит предыдущий raw. '
+                'Если генерация завершится с ошибкой, прежний raw сохранится.\n\n'
+                'Продолжить?'):
+            return
+        cmd = [sys.executable, '-u', str(Path(__file__).resolve().with_name('ke_dataset.py')),
+               '--config-json', json.dumps(data, ensure_ascii=False)]
+        if replace_raw:
+            cmd.append('--replace-raw')
+        self.running = True
+        self.run_button.config(state='disabled')
+        self.state.set(f"Генерация {len(data['map_ids'])} карт → dataset/raw")
         threading.Thread(target=self.worker, args=(data, cmd), daemon=True).start()
 
     def show_help(self):
@@ -446,28 +458,18 @@ class App:
 
     def worker(self, data, cmd):
         try:
-            run = Path(data['output'])
-            def execute(stage, args):
-                self.events.put(('line', f'\n[KE] {stage}\n'))
-                proc = subprocess.Popen(args, cwd=Path(__file__).resolve().parent, stdout=subprocess.PIPE,
-                                        stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace',
-                                    env={**os.environ, 'PYTHONIOENCODING': 'utf-8'})
-                self.process = proc
-                for line in proc.stdout: self.events.put(('line', line))
-                code = proc.wait()
-                if code: raise RuntimeError(f'{stage}: код {code}. Результаты: {run}')
-            if len(data.get('map_ids', [])) > 1:
-                execute('Многокартовая генерация (с проверкой и COCO)', cmd)
-                self.events.put(('success', str(run)))
-                return
-            execute('1/4 Генерация', cmd)
-            with (run / 'generation-config.json').open('x', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2); f.write('\n')
-            script = Path(__file__).resolve().parent
-            execute('2/4 Проверка серии', [sys.executable, '-u', str(script / 'ke_validate.py'), '--run', str(run)])
-            execute('3/4 Диагностика рельефа', [sys.executable, '-u', str(script / 'ke_terrain_audit.py'), '--run', str(run), '--write', '--max-height-range', str(data['max_height_range'])])
-            execute('4/4 Экспорт COCO', [sys.executable, '-u', str(script / 'ke_coco.py'), '--runs', str(run), '--out', str(run / 'coco')])
-            self.events.put(('success', str(run)))
+            self.events.put(('line', '\n[KE] Создание dataset/raw и проверка кадров\n'))
+            proc = subprocess.Popen(
+                cmd, cwd=Path(__file__).resolve().parent, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace',
+                env={**os.environ, 'PYTHONIOENCODING': 'utf-8'})
+            self.process = proc
+            for line in proc.stdout:
+                self.events.put(('line', line))
+            code = proc.wait()
+            if code:
+                raise RuntimeError(f'Генерация dataset/raw завершилась с кодом {code}. См. dataset/runs.')
+            self.events.put(('success', str(DATASET_DIR / 'raw')))
         except (OSError, ValueError, RuntimeError) as exc:
             self.events.put(('error', str(exc)))
 
