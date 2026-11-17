@@ -560,6 +560,29 @@ def is_upgraded_offscreen_capture(source: Path) -> bool:
     return True
 
 
+def has_last_clip_bounds(source: Path) -> bool:
+    """Recognize already installed last-clip metadata, even after successor patches.
+
+    git apply --reverse --check fails after the tank-map successor modifies the
+    surrounding metadata block. Check feature markers, never line-number context.
+    A partially inserted block is an error, not a reason to reapply an old patch.
+    """
+    contents = source.read_bytes()
+    markers = (
+        b'const auto cellOrigin = scene.lmeshMgr->getCellOrigin();',
+        b'const float lastClipX0 =',
+        b'const float lastClipZ1 =',
+        b'return fail("LAST_CLIP_BOUNDS", "Invalid fixed clip bounds");',
+        b'result.setPoint3("last_clip_min",',
+        b'result.setPoint3("last_clip_max",',
+    )
+    found = [marker in contents for marker in markers]
+    if any(found) and not all(found):
+        missing = [marker.decode("ascii") for marker, exists in zip(markers, found) if not exists]
+        raise ValueError(f"Partial last-clip bounds integration in {source}: missing {missing}")
+    return all(found)
+
+
 def apply_dagor_patches(dagor, *, with_ooz=False):
     apply = ["git", "apply", "--whitespace=error-all"]
     patches = (*PATCHES, OOZ_PATCH) if with_ooz else PATCHES
@@ -603,12 +626,14 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
         print("[KE] Removing the experimental clipmap tile exporter", flush=True)
         subprocess.run(apply, input=removal, cwd=dagor, check=True)
     water_filter_applied = subprocess.run([*apply, "--reverse", "--check"], input=WATER_FILTER_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
-    last_clip_bounds_applied = subprocess.run([*apply, "--reverse", "--check"], input=LAST_CLIP_BOUNDS_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    capture_cpp = dagor / "prog/tools/sceneTools/daEditorX/kolobanovEye.cpp"
+    last_clip_bounds_applied = has_last_clip_bounds(capture_cpp) or subprocess.run(
+        [*apply, "--reverse", "--check"], input=LAST_CLIP_BOUNDS_PATCH.read_bytes().replace(b"\r\n", b"\n"),
+        cwd=dagor, capture_output=True).returncode == 0
     scene_quality_applied = subprocess.run([*apply, "--reverse", "--check"],
         input=SCENE_QUALITY_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     offscreen_streaming_applied = subprocess.run([*apply, "--reverse", "--check"],
         input=OFFSCREEN_STREAMING_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
-    capture_cpp = dagor / "prog/tools/sceneTools/daEditorX/kolobanovEye.cpp"
     upgraded_capture = is_upgraded_offscreen_capture(capture_cpp)
     streaming_wait_applied = upgraded_capture or subprocess.run([*apply, "--reverse", "--check"],
         input=OFFSCREEN_STREAMING_WAIT_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
@@ -619,6 +644,8 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
     texture_pump_applied = offscreen_frame_clock_applied or subprocess.run([*apply, "--reverse", "--check"],
         input=TEXTURE_PUMP_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     for patch in patches:
+        if last_clip_bounds_applied and patch == LAST_CLIP_BOUNDS_PATCH:
+            continue
         if upgraded_capture and patch == OFFSCREEN_STREAMING_WAIT_PATCH:
             continue
         if streaming_wait_applied and patch == OFFSCREEN_SERIAL_STREAMING_PATCH:
