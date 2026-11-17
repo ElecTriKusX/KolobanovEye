@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ke_pixel_debug import load_png
-from ke_review import draw_box, parse_vector, write_rgb_png
+from tools.ke_pixel_debug import load_png
+from tools.ke_review import draw_box, parse_vector, write_rgb_png
 
 
 class ReviewTest(unittest.TestCase):
