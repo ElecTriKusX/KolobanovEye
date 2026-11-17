@@ -4,9 +4,9 @@ import json
 import re
 import sys
 from pathlib import Path
-from ke_annotation import parse_annotation
-from ke_frame_journal import JOURNAL, read_journal
-from ke_pixel_debug import load_png
+from tools.ke_annotation import parse_annotation
+from tools.ke_frame_journal import JOURNAL, read_journal
+from tools.ke_pixel_debug import load_png
 from kolobanoveye import select_camera_attempt, verify_png
 
 
