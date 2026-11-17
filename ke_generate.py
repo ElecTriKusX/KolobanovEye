@@ -12,7 +12,7 @@ from ke_maps import MAP_ID
 DEFAULTS = {
     'dagor': r'D:\Projects\DagorEngine', 'game': r'D:\Games\WarThunder',
     'output': r'D:\Projects\ke-generate-01', 'count': 6, 'seed': 42,
-    'map_id': 'levels/avg_normandy.bin', 'map_ids': [], 'capture_tank_map': True, 'tank_map_resolution': 1024,
+    'map_id': 'levels/avg_normandy.bin', 'map_ids': [], 'capture_tank_map': False, 'tank_map_resolution': 1024,
     'width': 1280, 'height': 720, 'fov': 55.0, 'tank_x': 0.0, 'tank_z': 0.0,
     'tank_yaw': 20.0, 'ground_offset': 0.05, 'minimum_ground_y': 0.5, 'camera_clearance': 0.5,
     'placement_mode': 'whole_map', 'map_margin_percent': 15.0, 'placement_radius': 0.0, 'placement_attempts': 24, 'frames_per_position': 6, 'max_height_range': 0.5, 'camera_attempts': 8,
