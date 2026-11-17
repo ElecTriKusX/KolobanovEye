@@ -2,3 +2,7 @@ __pycache__/
 build-logs/
 /inventory.json
 /ke-run-*/
+
+# Local user map selection (never commit user machine choices)
+/map-whitelist.local.json
+/map-whitelist.local.json.tmp
