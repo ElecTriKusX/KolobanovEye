@@ -8,7 +8,7 @@ diff --git a/prog/gameLibs/publicInclude/landMesh/lastClip.h b/prog/gameLibs/pub
 diff --git a/prog/gameLibs/landMesh/lastClip.cpp b/prog/gameLibs/landMesh/lastClip.cpp
 --- a/prog/gameLibs/landMesh/lastClip.cpp
 +++ b/prog/gameLibs/landMesh/lastClip.cpp
-@@ -377,6 +377,32 @@
+@@ -377,6 +377,31 @@
  void render_last_clip_to_tex(Texture *tex, LandMeshData &data, const Point3 &view_pos)
  {
    G_ASSERT(data.lmeshMgr && data.lmeshRenderer);
@@ -35,7 +35,6 @@ diff --git a/prog/gameLibs/landMesh/lastClip.cpp b/prog/gameLibs/landMesh/lastCl
 +      const float z0 = lerp(region[0].z, region[1].z, float(y) / data.texture_size);
 +      const float z1 = lerp(region[0].z, region[1].z, float(y + lines) / data.texture_size);
 +      const BBox3 part(Point3(region[0].x, region[0].y, z0), Point3(region[1].x, region[1].y, z1));
-+      d3d::clearview(CLEAR_TARGET, 0x00000000, 1.0f, 0);
 +      render_last_clip_in_box(part, Point2(0.f, 0.f), view_pos, data);
 +    }
 +  }
@@ -44,12 +43,13 @@ diff --git a/prog/gameLibs/landMesh/lastClip.cpp b/prog/gameLibs/landMesh/lastCl
 diff --git a/prog/tools/sceneTools/daEditorX/binSceneView/strmLevel.cpp b/prog/tools/sceneTools/daEditorX/binSceneView/strmLevel.cpp
 --- a/prog/tools/sceneTools/daEditorX/binSceneView/strmLevel.cpp
 +++ b/prog/tools/sceneTools/daEditorX/binSceneView/strmLevel.cpp
-@@ -25,2 +25,8 @@
+@@ -25,2 +25,9 @@
  #include <landMesh/lastClip.h>
 +#include <image/dag_png.h>
 +#include <image/dag_texPixel.h>
 +#include <3d/dag_lockTexture.h>
 +#include <3d/dag_resPtr.h>
++#include <3d/dag_texMgrTags.h>
 +#include <cstdlib>
 +#include <cmath>
  #include <landMesh/lmeshMirroring.h>
