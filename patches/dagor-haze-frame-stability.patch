@@ -50,7 +50,7 @@ diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/scene
 +            if (keHavePreviousSample)
 +            {
 +              totalDelta += change;
-+              maximumDelta = max(maximumDelta, change);
++              maximumDelta = change > maximumDelta ? change : maximumDelta;
 +            }
 +            kePreviousSample[componentIndex] = values[ch];
 +          }
