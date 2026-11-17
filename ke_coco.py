@@ -80,7 +80,8 @@ def export(runs, out, tile_size=256, split=False, seed=42):
             img = (run / record['image']).resolve()
             try: relative = os.path.relpath(img, out).replace('\\', '/')
             except ValueError as exc: raise ValueError('Экспорт и исходные кадры должны быть на одном диске') from exc
-            data.append({'relative': relative, 'group': group_for(blk, tile_size),
+            map_id = record.get('map_id') or (field(blk, 'level', 't').replace('\\', '/').split('/')[-1])
+            data.append({'relative': relative, 'map_id': map_id, 'group': group_for(blk, tile_size),
                          'width': int(field(blk, 'width', 'i')), 'height': int(field(blk, 'height', 'i')),
                          'annotation': record['annotation'], 'scene': scene_metadata(blk)})
     assignments = split_groups([r['group'] for r in data], seed) if split else {r['group']: 'all' for r in data}
@@ -95,7 +96,7 @@ def export(runs, out, tile_size=256, split=False, seed=42):
             i = len(result['images']) + 1
             x, y, w, h = rec['annotation']['bbox_xywh']
             result['images'].append({'id': i, 'file_name': rec['relative'], 'width': rec['width'], 'height': rec['height'],
-                                     'scene_group': rec['group'], 'ke_scene': rec['scene']})
+                                     'scene_group': rec['group'], 'map_id': rec['map_id'], 'ke_scene': rec['scene']})
             result['annotations'].append({'id': i, 'image_id': i, 'category_id': 1, 'bbox': [x, y, w, h],
                                           'area': w*h, 'iscrowd': 0,
                                           'bbox_method': rec['annotation']['bbox_method'], 'bbox_kind': 'approximate_amodal'})
