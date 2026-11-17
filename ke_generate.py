@@ -119,6 +119,12 @@ def main():
     args = parser.parse_args()
     try:
         cfg = validate_config(json.loads(args.config.read_text(encoding='utf-8')))
+        if len(cfg['map_ids']) > 1:
+            from ke_multi_generate import run_multi
+            run_multi(cfg)
+            return 0
+        if len(cfg['map_ids']) == 1:
+            cfg['map_id'] = cfg['map_ids'][0]
         if Path(cfg['output']).exists():
             raise ValueError('Выходная папка уже существует; укажите новую')
         result = subprocess.call(command(cfg), cwd=Path(__file__).resolve().parent)
