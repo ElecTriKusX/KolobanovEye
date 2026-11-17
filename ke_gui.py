@@ -380,6 +380,24 @@ class App:
                 map_id = json.loads(saved.read_text(encoding='utf-8')).get('map_id', map_id)
             except (ValueError, OSError):
                 pass
+        tank_map = run / 'maps' / f'{Path(map_id).stem}-tank.png'
+        tank_bounds = run / 'tank-map-bounds.json'
+        if tank_map.is_file() and tank_bounds.is_file():
+            try:
+                info = json.loads(tank_bounds.read_text(encoding='utf-8'))
+                square = info.get('tank_square')
+                if not square:
+                    raise ValueError('В отчёте нет танкового квадрата')
+                b = [square[k] for k in ('min_x', 'max_x', 'min_z', 'max_z')]
+                output = next_numbered_directory(run, 'tank-map-')
+                output.mkdir()
+            except (OSError, ValueError, KeyError) as exc:
+                messagebox.showerror('Танковая карта', str(exc)); return
+            self.start_tool('ke_map.py', [
+                '--run', str(run), '--image', str(tank_map),
+                '--out', str(output / 'positions.html'), '--bounds',
+                *(str(x) for x in b), '--flip-z', '--link-image'])
+            return
         image = run / 'maps' / f'{Path(map_id).stem}.png'
         if not image.is_file():
             image = run / 'render-debug' / 'terrain-last-clip.png'
