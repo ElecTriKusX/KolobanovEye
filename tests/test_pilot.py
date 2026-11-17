@@ -1,5 +1,5 @@
 import unittest
-from ke_pilot import plan
+from tools.ke_pilot import plan
 
 class PilotTest(unittest.TestCase):
     def test_seeded_plan(self):
