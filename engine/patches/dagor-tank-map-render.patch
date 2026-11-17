@@ -78,7 +78,7 @@ diff --git a/prog/tools/sceneTools/daEditorX/binSceneView/strmLevel.cpp b/prog/t
 +        square[1].x = cx + side * 0.5f;
 +        square[0].z = cz - side * 0.5f;
 +        square[1].z = cz + side * 0.5f;
-+        auto target = dag::create_tex(nullptr, size, size,
++        UniqueTex target = dag::create_tex(nullptr, size, size,
 +          TEXFMT_A8R8G8B8 | TEXCF_RTARGET | TEXCF_SRGBWRITE | TEXCF_SRGBREAD, 1, "ke_tank_map_rt", RESTAG_LAND);
 +        if (target.getTex2D())
 +        {
