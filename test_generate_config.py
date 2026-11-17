@@ -17,7 +17,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(cmd[cmd.index('--camera-distance-range') + 1:cmd.index('--camera-distance-range') + 3], ['18.0', '35.0'])
 
     def test_config_rejects_bad_values(self):
-        for change in ({'count': True}, {'count': 1}, {'width': 20}, {'distance_min': 40},
+        for change in ({'count': True}, {'count': 0}, {'width': 20}, {'distance_min': 40},
                        {'fov': float('nan')}, {'wat': 1}, {'clipmap_feedback': 'wrong'}):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 validate_config({**DEFAULTS, **change})
@@ -35,6 +35,11 @@ class ConfigTest(unittest.TestCase):
                     '', True):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 validate_config({**DEFAULTS, 'map_id': bad})
+
+    def test_singleton_is_supported_for_sparse_map_quotas(self):
+        cfg = validate_config({'count': 1, 'seed': 42})
+        self.assertEqual(cfg['count'], 1)
+        self.assertEqual(command(cfg)[command(cfg).index('--count') + 1], '1')
 
     def test_validator_checks_real_png_and_bounds(self):
         with tempfile.TemporaryDirectory() as temp:
