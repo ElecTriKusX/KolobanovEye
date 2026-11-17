@@ -1,8 +1,26 @@
+# Python and local tool caches
 __pycache__/
-build-logs/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Local builds, diagnostics, temporary files
+/build-logs/
 /inventory.json
 /ke-run-*/
+/ke-generate-*/
+*.log
+*.tmp
 
-# Local user map selection (never commit user machine choices)
+# Local user settings
 /map-whitelist.local.json
 /map-whitelist.local.json.tmp
+
+# Generated dataset lives IN this repository, but must never enter Git.
+# Only the description of its layout is tracked.
+/dataset/*
+!/dataset/README.md
