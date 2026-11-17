@@ -11,10 +11,10 @@ import sys
 from pathlib import Path
 
 from ke_generate import command, validate_config
-from ke_maps import scan_maps, available_whitelist, plan_equal_allocation
-from ke_validate import validate
-from ke_terrain_audit import audit
-from ke_coco import export
+from tools.ke_maps import scan_maps, available_whitelist, plan_equal_allocation
+from tools.ke_validate import validate
+from tools.ke_terrain_audit import audit
+from tools.ke_coco import export
 
 
 def jobs_for(config, discovered):
