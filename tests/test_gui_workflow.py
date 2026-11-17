@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from ke_gui import App, next_numbered_directory
 from ke_coco import export
-from test_coco import make_run
+from tests.test_coco import make_run
 
 
 class WorkflowTest(unittest.TestCase):

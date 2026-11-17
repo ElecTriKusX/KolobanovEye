@@ -35,7 +35,7 @@ jobs:
                   file.parent.mkdir(parents=True, exist_ok=True)
                   with urllib.request.urlopen(source + path, timeout=30) as response:
                       file.write_bytes(response.read())
-              patch = pathlib.Path.cwd() / 'patches/dagor-tank-map-render.patch'
+              patch = pathlib.Path.cwd() / 'engine/patches/dagor-tank-map-render.patch'
               subprocess.run(['git', 'apply', '--check', str(patch)], cwd=root, check=True)
               subprocess.run(['git', 'apply', str(patch)], cwd=root, check=True)
               subprocess.run(['git', 'apply', '--reverse', '--check', str(patch)], cwd=root, check=True)

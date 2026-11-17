@@ -254,7 +254,7 @@ SHA-256 `b24c37886142e11d0ee687db6ab06f936207aa7f2ea1fd1d9a36763c7a507e6a`.
 входном потоке. Для повтора из корня KolobanovEye под Linux x86-64 с g++:
 
 ```sh
-git -C /path/to/DagorEngine apply /path/to/KolobanovEye/patches/dagor-ooz.patch
+git -C /path/to/DagorEngine apply /path/to/KolobanovEye/engine/patches/dagor-ooz.patch
 python tests/ooz_linux.py --dagor /path/to/DagorEngine --ooz /path/to/ooz
 ```
 
@@ -311,7 +311,7 @@ git -C D:\Projects\ooz-src checkout --detach 05038060aa68f9187ae9923b2388ca8db40
 python .\kolobanoveye.py build --dagor D:\Projects\DagorEngine --ooz D:\Projects\ooz
 ```
 
-Скрипт применяет `patches/dagor-ooz.patch`, собирает локальную x64-библиотеку
+Скрипт применяет `engine/patches/dagor-ooz.patch`, собирает локальную x64-библиотеку
 декодера и запускает Jam только для DaEditorX с его зависимостями, включая
 динамический `daKernel`. Локальная сборка `ooz` завершает декодирование
 после получения объявленного числа распакованных байтов. Загрузчик Dagor

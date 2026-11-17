@@ -19,58 +19,58 @@ from ke_maps import MAP_ID, parse_tank_bounds_log
 
 REV = "9639942de5a8e5b01d91977f60ed82cda22d5f41"
 HERE = Path(__file__).resolve().parent
-RENDER_DEBUG_PATCH = HERE / "patches/dagor-render-debug.patch"
-DIRECT_DEPTH_PATCH = HERE / "patches/dagor-direct-debug-depth.patch"
-INDIRECTION_PATCH = HERE / "patches/dagor-indirection-check.patch"
-INDIRECTION_FIX_PATCH = HERE / "patches/dagor-indirection-readback-fix.patch"
-INDIRECTION_CPU_PATCH = HERE / "patches/dagor-indirection-cpu-test.patch"
-RESOLVE_PASS_PATCH = HERE / "patches/dagor-resolve-pass-capture.patch"
-RESOLVE_FLOAT_PATCH = HERE / "patches/dagor-resolve-float-capture.patch"
-DX11_TRACE_PATCH = HERE / "patches/dagor-dx11-terrain-trace.patch"
-CLIPMAP_LEGACY_PATCH = HERE / "patches/dagor-clipmap-legacy-color.patch"
-SEQUENCE_PATCH = HERE / "patches/dagor-sequence.patch"
-ORBIT_PATCH = HERE / "patches/dagor-orbit-camera.patch"
-CLEAN_CAPTURE_PATCH = HERE / "patches/dagor-clean-capture.patch"
-CAMERA_TERRAIN_PATCH = HERE / "patches/dagor-camera-terrain.patch"
-PLACEMENT_PATCH = HERE / "patches/dagor-placement-search.patch"
-CAMERA_RETRY_PATCH = HERE / "patches/dagor-camera-retry.patch"
-WATER_PROBE_PATCH = HERE / "patches/dagor-water-probe.patch"
-MULTI_COMPOSITION_PATCH = HERE / "patches/dagor-multi-composition.patch"
-CAMERA_HEIGHT_PATCH = HERE / "patches/dagor-camera-ground-height.patch"
-MAP_PLACEMENT_PATCH = HERE / "patches/dagor-map-placement.patch"
-WATER_FILTER_PATCH = HERE / "patches/dagor-water-ground-filter.patch"
-LAST_CLIP_BOUNDS_PATCH = HERE / "patches/dagor-last-clip-bounds.patch"
-REMOVE_CLIPMAP_EXPORT_PATCH = HERE / "patches/dagor-remove-clipmap-export.patch"
-LAST_CLIP_OUTPUT_PATCH = HERE / "patches/dagor-last-clip-output.patch"
-FRAME_JOURNAL_PATCH = HERE / "patches/dagor-frame-journal.patch"
-SCENE_QUALITY_PATCH = HERE / "patches/dagor-scene-quality.patch"
-OFFSCREEN_STREAMING_PATCH = HERE / "patches/dagor-offscreen-streaming.patch"
-TEXTURE_PUMP_PATCH = HERE / "patches/dagor-offscreen-texture-pump.patch"
-OFFSCREEN_FRAME_CLOCK_PATCH = HERE / "patches/dagor-offscreen-frame-clock.patch"
-OFFSCREEN_SERIAL_STREAMING_PATCH = HERE / "patches/dagor-offscreen-serial-streaming.patch"
-OFFSCREEN_STREAMING_WAIT_PATCH = HERE / "patches/dagor-offscreen-streaming-wait.patch"
-OFFSCREEN_RESOLVE_CAMERA_PATCH = HERE / "patches/dagor-offscreen-resolve-camera.patch"
-HAZE_CONVERGENCE_PATCH = HERE / "patches/dagor-haze-convergence-warmup.patch"
-HAZE_STABILITY_PATCH = HERE / "patches/dagor-haze-frame-stability.patch"
-TANK_ARTICULATION_PATCH = HERE / "patches/dagor-tank-articulation.patch"
-TANK_MAP_PATCH = HERE / "patches/dagor-tank-map-bounds.patch"
-TANK_MAP_RENDER_PATCH = HERE / "patches/dagor-tank-map-render.patch"
-CLIPMAP_TILE_PATCH = HERE / "patches/dagor-clipmap-tile-readback.patch"
+RENDER_DEBUG_PATCH = HERE / "engine/patches/dagor-render-debug.patch"
+DIRECT_DEPTH_PATCH = HERE / "engine/patches/dagor-direct-debug-depth.patch"
+INDIRECTION_PATCH = HERE / "engine/patches/dagor-indirection-check.patch"
+INDIRECTION_FIX_PATCH = HERE / "engine/patches/dagor-indirection-readback-fix.patch"
+INDIRECTION_CPU_PATCH = HERE / "engine/patches/dagor-indirection-cpu-test.patch"
+RESOLVE_PASS_PATCH = HERE / "engine/patches/dagor-resolve-pass-capture.patch"
+RESOLVE_FLOAT_PATCH = HERE / "engine/patches/dagor-resolve-float-capture.patch"
+DX11_TRACE_PATCH = HERE / "engine/patches/dagor-dx11-terrain-trace.patch"
+CLIPMAP_LEGACY_PATCH = HERE / "engine/patches/dagor-clipmap-legacy-color.patch"
+SEQUENCE_PATCH = HERE / "engine/patches/dagor-sequence.patch"
+ORBIT_PATCH = HERE / "engine/patches/dagor-orbit-camera.patch"
+CLEAN_CAPTURE_PATCH = HERE / "engine/patches/dagor-clean-capture.patch"
+CAMERA_TERRAIN_PATCH = HERE / "engine/patches/dagor-camera-terrain.patch"
+PLACEMENT_PATCH = HERE / "engine/patches/dagor-placement-search.patch"
+CAMERA_RETRY_PATCH = HERE / "engine/patches/dagor-camera-retry.patch"
+WATER_PROBE_PATCH = HERE / "engine/patches/dagor-water-probe.patch"
+MULTI_COMPOSITION_PATCH = HERE / "engine/patches/dagor-multi-composition.patch"
+CAMERA_HEIGHT_PATCH = HERE / "engine/patches/dagor-camera-ground-height.patch"
+MAP_PLACEMENT_PATCH = HERE / "engine/patches/dagor-map-placement.patch"
+WATER_FILTER_PATCH = HERE / "engine/patches/dagor-water-ground-filter.patch"
+LAST_CLIP_BOUNDS_PATCH = HERE / "engine/patches/dagor-last-clip-bounds.patch"
+REMOVE_CLIPMAP_EXPORT_PATCH = HERE / "engine/patches/dagor-remove-clipmap-export.patch"
+LAST_CLIP_OUTPUT_PATCH = HERE / "engine/patches/dagor-last-clip-output.patch"
+FRAME_JOURNAL_PATCH = HERE / "engine/patches/dagor-frame-journal.patch"
+SCENE_QUALITY_PATCH = HERE / "engine/patches/dagor-scene-quality.patch"
+OFFSCREEN_STREAMING_PATCH = HERE / "engine/patches/dagor-offscreen-streaming.patch"
+TEXTURE_PUMP_PATCH = HERE / "engine/patches/dagor-offscreen-texture-pump.patch"
+OFFSCREEN_FRAME_CLOCK_PATCH = HERE / "engine/patches/dagor-offscreen-frame-clock.patch"
+OFFSCREEN_SERIAL_STREAMING_PATCH = HERE / "engine/patches/dagor-offscreen-serial-streaming.patch"
+OFFSCREEN_STREAMING_WAIT_PATCH = HERE / "engine/patches/dagor-offscreen-streaming-wait.patch"
+OFFSCREEN_RESOLVE_CAMERA_PATCH = HERE / "engine/patches/dagor-offscreen-resolve-camera.patch"
+HAZE_CONVERGENCE_PATCH = HERE / "engine/patches/dagor-haze-convergence-warmup.patch"
+HAZE_STABILITY_PATCH = HERE / "engine/patches/dagor-haze-frame-stability.patch"
+TANK_ARTICULATION_PATCH = HERE / "engine/patches/dagor-tank-articulation.patch"
+TANK_MAP_PATCH = HERE / "engine/patches/dagor-tank-map-bounds.patch"
+TANK_MAP_RENDER_PATCH = HERE / "engine/patches/dagor-tank-map-render.patch"
+CLIPMAP_TILE_PATCH = HERE / "engine/patches/dagor-clipmap-tile-readback.patch"
 PATCHES = (
-    HERE / "patches/dagor-phase0.patch",
-    HERE / "patches/dagor-editor-unused-parameters.patch",
-    HERE / "patches/dagor-clipmap-render-mask.patch",
-    HERE / "patches/dagor-screenshot-lighting.patch",
-    HERE / "patches/dagor-terrain-draw.patch",
+    HERE / "engine/patches/dagor-phase0.patch",
+    HERE / "engine/patches/dagor-editor-unused-parameters.patch",
+    HERE / "engine/patches/dagor-clipmap-render-mask.patch",
+    HERE / "engine/patches/dagor-screenshot-lighting.patch",
+    HERE / "engine/patches/dagor-terrain-draw.patch",
     RENDER_DEBUG_PATCH,
     DIRECT_DEPTH_PATCH,
-    HERE / "patches/dagor-clipmap-software-feedback.patch",
+    HERE / "engine/patches/dagor-clipmap-software-feedback.patch",
     CLIPMAP_TILE_PATCH,
-    HERE / "patches/dagor-deferred-terrain-view-rays.patch",
+    HERE / "engine/patches/dagor-deferred-terrain-view-rays.patch",
     INDIRECTION_PATCH,
     INDIRECTION_FIX_PATCH,
     INDIRECTION_CPU_PATCH,
-    HERE / "patches/dagor-terrain-bind-diagnostics.patch",
+    HERE / "engine/patches/dagor-terrain-bind-diagnostics.patch",
     RESOLVE_PASS_PATCH,
     RESOLVE_FLOAT_PATCH,
     DX11_TRACE_PATCH,
@@ -98,7 +98,7 @@ PATCHES = (
     OFFSCREEN_RESOLVE_CAMERA_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
-OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
+OOZ_PATCH = HERE / "engine/patches/dagor-ooz.patch"
 OOZ_LIMIT = 256 * 1024 * 1024
 OOZ_STREAM_TYPES = {5: "LZNA", 6: "Kraken", 10: "Mermaid/Selkie", 11: "Bitknit", 12: "Leviathan"}
 BIN = Path("tools/dagor_cdk/windows-x86_64")

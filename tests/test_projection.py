@@ -5,12 +5,12 @@ import subprocess
 import tempfile
 import unittest
 
-ROOT = pathlib.Path(__file__).parent
+ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 class ProjectionTest(unittest.TestCase):
     @unittest.skipUnless(shutil.which('g++'), 'g++ is required to compile the C++ projection test')
     def test_cpp_projection(self):
-        patch = (ROOT / 'patches/dagor-phase0.patch').read_text()
+        patch = (ROOT / 'engine/patches/dagor-phase0.patch').read_text()
         start = patch.index('+bool project_bounds(')
         end = patch.index('\n+} // namespace', start)
         code = '\n'.join(line[1:] for line in patch[start:end].splitlines() if line.startswith('+'))
