@@ -16,6 +16,7 @@ import tempfile
 from ke_annotation import parse_annotation, write_annotation
 from ke_frame_journal import JOURNAL, read_journal
 from ke_maps import MAP_ID, parse_tank_bounds_log
+from tools.vendor_ooz import VENDOR as OOZ_VENDOR, verify_vendor as verify_vendor_ooz, install as install_vendor_ooz
 
 REV = "9639942de5a8e5b01d91977f60ed82cda22d5f41"
 HERE = Path(__file__).resolve().parent
@@ -466,7 +467,15 @@ def prepare_ooz(ooz, logs):
     work = logs / "ooz-local"
     dagor_path(work)
     work.mkdir(exist_ok=True)
-    stage_ooz_sources(ooz, work)
+    if ooz is not None:
+        stage_ooz_sources(ooz, work)
+        # The selected commit must produce precisely the pinned decode-only sources.
+        # Keep the verified snapshot inside the project for all later builds.
+        install_vendor_ooz(work)
+    else:
+        verify_vendor_ooz()
+        for filename in ("stdafx.h", "targetver.h", "kraken.cpp", "lzna.cpp", "bitknit.cpp"):
+            shutil.copyfile(OOZ_VENDOR / filename, work / filename)
     run_logged([cl, "/nologo", "/c", "/O2", "/MT", "/Zl", "kraken.cpp", "lzna.cpp", "bitknit.cpp"],
                logs / "ooz-compile.log", work)
     library = work / "ke-ooz.lib"
@@ -741,18 +750,27 @@ def build(dagor, ooz=None):
     jam = shutil.which("jam")
     if not jam:
         raise ValueError("jam.exe missing from PATH. Run Dagor make_devtools.py first.")
-    apply_dagor_patches(dagor, with_ooz=bool(ooz))
+    # Freeze the decoder once, reusing an already compiled checked source snapshot.
+    # The source files are local/gitignored due to missing clear upstream license.
+    if ooz is None and not OOZ_VENDOR.is_dir():
+        cached = HERE / "build-logs" / "ooz-local"
+        if cached.is_dir():
+            install_vendor_ooz(cached)
+    use_ooz = ooz is not None or OOZ_VENDOR.is_dir()
+    if use_ooz and ooz is None:
+        verify_vendor_ooz()
+    apply_dagor_patches(dagor, with_ooz=use_ooz)
 
     logs = HERE / "build-logs"
     logs.mkdir(exist_ok=True)
     args = [jam, "-sRoot=../..", "-sPlatformArch=x86_64", "-sConfig=dev"]
-    if ooz:
+    if use_ooz:
         require_file(dagor / BIN / "dumpGrp-dev.exe")
         library = prepare_ooz(ooz, logs)
         args += ["-sUseOoz=yes", f"-sOozLib={dagor_path(library)}"]
-    editor_log = logs / ("editor-ooz.log" if ooz else "editor.log")
+    editor_log = logs / ("editor-ooz.log" if use_ooz else "editor.log")
     run_logged([*args, "-f", "sceneTools/daEditorX/jamfile-editor"], editor_log, dagor / "prog/tools")
-    if ooz:
+    if use_ooz:
         if b"Building daKernel with the decode-only ooz backend" not in editor_log.read_bytes():
             raise ValueError(f"Jam did not select the ooz backend. See {editor_log}")
         require_file(dagor / BIN / "daKernel-dev.dll")
