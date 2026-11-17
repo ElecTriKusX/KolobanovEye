@@ -29,7 +29,7 @@ FIELDS = [
 ]
 
 
-MODE_LABELS = {'whole_map': 'Вся карта', 'around_point': 'Вокруг точки'}
+MODE_LABELS = {'whole_map': 'Весь ландшафт', 'tank_map': 'Танковое поле', 'around_point': 'Вокруг точки'}
 
 def next_numbered_directory(parent, prefix='ke-generate-'):
     parent = Path(parent)
@@ -63,6 +63,7 @@ class App:
         self.last_run = None
         self.detected_maps = []
         self.selected_maps = None
+        self.active_map = tk.StringVar(value=DEFAULTS['map_id'])
         self.map_summary = tk.StringVar(value='Поиск avg-карт…')
         main = ttk.Frame(root, padding=12)
         main.pack(fill='both', expand=True)
@@ -71,7 +72,11 @@ class App:
         ttk.Label(map_bar, textvariable=self.map_summary).pack(side='left')
         ttk.Button(map_bar, text='Карты / белый список…', command=self.open_maps).pack(side='left', padx=10)
         ttk.Button(map_bar, text='Обновить', command=self.refresh_maps).pack(side='left')
-        ttk.Label(main, text='Рендер пока поддерживает только Normandy + Tiger H1; другие карты подключим по этапам.').pack(anchor='w')
+        ttk.Label(map_bar, text='Текущий запуск:').pack(side='left', padx=(15, 4))
+        self.active_map_combo = ttk.Combobox(map_bar, textvariable=self.active_map,
+                                             state='readonly', width=27)
+        self.active_map_combo.pack(side='left')
+        ttk.Label(main, text='Пока генерируем только на одной выбранной карте за запуск. Модель: Tiger H1.').pack(anchor='w')
         ttk.Label(main, text='Выберите папку результатов: ke-generate-01, 02… создаются автоматически.').pack(anchor='w', pady=(2, 8))
         form = ttk.Frame(main)
         form.pack(fill='x')
@@ -86,7 +91,7 @@ class App:
         self.widgets = {}
         def add_widget(parent, key):
             if key == 'placement_mode':
-                widget = ttk.Combobox(parent, textvariable=self.values[key], values=tuple(MODE_LABELS.values()), state='readonly', width=12)
+                widget = ttk.Combobox(parent, textvariable=self.values[key], values=tuple(MODE_LABELS.values()), state='readonly', width=18)
             elif key == 'clipmap_feedback':
                 widget = ttk.Combobox(parent, textvariable=self.values[key], values=('software', 'hardware'), state='readonly', width=12)
             else:
@@ -184,6 +189,9 @@ class App:
                 self.selected_maps = initial_whitelist(entries) if saved is None else saved
             self.detected_maps = entries
             valid = available_whitelist(entries, self.selected_maps)
+            self.active_map_combo['values'] = tuple(valid)
+            if self.active_map.get() not in valid:
+                self.active_map.set(valid[0] if valid else '')
             failures = sum(item['status'] != 'header_ok' for item in entries)
             stale = len(self.selected_maps) - len(valid)
             self.map_summary.set(
@@ -193,6 +201,8 @@ class App:
         except (OSError, ValueError) as exc:
             self.detected_maps = []
             self.map_summary.set(f'Ошибка обнаружения карт: {exc}')
+            self.active_map_combo['values'] = ()
+            self.active_map.set('')
 
     def open_maps(self):
         self.refresh_maps()
@@ -267,6 +277,7 @@ class App:
         data['wait_frame_stability'] = self.wait_frame_stability.get()
         data['wait_sky_convergence'] = self.wait_sky_convergence.get()
         data['scan_buildings'] = self.scan_buildings.get()
+        data['map_id'] = self.active_map.get()
         return validate_config(data)
 
     def open_config(self):
@@ -283,6 +294,9 @@ class App:
             for k, v in data.items():
                 if k in self.values:
                     self.values[k].set(str(Path(v).parent) if k == 'output' else MODE_LABELS.get(v, v) if k == 'placement_mode' else str(v))
+            self.refresh_maps()
+            if data['map_id'] in available_whitelist(self.detected_maps, self.selected_maps or []):
+                self.active_map.set(data['map_id'])
         except (OSError, ValueError) as exc: messagebox.showerror('Ошибка настроек', str(exc))
 
     def save_config(self):
@@ -298,18 +312,16 @@ class App:
         if self.running: return
         self.refresh_maps()
         active = available_whitelist(self.detected_maps, self.selected_maps or [])
-        if active != ['levels/avg_normandy.bin']:
-            messagebox.showerror('Карты пока не подключены',
-                'Текущий рендер поддерживает только levels/avg_normandy.bin. '
-                'Для сохранения результата пока оставьте в белом списке только Normandy. '
-                'Многокартовая генерация будет подключена на следующем этапе.')
+        if not active or self.active_map.get() not in active:
+            messagebox.showerror('Нет активной карты',
+                'Выберите и включите в белый список хотя бы одну карту avg_*.bin.')
             return
         try:
             data = self.get_config()
             cmd = command(data)
         except ValueError as exc:
             messagebox.showerror('Ошибка настроек', str(exc)); return
-        self.running = True; self.run_button.config(state='disabled'); self.state.set(f"Генерация: {data['output']}")
+        self.running = True; self.run_button.config(state='disabled'); self.state.set(f"Генерация {data['map_id']}: {data['output']}")
         threading.Thread(target=self.worker, args=(data, cmd), daemon=True).start()
 
     def show_help(self):
@@ -352,11 +364,18 @@ class App:
         if not run: return
         from kolobanoveye import LEVEL
         run = Path(run).resolve()
-        image = run / 'maps' / f'{LEVEL.stem}.png'
+        map_id = LEVEL.as_posix()
+        saved = run / 'generation-config.json'
+        if saved.is_file():
+            try:
+                map_id = json.loads(saved.read_text(encoding='utf-8')).get('map_id', map_id)
+            except (ValueError, OSError):
+                pass
+        image = run / 'maps' / f'{Path(map_id).stem}.png'
         if not image.is_file():
             image = run / 'render-debug' / 'terrain-last-clip.png'
         if not image.is_file():
-            image = run.parent / 'maps' / f'{LEVEL.stem}.png'
+            image = run.parent / 'maps' / f'{Path(map_id).stem}.png'
         if not image.is_file():
             messagebox.showerror('Нет текстуры', 'Включите «Сохранить обзорную текстуру карты» и создайте серию в этой папке результатов.')
             return
