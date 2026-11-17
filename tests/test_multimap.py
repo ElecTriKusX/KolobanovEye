@@ -6,7 +6,7 @@ from pathlib import Path
 
 from ke_generate import DEFAULTS
 from ke_multi_generate import jobs_for, map_seed, run_multi
-from ke_review import write_rgb_png
+from tools.ke_review import write_rgb_png
 
 
 def installed_maps(game, n):
