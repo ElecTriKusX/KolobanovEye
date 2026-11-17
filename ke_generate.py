@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 from kolobanoveye import plan_articulation, plan_camera_orbits
-from ke_maps import MAP_ID
+from tools.ke_maps import MAP_ID
 
 DEFAULTS = {
     'dagor': r'D:\Projects\DagorEngine', 'game': r'D:\Games\WarThunder',
