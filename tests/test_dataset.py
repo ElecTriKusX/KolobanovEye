@@ -6,7 +6,7 @@ from pathlib import Path
 
 from ke_dataset import run_dataset
 from ke_generate import DEFAULTS
-from ke_review import write_rgb_png
+from tools.ke_review import write_rgb_png
 from kolobanoveye import ensure_level_settings_accessor
 
 
