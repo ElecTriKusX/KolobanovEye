@@ -2,7 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from ke_annotation import read_annotation, write_annotation
+from tools.ke_annotation import read_annotation, write_annotation
 
 class AnnotationTest(unittest.TestCase):
     def test_dagor_metadata(self):
