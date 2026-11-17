@@ -1124,7 +1124,9 @@ def main():
         command.add_argument("--game", type=Path, default=Path(r"D:\Games\WarThunder"))
         command.add_argument("--cdk", type=Path, help="Default is <game>/WarThunderCDK")
     frame_cmd.add_argument("--out", type=Path, required=True, help="A new directory outside the game")
-    frame_cmd.add_argument("--level", type=str, default=LEVEL.as_posix(), help="Installed ground map ID: levels/avg_*.bin")
+    for map_parser in (inspect_cmd, frame_cmd):
+        map_parser.add_argument("--level", type=str, default=LEVEL.as_posix(),
+                                help="Installed ground map ID: levels/avg_*.bin")
     frame_cmd.add_argument("--model")
     frame_cmd.add_argument("--skeleton")
     frame_cmd.add_argument("--tank-xz", nargs=2, type=float, default=(0, 0))
@@ -1183,7 +1185,9 @@ def main():
             game = args.game.resolve()
             cdk = args.cdk.resolve() if args.cdk else (game / "WarThunderCDK").resolve()
             if args.command == "inspect":
-                report = inspect(game, cdk)
+                if MAP_ID.fullmatch(args.level) is None:
+                    raise ValueError("--level must be levels/avg_<name>.bin")
+                report = inspect(game, cdk, Path(args.level))
                 print(json.dumps(report, indent=2, ensure_ascii=False))
                 return int(bool(report["errors"]))
             frame(args, game, cdk)
