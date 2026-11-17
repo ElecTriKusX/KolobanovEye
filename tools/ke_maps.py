@@ -9,7 +9,7 @@ import os
 import re
 from pathlib import Path
 
-WHITELIST_FILE = Path(__file__).resolve().with_name("map-whitelist.local.json")
+WHITELIST_FILE = Path(__file__).resolve().parent.parent / "map-whitelist.local.json"
 MAP_ID = re.compile(r"levels/avg_[A-Za-z0-9_.-]+\.bin\Z", re.IGNORECASE)
 DBLD_MAGIC = b"DBLD3x64"
 
