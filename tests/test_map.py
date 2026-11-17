@@ -2,7 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from ke_map import read_landscape_bounds, positions, create
+from tools.ke_map import read_landscape_bounds, positions, create
 
 class MapTest(unittest.TestCase):
     def test_bounds_and_actual_positions(self):
@@ -28,7 +28,7 @@ class FixedClipBoundsTest(unittest.TestCase):
         import json
         import tempfile
         from pathlib import Path
-        from ke_map import read_landscape_bounds
+        from tools.ke_map import read_landscape_bounds
         with tempfile.TemporaryDirectory() as d:
             p=Path(d)
             blk=('map_bounds_min:p3=-32768,0,-32768\nmap_bounds_max:p3=32736,0,32736\n'
