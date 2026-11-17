@@ -3,8 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from ke_generate import DEFAULTS, command, validate_config
-from ke_review import write_rgb_png
-from ke_validate import validate
+from tools.ke_review import write_rgb_png
+from tools.ke_validate import validate
 
 
 class ConfigTest(unittest.TestCase):
