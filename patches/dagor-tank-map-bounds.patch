@@ -12,7 +12,7 @@ diff --git a/prog/tools/sceneTools/daEditorX/binSceneView/strmlevel.h b/prog/too
 diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
 --- a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
 +++ b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
-@@ -143,6 +143,22 @@
+@@ -143,4 +143,19 @@
    if (!plugin->loadKolobanovEyeLevel(level))
      return fail("MAP", "Binary dump did not produce a terrain renderer");
 +  const DataBlock &levelBlk = scene.getKolobanovEyeLevelSettings();
@@ -32,7 +32,7 @@ diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/scene
 +    console->addMessage(ILogWriter::NOTE, "[KE] TANK_BOUNDS_UNAVAILABLE level_settings_missing_or_invalid");
    float ground = 0.f;
    Point3 groundNormal;
-@@ -175,7 +191,19 @@
+@@ -175,6 +191,20 @@
    const int framesPerPosition = config.getInt("frames_per_position", frameCount);
    if (framesPerPosition < 1 || framesPerPosition > 1000)
      return fail("CONFIG", "Invalid frames per position");
@@ -55,7 +55,7 @@ diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/scene
 +    mapBounds[1].z = cz + 0.5f * side;
 +  }
    if (sampleWholeMap && (!finite_point(mapBounds[0]) || !finite_point(mapBounds[1]) ||
-@@ -538,9 +566,18 @@
+@@ -538,8 +566,14 @@
    result.setPoint3("last_clip_min", Point3(lastClipX0, 0.f, lastClipZ0));
    result.setPoint3("last_clip_max", Point3(lastClipX1, 0.f, lastClipZ1));
 +  result.setStr("map_id", config.getStr("map_id", ""));
