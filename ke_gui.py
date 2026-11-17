@@ -22,6 +22,7 @@ FIELDS = [
  ('distance_min', 'Горизонтальная дистанция: от'), ('distance_max', 'Горизонтальная дистанция: до'),
  ('camera_height_min', 'Высота камеры над землёй: от'), ('camera_height_max', 'Высота камеры над землёй: до'),
  ('clipmap_feedback', 'Обратная связь clipmap'), ('timeout', 'Таймаут, с'),
+ ('min_warmup_renders', 'Мин. проходов прогрева (8–64)'),
 ]
 
 
@@ -51,6 +52,8 @@ class App:
         self.keep_open = tk.BooleanVar(value=False)
         self.capture_last_clip = tk.BooleanVar(value=False)
         self.render_debug = tk.BooleanVar(value=False)
+        self.wait_frame_stability = tk.BooleanVar(value=DEFAULTS['wait_frame_stability'])
+        self.wait_sky_convergence = tk.BooleanVar(value=DEFAULTS['wait_sky_convergence'])
         self.scan_buildings = tk.BooleanVar(value=False)
         self.values['output'].set(str(Path(DEFAULTS['output']).parent))
         self.values['placement_mode'].set(MODE_LABELS[DEFAULTS['placement_mode']])
@@ -68,7 +71,7 @@ class App:
             ('Танк и место', [('placement_mode',), ('map_margin_percent',), ('tank_x','tank_z','Центр поиска: X / Z'), ('tank_yaw',), ('placement_radius',), ('minimum_ground_y',), ('max_height_range',), ('ground_offset',)]),
             ('Камера', [('distance_min','distance_max','Дистанция по горизонтали: от / до'),
                         ('camera_height_min','camera_height_max','Высота над рельефом: от / до'), ('camera_clearance',)]),
-            ('Служебные параметры', [('camera_attempts',), ('placement_attempts',), ('clipmap_feedback',), ('timeout',)])]
+            ('Служебные параметры', [('camera_attempts',), ('placement_attempts',), ('clipmap_feedback',), ('timeout',), ('min_warmup_renders',)])]
         self.widgets = {}
         def add_widget(parent, key):
             if key == 'placement_mode':
@@ -105,6 +108,8 @@ class App:
         menu.add_checkbutton(label='Сохранить обзорную текстуру карты', variable=self.capture_last_clip)
         menu.add_checkbutton(label='Найти предполагаемую застройку', variable=self.scan_buildings)
         menu.add_command(label='Позиции на карте…', command=self.fixed_clip_map)
+        menu.add_checkbutton(label='Ждать стабильности изображения', variable=self.wait_frame_stability)
+        menu.add_checkbutton(label='Ждать сходимости освещения неба', variable=self.wait_sky_convergence)
         menu.add_checkbutton(label='Диагностика рендера (MRT, глубина и другие буферы)', variable=self.render_debug)
         menu.add_command(label='Показать рамки на копиях…', command=self.preview_run)
         menu.add_command(label='Экспортировать COCO отдельно…', command=self.coco_run)
@@ -172,6 +177,8 @@ class App:
         data['keep_open'] = self.keep_open.get()
         data['capture_last_clip'] = self.capture_last_clip.get()
         data['render_debug'] = self.render_debug.get()
+        data['wait_frame_stability'] = self.wait_frame_stability.get()
+        data['wait_sky_convergence'] = self.wait_sky_convergence.get()
         data['scan_buildings'] = self.scan_buildings.get()
         return validate_config(data)
 
@@ -183,6 +190,8 @@ class App:
             self.keep_open.set(data['keep_open'])
             self.capture_last_clip.set(data['capture_last_clip'])
             self.render_debug.set(data['render_debug'])
+            self.wait_frame_stability.set(data['wait_frame_stability'])
+            self.wait_sky_convergence.set(data['wait_sky_convergence'])
             self.scan_buildings.set(data['scan_buildings'])
             for k, v in data.items():
                 if k in self.values:

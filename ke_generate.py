@@ -15,9 +15,10 @@ DEFAULTS = {
     'tank_yaw': 20.0, 'ground_offset': 0.05, 'minimum_ground_y': 0.5, 'camera_clearance': 0.5,
     'placement_mode': 'whole_map', 'map_margin_percent': 15.0, 'placement_radius': 0.0, 'placement_attempts': 24, 'frames_per_position': 6, 'max_height_range': 0.5, 'camera_attempts': 8,
     'camera_height_min': 4.0, 'camera_height_max': 16.0, 'distance_min': 18.0, 'distance_max': 35.0, 'elevation_min': 10.0, 'elevation_max': 25.0,
+    'min_warmup_renders': 8, 'wait_sky_convergence': False, 'wait_frame_stability': True,
     'keep_open': False, 'render_debug': False, 'scan_buildings': False, 'capture_last_clip': False, 'clipmap_feedback': 'software', 'timeout': 360,
 }
-INTS = {'count', 'seed', 'width', 'height', 'timeout', 'placement_attempts', 'camera_attempts', 'frames_per_position'}
+INTS = {'count', 'seed', 'width', 'height', 'timeout', 'placement_attempts', 'camera_attempts', 'frames_per_position', 'min_warmup_renders'}
 FLOATS = {'fov', 'tank_x', 'tank_z', 'tank_yaw', 'ground_offset', 'camera_clearance',
           'minimum_ground_y', 'distance_min', 'distance_max', 'elevation_min', 'elevation_max', 'placement_radius', 'max_height_range', 'camera_height_min', 'camera_height_max', 'map_margin_percent'}
 
@@ -26,6 +27,14 @@ def validate_config(raw):
     if not isinstance(raw, dict):
         raise ValueError('Настройки должны быть JSON-объектом')
     raw = {k: v for k, v in raw.items() if k != 'collect_clipmap_tiles'}
+    # Accept saved configurations from ordinary runs of the experimental branch.
+    # Replay and resolve isolation require that branch when explicitly enabled.
+    for key in ('resolve_no_ssao', 'resolve_no_ssr', 'resolve_no_sun',
+                'resolve_no_ambient', 'resolve_no_envi_reflections', 'source_indices'):
+        if key in raw:
+            inactive = None if key == 'source_indices' else False
+            if raw.pop(key) is not inactive:
+                raise ValueError(f'{key}: доступно в ветке fix/resolve-white-haze')
     unknown = set(raw) - set(DEFAULTS)
     if unknown:
         raise ValueError('Неизвестные параметры: ' + ', '.join(sorted(unknown)))
@@ -40,6 +49,8 @@ def validate_config(raw):
     for key in FLOATS:
         if isinstance(c[key], bool) or not isinstance(c[key], (int, float)) or not math.isfinite(c[key]):
             raise ValueError(f'{key}: требуется конечное число')
+    if not 8 <= c['min_warmup_renders'] <= 64:
+        raise ValueError('min_warmup_renders: требуется целое число 8–64')
     if not 1 <= c['frames_per_position'] <= 1000:
         raise ValueError('Кадров на позицию: 1–1000')
     if not 2 <= c['count'] <= 1000 or not 64 <= c['width'] <= 4096 or not 64 <= c['height'] <= 4096:
@@ -58,6 +69,9 @@ def validate_config(raw):
         raise ValueError('Максимальная высота камеры меньше минимального зазора над землёй')
     if not all(isinstance(c[k], bool) for k in ('keep_open', 'render_debug', 'capture_last_clip', 'scan_buildings')):
         raise ValueError('Параметры keep_open, render_debug, capture_last_clip и scan_buildings должны быть true или false')
+    for key in ('wait_frame_stability', 'wait_sky_convergence'):
+        if not isinstance(c[key], bool):
+            raise ValueError(f'{key}: требуется true или false')
     if c['clipmap_feedback'] not in ('software', 'hardware'):
         raise ValueError('clipmap_feedback: software или hardware')
     plan_camera_orbits(c['seed'], 0, (c['distance_min'], c['distance_max']), (c['elevation_min'], c['elevation_max']))
@@ -66,7 +80,7 @@ def validate_config(raw):
 
 def command(c):
     c = validate_config(c)
-    return ([sys.executable, '-u', str(Path(__file__).resolve().with_name('kolobanoveye.py')), 'frame',
+    args = ([sys.executable, '-u', str(Path(__file__).resolve().with_name('kolobanoveye.py')), 'frame',
             '--dagor', c['dagor'], '--game', c['game'], '--out', c['output'],
             '--count', str(c['count']), '--seed', str(c['seed']), '--width', str(c['width']),
             '--height', str(c['height']), '--fov', str(c['fov']), '--tank-xz', str(c['tank_x']), str(c['tank_z']),
@@ -75,6 +89,12 @@ def command(c):
             '--max-height-range', str(c['max_height_range']), '--minimum-ground-y', str(c['minimum_ground_y']), '--camera-clearance', str(c['camera_clearance']), '--camera-height-range', str(c['camera_height_min']), str(c['camera_height_max']), '--camera-distance-range', str(c['distance_min']), str(c['distance_max']),
             '--camera-elevation-range', str(c['elevation_min']), str(c['elevation_max']),
             '--clipmap-feedback', c['clipmap_feedback'], '--timeout', str(c['timeout'])] + (['--keep-open'] if c['keep_open'] else []) + (['--capture-last-clip'] if c['capture_last_clip'] else []) + (['--render-debug'] if c['render_debug'] else []) + (['--scan-buildings'] if c['scan_buildings'] else []))
+
+    args.extend(('--min-warmup-renders', str(c['min_warmup_renders']),
+                 '--wait-frame-stability' if c['wait_frame_stability'] else '--no-wait-frame-stability'))
+    if c['wait_sky_convergence']:
+        args.append('--wait-sky-convergence')
+    return args
 
 
 def main():

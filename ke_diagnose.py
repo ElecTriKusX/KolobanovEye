@@ -171,7 +171,7 @@ def analyze(run, dagor=None, game=None):
             'Reported log messages are leads, not established causes.' if lines else 'No matching messages in analyzed log.', lines[:30])
     files = {}
     debug_images = {'static-albedo.png', 'static-depth-mask.png', 'terrain-last-clip.png', 'resolve-input-mrt0.png',
-                    'resolve-input-mrt1.png', 'resolve-input-mrt2.png', 'resolve-output.png'}
+                    'resolve-input-mrt1.png', 'resolve-input-mrt2.png', 'resolve-input-depth.png', 'resolve-output.png'}
     paths = [run / 'frame.png', *sorted(p for p in (run / 'render-debug').rglob('*.png') if p.name in debug_images)]
     for p in paths:
         rel = p.relative_to(run).as_posix()
@@ -221,7 +221,7 @@ def write_outputs(run, report):
     archive = dest / 'diagnostics.zip'
     allowed = {'frame.png', 'frame.blk', 'capture.blk', 'inventory.json', 'host-stdout.log', 'grp.txt',
                'probe.dcmd', 'probe.dcmd.log', 'probe.dcmd.err', 'diagnostic-capture.log', 'diagnostic-ooz.log', 'terrain-last-clip.png', 'static-albedo.png',
-               'static-depth-mask.png', 'resolve-input-mrt0.png', 'resolve-input-mrt1.png', 'resolve-input-mrt2.png', 'resolve-output.png', 'debug', 'logerr', 'logwarn', 'last_debug'}
+               'static-depth-mask.png', 'resolve-input-mrt0.png', 'resolve-input-mrt1.png', 'resolve-input-mrt2.png', 'resolve-input-depth.png', 'resolve-output.png', 'debug', 'logerr', 'logwarn', 'last_debug'}
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as z:
         z.write(dest / 'report.json', 'diagnostics/report.json')
         z.write(dest / 'report.md', 'diagnostics/report.md')

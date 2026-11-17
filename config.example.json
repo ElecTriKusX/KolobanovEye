@@ -26,6 +26,8 @@
   "elevation_min": 10.0,
   "elevation_max": 25.0,
   "clipmap_feedback": "software",
+  "wait_frame_stability": true,
+  "min_warmup_renders": 8,
   "timeout": 360,
   "minimum_ground_y": 0.5,
   "capture_last_clip": false

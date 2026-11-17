@@ -1,0 +1,82 @@
+diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+--- a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
++++ b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+@@ -515,2 +515,13 @@
+-  const auto deadline = warmupStart + std::chrono::seconds(10);
++  // Optional temporal-image convergence probe. Compare a deterministic grid
++  // of post-resolve pixels over successive renders of the SAME camera.
++  const bool waitFrameStability = config.getBool("wait_frame_stability", false);
++  constexpr int keSampleColumns = 16;
++  constexpr int keSampleRows = 9;
++  constexpr int keSamples = keSampleColumns * keSampleRows * 3;
++  float kePreviousSample[keSamples] = {};
++  bool keHavePreviousSample = false;
++  int keStableChecks = 0;
++  float keMeanDelta = -1.f;
++  float keMaxDelta = -1.f;
++  const auto deadline = warmupStart + std::chrono::seconds(waitFrameStability ? 20 : 10);
+   TexPtr frame;
+@@ -554,3 +554,53 @@
+-    const bool sceneReady = frames >= minWarmupRenders && !mapLoading && skyReady &&
+-      (!waitSkyConvergence || lightingReady);
++    // Sample every 4th render once the scene has reached its minimum warmup.
++    // The sample grid is fixed in screen space because the test keeps the camera
++    // stationary; color drift reveals temporal instability without assuming the
++    // natural distant fog should be zero.
++    if (waitFrameStability && frames >= minWarmupRenders && (frames % 4) == 0 &&
++        !mapLoading && skyReady && texturesIdle())
++    {
++      d3d::GpuAutoLock gpuLock;
++      const auto pixels = lock_texture<const TexPixel32>(frame.get(), 0, TEXLOCK_READ);
++      if (!pixels || pixels.getWidthInElems() != width || pixels.getHeightInElems() != height)
++        return fail("READBACK", "Temporal convergence sample could not lock the screenshot");
++      const auto *first = reinterpret_cast<const TexPixel32 *>(pixels.get());
++      float totalDelta = 0.f;
++      float maximumDelta = 0.f;
++      int componentIndex = 0;
++      for (int sy = 0; sy < keSampleRows; ++sy)
++      {
++        const int py = (2 * sy + 1) * height / (2 * keSampleRows);
++        const auto *row = reinterpret_cast<const TexPixel32 *>(
++          reinterpret_cast<const char *>(first) + py * pixels.getByteStride());
++        for (int sx = 0; sx < keSampleColumns; ++sx)
++        {
++          const int px = (2 * sx + 1) * width / (2 * keSampleColumns);
++          const TexPixel32 &pixel = row[px];
++          const float values[3] = {float(pixel.r), float(pixel.g), float(pixel.b)};
++          for (int ch = 0; ch < 3; ++ch, ++componentIndex)
++          {
++            const float change = fabsf(values[ch] - kePreviousSample[componentIndex]);
++            if (keHavePreviousSample)
++            {
++              totalDelta += change;
++              maximumDelta = change > maximumDelta ? change : maximumDelta;
++            }
++            kePreviousSample[componentIndex] = values[ch];
++          }
++        }
++      }
++      keMeanDelta = keHavePreviousSample ? totalDelta / keSamples : -1.f;
++      keMaxDelta = keHavePreviousSample ? maximumDelta : -1.f;
++      // Thresholds refer to an 8-bit screenshot: these are image stability
++      // checks, NOT estimates of the physical fog density.
++      if (keHavePreviousSample && keMeanDelta <= 0.45f && keMaxDelta <= 10.f)
++        ++keStableChecks;
++      else
++        keStableChecks = 0;
++      keHavePreviousSample = true;
++      console->addMessage(ILogWriter::NOTE,
++        "[KE] FRAME_STABILITY frame=%d check_step=4 mean_delta=%.4f max_delta=%.1f stable_checks=%d ready=%d",
++        frames, keMeanDelta, keMaxDelta, keStableChecks, int(keStableChecks >= 3));
++    }
++    const bool sceneReady = frames >= minWarmupRenders && !mapLoading && skyReady &&
++      (!waitSkyConvergence || lightingReady) && (!waitFrameStability || (lightingReady && keStableChecks >= 3));
+     if (sceneReady && idleBeforeRender && texturesIdle())
+@@ -610,4 +610,7 @@
+   console->addMessage(ILogWriter::NOTE,
+     "[KE] HAZE_CONVERGENCE min_renders=%d wait_lighting=%d lighting_ready=%d sky_ready=%d passes=%d",
+     minWarmupRenders, int(waitSkyConvergence), int(!skies || skies->isLightingConverged()), int(skyReady), frames);
++  console->addMessage(ILogWriter::NOTE, "[KE] FRAME_STABILITY_FINAL enabled=%d stable=%d checks=%d mean_delta=%.4f max_delta=%.1f passes=%d",
++    int(waitFrameStability), int(!waitFrameStability || keStableChecks >= 3),
++    keStableChecks, keMeanDelta, keMaxDelta, frames);
+   console->addMessage(ILogWriter::NOTE, "[KE] ENV_LIGHT_READY %d", renderer->isEnvironmentLightingReady() ? 1 : 0);
