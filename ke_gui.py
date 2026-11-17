@@ -10,6 +10,7 @@ from tkinter import ttk, filedialog, messagebox, simpledialog
 from pathlib import Path
 
 from ke_generate import DEFAULTS, INTS, FLOATS, validate_config, command
+from ke_maps import scan_maps, load_whitelist, save_whitelist, initial_whitelist, available_whitelist
 
 FIELDS = [
  ('dagor', 'Папка Dagor Engine'), ('game', 'Папка War Thunder'), ('output', 'Родительская папка результатов'),
@@ -60,9 +61,17 @@ class App:
         self.values['output'].set(str(Path(DEFAULTS['output']).parent))
         self.values['placement_mode'].set(MODE_LABELS[DEFAULTS['placement_mode']])
         self.last_run = None
+        self.detected_maps = []
+        self.selected_maps = None
+        self.map_summary = tk.StringVar(value='Поиск avg-карт…')
         main = ttk.Frame(root, padding=12)
         main.pack(fill='both', expand=True)
-        ttk.Label(main, text='Карта: avg_normandy  |  Модель: Tiger H1  |  Класс: tank').pack(anchor='w')
+        map_bar = ttk.Frame(main)
+        map_bar.pack(fill='x')
+        ttk.Label(map_bar, textvariable=self.map_summary).pack(side='left')
+        ttk.Button(map_bar, text='Карты / белый список…', command=self.open_maps).pack(side='left', padx=10)
+        ttk.Button(map_bar, text='Обновить', command=self.refresh_maps).pack(side='left')
+        ttk.Label(main, text='Рендер пока поддерживает только Normandy + Tiger H1; другие карты подключим по этапам.').pack(anchor='w')
         ttk.Label(main, text='Выберите папку результатов: ke-generate-01, 02… создаются автоматически.').pack(anchor='w', pady=(2, 8))
         form = ttk.Frame(main)
         form.pack(fill='x')
@@ -130,6 +139,7 @@ class App:
         self.log.pack(fill='both', expand=True, pady=(4, 0))
         root.protocol('WM_DELETE_WINDOW', self.on_close)
         root.after(100, self.poll)
+        root.after(0, self.refresh_maps)
 
     def open_result(self):
         if not self.last_run:
@@ -162,6 +172,81 @@ class App:
         path = filedialog.askdirectory(title='Выберите папку')
         if path:
             self.values[key].set(path)
+            if key == 'game':
+                self.refresh_maps()
+
+    def refresh_maps(self):
+        """Inventory only: no Dagor process and no game file modification."""
+        try:
+            entries = scan_maps(self.values['game'].get().strip())
+            if self.selected_maps is None:
+                saved = load_whitelist()
+                self.selected_maps = initial_whitelist(entries) if saved is None else saved
+            self.detected_maps = entries
+            valid = available_whitelist(entries, self.selected_maps)
+            failures = sum(item['status'] != 'header_ok' for item in entries)
+            stale = len(self.selected_maps) - len(valid)
+            self.map_summary.set(
+                f'Карт avg: {len(entries)} | В белом списке: {len(valid)}'
+                + (f' | Проблемных/не найденных: {failures + stale}' if failures + stale else '')
+            )
+        except (OSError, ValueError) as exc:
+            self.detected_maps = []
+            self.map_summary.set(f'Ошибка обнаружения карт: {exc}')
+
+    def open_maps(self):
+        self.refresh_maps()
+        window = tk.Toplevel(self.root)
+        window.title('Карты War Thunder — белый список')
+        window.geometry('690x550')
+        window.transient(self.root)
+        ttk.Label(window, text='Файлы levels/avg_*.bin. Заголовок DBLD не гарантирует успешный рендер.').pack(
+            anchor='w', padx=12, pady=(10, 4))
+        ttk.Label(window, text='Выбор сохраняется локально. Поддержка рендера других карт добавляется поэтапно.').pack(
+            anchor='w', padx=12)
+        body = ttk.Frame(window, padding=12)
+        body.pack(fill='both', expand=True)
+        canvas = tk.Canvas(body, highlightthickness=0)
+        scroll = ttk.Scrollbar(body, orient='vertical', command=canvas.yview)
+        rows = ttk.Frame(canvas)
+        rows.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.configure(yscrollcommand=scroll.set)
+        frame_id = canvas.create_window((0, 0), window=rows, anchor='nw')
+        canvas.bind('<Configure>', lambda e: canvas.itemconfigure(frame_id, width=e.width))
+        canvas.pack(side='left', fill='both', expand=True)
+        scroll.pack(side='right', fill='y')
+        checked = {}
+        selected = {name.casefold() for name in (self.selected_maps or [])}
+        for item in self.detected_maps:
+            name = item['id']
+            ok = item['status'] == 'header_ok'
+            var = tk.BooleanVar(value=ok and name.casefold() in selected)
+            checked[name] = var
+            title = f"{name}  —  {item['status']}"
+            ttk.Checkbutton(rows, text=title, variable=var, state='normal' if ok else 'disabled').pack(
+                anchor='w', pady=2)
+        if not self.detected_maps:
+            ttk.Label(rows, text='Карты не обнаружены. Проверьте путь War Thunder.').pack(anchor='w')
+        actions = ttk.Frame(window, padding=(12, 0, 12, 12))
+        actions.pack(fill='x')
+        def set_all(value):
+            for item in self.detected_maps:
+                checked[item['id']].set(value and item['status'] == 'header_ok')
+        def save():
+            chosen = [item['id'] for item in self.detected_maps if checked[item['id']].get()
+                      and item['status'] == 'header_ok']
+            try:
+                save_whitelist(chosen)
+            except (OSError, ValueError) as exc:
+                messagebox.showerror('Белый список', str(exc), parent=window)
+                return
+            self.selected_maps = chosen
+            self.refresh_maps()
+            window.destroy()
+        ttk.Button(actions, text='Выбрать все', command=lambda: set_all(True)).pack(side='left')
+        ttk.Button(actions, text='Снять все', command=lambda: set_all(False)).pack(side='left', padx=5)
+        ttk.Button(actions, text='Сохранить', command=save).pack(side='right')
+        ttk.Button(actions, text='Отмена', command=window.destroy).pack(side='right', padx=6)
 
     def get_config(self):
         data = {}
@@ -211,6 +296,14 @@ class App:
 
     def run(self):
         if self.running: return
+        self.refresh_maps()
+        active = available_whitelist(self.detected_maps, self.selected_maps or [])
+        if active != ['levels/avg_normandy.bin']:
+            messagebox.showerror('Карты пока не подключены',
+                'Текущий рендер поддерживает только levels/avg_normandy.bin. '
+                'Для сохранения результата пока оставьте в белом списке только Normandy. '
+                'Многокартовая генерация будет подключена на следующем этапе.')
+            return
         try:
             data = self.get_config()
             cmd = command(data)
