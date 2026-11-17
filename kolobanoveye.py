@@ -676,12 +676,35 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
         print(f"[KE] Applying {TANK_MAP_PATCH.name}", flush=True)
         subprocess.run([*apply, "--check"], input=diff, cwd=dagor, check=True)
         subprocess.run(apply, input=diff, cwd=dagor, check=True)
+    upgrade_roi_unique_tex(dagor / "prog/tools/sceneTools/daEditorX/binSceneView/strmLevel.cpp")
     diff = TANK_MAP_RENDER_PATCH.read_bytes().replace(b"\r\n", b"\n")
     if subprocess.run([*apply, "--reverse", "--check"], input=diff, cwd=dagor, capture_output=True).returncode:
         print(f"[KE] Applying {TANK_MAP_RENDER_PATCH.name}", flush=True)
         subprocess.run([*apply, "--check"], input=diff, cwd=dagor, check=True)
         subprocess.run(apply, input=diff, cwd=dagor, check=True)
 
+
+
+def upgrade_roi_unique_tex(source):
+    """Upgrade the already-installed ROI renderer from ResFactory to UniqueTex.
+
+    This is an in-place migration for Dagor checkouts where the OLD patch was
+    already applied before the new patch was committed. It changes one exact
+    declaration only and refuses ambiguous/partial renderer changes.
+    """
+    data = source.read_bytes()
+    before = b"auto target = dag::create_tex(nullptr, size, size,"
+    after = b"UniqueTex target = dag::create_tex(nullptr, size, size,"
+    old_count, new_count = data.count(before), data.count(after)
+    if old_count == 0 and new_count == 0:
+        return False  # fresh checkout; git apply installs the corrected patch
+    if b"render_last_clip_region_to_tex" not in data or old_count + new_count != 1:
+        raise ValueError("Ambiguous tank-map render target in strmLevel.cpp")
+    if new_count:
+        return False
+    source.write_bytes(data.replace(before, after, 1))
+    print("[KE] Upgraded existing tank map render target to UniqueTex", flush=True)
+    return True
 
 
 def ensure_level_settings_accessor(header):
