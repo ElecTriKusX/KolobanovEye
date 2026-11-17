@@ -1,8 +1,8 @@
 import tempfile
 import unittest
 from pathlib import Path
-from ke_png_fast import validate_rgb_png
-from ke_review import write_rgb_png
+from tools.ke_png_fast import validate_rgb_png
+from tools.ke_review import write_rgb_png
 
 class FastPNGTest(unittest.TestCase):
     def test_accept_valid_and_reject_corrupt(self):
