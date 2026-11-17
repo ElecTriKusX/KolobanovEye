@@ -94,6 +94,7 @@ class FrameStabilityTest(unittest.TestCase):
                     markers = ['MAP_OK', 'MODEL_OK', 'PLACEMENT_OK', 'WATER_PROXY', 'CAMERA_TERRAIN',
                                'SUPPORT_HEIGHTS', 'CAMERA_OK', 'WATER_GROUND_FILTER', 'MAP_BOUNDS']
                     lines = [f'[KE] {marker} ' for marker in markers]
+                    lines.append('[KE] TANK_BOUNDS min_x=0.000 max_x=4096.000 min_z=0.000 max_z=4096.000')
                     payload = (b'width:i=64\nheight:i=64\nclass:t="tank"\nlevel:t="avg_normandy.bin"\n'
                                b'camera_attempt:i=0\ncomposition_index:i=0\ntank_world:p3=1,2,3\n'
                                b'eye:p3=4,5,6\nbbox_amodal_aabb_xywh:p4=2,3,20,30\n'
@@ -120,6 +121,8 @@ class FrameStabilityTest(unittest.TestCase):
                     self.assertEqual(ke.main(), 0 if stable else 1)
                 if stable:
                     self.assertEqual(validate(out)['frames'], 2)
+                    bounds = json.loads((out / 'tank-map-bounds.json').read_text())
+                    self.assertEqual(bounds['tank_square']['max_x'], 4096.0)
                     export([out], root / 'coco')
                     coco = json.loads((root / 'coco/all.json').read_text())
                     self.assertEqual(len(coco['images']), 2)
