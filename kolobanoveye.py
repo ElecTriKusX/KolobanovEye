@@ -822,6 +822,8 @@ def frame(args, game, cdk):
         low, high = args.camera_height_range
         if not all(math.isfinite(x) for x in (low, high)) or not 0 <= low <= high <= 10000:
             raise ValueError("Camera height above ground range must be between 0 and 10000")
+    if not 256 <= args.tank_map_resolution <= 4096 or args.tank_map_resolution & (args.tank_map_resolution - 1):
+        raise ValueError("--tank-map-resolution must be a power of two from 256 to 4096")
     if not 8 <= args.min_warmup_renders <= 64:
         raise ValueError("--min-warmup-renders must be between 8 and 64")
     if not 1 <= args.frames_per_position <= 1000:
@@ -910,7 +912,7 @@ def frame(args, game, cdk):
     for scene_index, candidates in enumerate(candidate_groups):
         for i, (x, z) in enumerate(candidates):
             entries.append(f'candidate_{scene_index}_{i}:p3={numbers((x, args.ground_offset, z))}')
-    if args.count > 1:
+    if args.seed is not None:
         images = out / "images"
         images.mkdir()
         flat_orbits = plan_camera_orbits(args.seed, args.count * args.camera_attempts, args.camera_distance_range, args.camera_elevation_range)
@@ -1062,7 +1064,7 @@ def frame(args, game, cdk):
         from ke_urban import write_report
         report = write_report(require_file(out / "scene-instances.tsv"), out / "urban-zones.json")
         print(f"[KE] Urban candidates: {len(report['zones'])}; {out / 'urban-zones.json'}", flush=True)
-    if args.count > 1:
+    if args.seed is not None:
         if f"[KE] SEQUENCE_OK frames={args.count}" not in log or log.count("[KE] FRAME_OK ") != args.count or log.count("[KE] ORBIT_FRAME ") != args.count:
             raise ValueError("Sequence incomplete or old editor build: check SEQUENCE_OK and FRAME_OK in logs")
         if not journal.is_file():
@@ -1153,6 +1155,8 @@ def main():
     frame_cmd.add_argument("--width", type=int, default=1280)
     frame_cmd.add_argument("--height", type=int, default=720)
     frame_cmd.add_argument("--renderdoc-cli", type=Path, help="renderdoccmd.exe; manual GPU capture requires --keep-open")
+    frame_cmd.add_argument("--capture-tank-map", action="store_true", help="Render the selected tank square into a separate PNG")
+    frame_cmd.add_argument("--tank-map-resolution", type=int, default=1024)
     frame_cmd.add_argument("--capture-last-clip", action="store_true", help="Save the overview in the run maps directory and reuse cached pixels")
     frame_cmd.add_argument("--scan-buildings", action="store_true", help="Report candidate urban zones from loaded scene instances")
     frame_cmd.add_argument("--keep-open", action="store_true", help="Keep editor open until window is closed; no process timeout")
