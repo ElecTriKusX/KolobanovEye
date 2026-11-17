@@ -7,10 +7,12 @@ import subprocess
 import sys
 from pathlib import Path
 from kolobanoveye import plan_articulation, plan_camera_orbits
+from ke_maps import MAP_ID
 
 DEFAULTS = {
     'dagor': r'D:\Projects\DagorEngine', 'game': r'D:\Games\WarThunder',
     'output': r'D:\Projects\ke-generate-01', 'count': 6, 'seed': 42,
+    'map_id': 'levels/avg_normandy.bin',
     'width': 1280, 'height': 720, 'fov': 55.0, 'tank_x': 0.0, 'tank_z': 0.0,
     'tank_yaw': 20.0, 'ground_offset': 0.05, 'minimum_ground_y': 0.5, 'camera_clearance': 0.5,
     'placement_mode': 'whole_map', 'map_margin_percent': 15.0, 'placement_radius': 0.0, 'placement_attempts': 24, 'frames_per_position': 6, 'max_height_range': 0.5, 'camera_attempts': 8,
@@ -40,6 +42,8 @@ def validate_config(raw):
     if unknown:
         raise ValueError('Неизвестные параметры: ' + ', '.join(sorted(unknown)))
     c = {**DEFAULTS, **raw}
+    if not isinstance(c['map_id'], str) or MAP_ID.fullmatch(c['map_id']) is None:
+        raise ValueError('map_id: требуется levels/avg_имя.bin')
     for key in ('dagor', 'game', 'output'):
         if not isinstance(c[key], str) or not c[key].strip():
             raise ValueError(f'{key}: укажите путь')
@@ -60,7 +64,7 @@ def validate_config(raw):
         raise ValueError('FOV: 15–100; высота камеры: 0–100; таймаут положительный')
     if any(abs(c[k]) > 100000 for k in ('tank_x', 'tank_z', 'tank_yaw', 'ground_offset', 'minimum_ground_y')):
         raise ValueError('Координаты и поворот должны быть в пределах ±100000')
-    if c['placement_mode'] not in ('whole_map', 'around_point') or not 0 <= c['map_margin_percent'] < 50:
+    if c['placement_mode'] not in ('whole_map', 'around_point', 'tank_map') or not 0 <= c['map_margin_percent'] < 50:
         raise ValueError('Режим размещения или отступ от краёв карты некорректен (0–49.99%)')
     if not 0 <= c['placement_radius'] <= 10000 or not 1 <= c['placement_attempts'] <= 64 or not 1 <= c['camera_attempts'] <= 64 or not 0 <= c['max_height_range'] <= 100:
         raise ValueError('Радиус: 0–10000; попытки: 1–64; перепад: 0–100')
@@ -83,7 +87,7 @@ def validate_config(raw):
 def command(c):
     c = validate_config(c)
     args = ([sys.executable, '-u', str(Path(__file__).resolve().with_name('kolobanoveye.py')), 'frame',
-            '--dagor', c['dagor'], '--game', c['game'], '--out', c['output'],
+            '--dagor', c['dagor'], '--game', c['game'], '--level', c['map_id'], '--out', c['output'],
             '--count', str(c['count']), '--seed', str(c['seed']), '--width', str(c['width']),
             '--height', str(c['height']), '--fov', str(c['fov']), '--tank-xz', str(c['tank_x']), str(c['tank_z']),
             '--yaw', str(c['tank_yaw']), '--ground-offset', str(c['ground_offset']),
