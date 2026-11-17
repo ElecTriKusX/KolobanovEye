@@ -1,7 +1,7 @@
 """Discover installed War Thunder ground maps and manage a local allowlist.
 
 Discovery is a cheap file/header inventory, NOT proof that Dagor can render a map.
-The active frame renderer still uses Normandy until the next implementation gate.
+The generator currently renders only one selected map per invocation.
 """
 import argparse
 import json
