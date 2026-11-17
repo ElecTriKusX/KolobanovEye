@@ -1,0 +1,128 @@
+diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+--- a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
++++ b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+@@ -71,6 +71,20 @@
+
+ // The 12 edges of the transformed local AABB. Clip to both depth planes
+ // before dividing by z, then clip the resulting rectangle to the image.
++// Carry the full neutral envelope through each rigid joint displacement.
++void include_transformed_bounds(BBox3 &target, const BBox3 &source, const TMatrix &transform)
++{
++  for (int corner = 0; corner < 8; ++corner)
++    target += transform * Point3(source[(corner & 1) != 0].x, source[(corner & 2) != 0].y, source[(corner & 4) != 0].z);
++}
++
++TMatrix rotation_about_pivot(const Point3 &axis, const Point3 &pivot, float degrees)
++{
++  TMatrix rotation = makeTM(axis, degrees * DEG_TO_RAD);
++  rotation.setcol(3, pivot - rotation * pivot);
++  return rotation;
++}
++
+ bool project_bounds(const BBox3 &bounds, const TMatrix &model, const TMatrix &camera, float near_z, float far_z, float wk,
+   float hk, int width, int height, Point4 &bbox)
+ {
+@@ -293,6 +307,13 @@
+   const char *frameMetadata = config.getStr(metadataKey, metadata);
+   if (!std::isfinite(yaw) || !*frameOutput || !*frameMetadata)
+     return fail("CONFIG", "Invalid sequence frame settings");
++  char poseKey[32];
++  snprintf(poseKey, sizeof(poseKey), "articulation_%d", frameIndex);
++  const Point2 angles = config.getPoint2(poseKey, Point2(0.f, 0.f));
++  if (!std::isfinite(angles.x) || !std::isfinite(angles.y) || fabsf(angles.x) > 180.f || angles.y < -8.f || angles.y > 15.f)
++    return fail("ARTICULATION", "Invalid turret yaw or gun pitch");
++  const bool articulate = config.getBool("articulate_tank", false);
++  BBox3 posedBounds = bounds;
+   const Point3 position(requested.x, ground + requested.y - bounds[0].y, requested.z);
+   const float yawRad = yaw * DEG_TO_RAD;
+   const float cs = cosf(yawRad), sn = sinf(yawRad);
+@@ -318,6 +339,45 @@
+   }
+   console->addMessage(ILogWriter::NOTE, "[KE] SUPPORT_HEIGHTS index=%d samples=%d min=%.3f max=%.3f",
+     frameIndex, supportCount, supportMin, supportMax);
++  if (articulate)
++  {
++    if (!tree)
++      return fail("ARTICULATION", "The Tiger H1 skeleton is required");
++    const auto turret = tree->findNodeIndex("bone_turret");
++    const auto gun = tree->findNodeIndex("bone_gun");
++    const auto muzzle = tree->findNodeIndex("emtr_mazzle_brake");
++    if (!turret || !gun || !muzzle || tree->getParentNodeIdx(gun) != turret || tree->getParentNodeIdx(muzzle) != gun)
++      return fail("ARTICULATION", "Expected Tiger H1 turret, gun and muzzle hierarchy");
++
++    TMatrix turretLocal, gunLocal;
++    sourceTree->getNodeTmScalar(turret, turretLocal);
++    sourceTree->getNodeTmScalar(gun, gunLocal);
++    tree->setNodeTmScalar(turret, turretLocal);
++    tree->setNodeTmScalar(gun, gunLocal);
++    tree->setRootTmScalar(TMatrix::IDENT);
++    tree->invalidateWtm();
++    tree->calcWtm();
++    TMatrix turretRest, gunRest, muzzleRest, turretParent;
++    tree->getNodeWtmScalar(turret, turretRest);
++    tree->getNodeWtmScalar(gun, gunRest);
++    tree->getNodeWtmScalar(muzzle, muzzleRest);
++    tree->getNodeWtmScalar(tree->getParentNodeIdx(turret), turretParent);
++
++    const Point3 up(0.f, 1.f, 0.f);
++    const Point3 pitchAxis = cross(muzzleRest.getcol(3) - gunRest.getcol(3), up);
++    if (!finite_point(pitchAxis) || lengthSq(pitchAxis) < 1e-6f)
++      return fail("ARTICULATION", "Cannot derive gun pitch axis from the muzzle pivot");
++    const TMatrix turretDelta = rotation_about_pivot(up, turretRest.getcol(3), angles.x);
++    const TMatrix gunDelta = rotation_about_pivot(pitchAxis, gunRest.getcol(3), angles.y);
++    tree->setNodeTmScalar(turret, inverse(turretParent) * turretDelta * turretRest);
++    tree->setNodeTmScalar(gun, inverse(turretRest) * gunDelta * gunRest);
++    if (angles.x != 0.f)
++      include_transformed_bounds(posedBounds, bounds, turretDelta);
++    if (angles.y != 0.f)
++      include_transformed_bounds(posedBounds, bounds, turretDelta * gunDelta);
++    console->addMessage(ILogWriter::NOTE, "[KE] TANK_POSE index=%d turret_yaw_deg=%.4f gun_pitch_deg=%.4f",
++      frameIndex, angles.x, angles.y);
++  }
+   if (tree)
+   {
+     tree->setRootTmScalar(world);
+@@ -352,6 +412,12 @@
+         tree->getNodeName(index));
+     }
+
++  if (articulate)
++  {
++    BBox3 posedWorldBounds;
++    include_transformed_bounds(posedWorldBounds, posedBounds, world);
++    model.setBoundingBox(posedWorldBounds);
++  }
+   const Point3 aim = world * ((bounds[0] + bounds[1]) * 0.5f);
+   const int cameraAttempts = config.getInt("camera_attempts", 1);
+   if (cameraAttempts < 1 || cameraAttempts > 64)
+@@ -407,7 +473,7 @@
+     candidateCamera.setcol(3, candidateEye);
+     const float candidateWk = 1.f / tanf(fov * DEG_TO_RAD * 0.5f);
+     Point4 candidateBbox;
+-    if (!project_bounds(bounds, world, candidateCamera, 0.2f, 20000.f, candidateWk,
++    if (!project_bounds(posedBounds, world, candidateCamera, 0.2f, 20000.f, candidateWk,
+           candidateWk * float(width) / height, width, height, candidateBbox))
+     {
+       console->addMessage(ILogWriter::NOTE, "[KE] CAMERA_REJECT index=%d attempt=%d reason=outside_frame", frameIndex, cameraAttempt);
+@@ -476,7 +542,7 @@
+
+   const float wk = 1.f / tanf(horizontalFov * 0.5f);
+   Point4 bbox;
+-  if (!project_bounds(bounds, world, camera, nearZ, farZ, wk, wk * aspect, width, height, bbox))
++  if (!project_bounds(posedBounds, world, camera, nearZ, farZ, wk, wk * aspect, width, height, bbox))
+     return fail("CAMERA", "Projected tank bounds do not intersect the frame");
+
+   ScopedTankRender binding{*plugin};
+@@ -736,6 +802,12 @@
+   result.setInt("lod", lod);
+   result.setPoint3("tank_world", position);
+   result.setReal("yaw_deg", yaw);
++  if (articulate)
++  {
++    result.setReal("turret_yaw_deg", angles.x);
++    result.setReal("gun_pitch_deg", angles.y);
++    result.setStr("pose_bounds_method", "conservative_joint_envelope");
++  }
+   result.setPoint3("eye", eye);
+   result.setInt("camera_attempt", cameraAttemptUsed);
+   result.setReal("camera_ground_y", cameraGround);

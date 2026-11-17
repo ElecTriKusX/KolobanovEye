@@ -17,6 +17,8 @@ FIELDS = [
  ('width', 'Ширина'), ('height', 'Высота'), ('fov', 'Горизонтальный FOV, °'),
  ('placement_mode', 'Где размещать танк'), ('map_margin_percent', 'Отступ от краёв карты, %'),
  ('tank_x', 'Центр поиска X'), ('tank_z', 'Центр поиска Z'), ('tank_yaw', 'Ориентация корпуса, °'),
+ ('turret_yaw_min', 'Башня: от'), ('turret_yaw_max', 'Башня: до'),
+ ('gun_pitch_min', 'Орудие: от'), ('gun_pitch_max', 'Орудие: до'),
  ('camera_attempts', 'Попыток камеры на кадр'), ('placement_radius', 'Радиус поиска точки'), ('placement_attempts', 'Попыток размещения'),
  ('minimum_ground_y', 'Минимальная высота земли Y'), ('max_height_range', 'Макс. перепад высот'), ('ground_offset', 'Отступ танка от земли'), ('camera_clearance', 'Мин. запас камеры над землёй'),
  ('distance_min', 'Горизонтальная дистанция: от'), ('distance_max', 'Горизонтальная дистанция: до'),
@@ -68,7 +70,7 @@ class App:
         groups = [
             ('Пути', [('dagor',), ('game',), ('output',)]),
             ('Кадры', [('count',), ('frames_per_position',), ('seed',), ('width','height','Размер, пиксели: ширина / высота'), ('fov',)]),
-            ('Танк и место', [('placement_mode',), ('map_margin_percent',), ('tank_x','tank_z','Центр поиска: X / Z'), ('tank_yaw',), ('placement_radius',), ('minimum_ground_y',), ('max_height_range',), ('ground_offset',)]),
+            ('Танк и место', [('placement_mode',), ('map_margin_percent',), ('tank_x','tank_z','Центр поиска: X / Z'), ('tank_yaw',), ('turret_yaw_min','turret_yaw_max','Башня относительно корпуса, °'), ('gun_pitch_min','gun_pitch_max','Наклон орудия, °'), ('placement_radius',), ('minimum_ground_y',), ('max_height_range',), ('ground_offset',)]),
             ('Камера', [('distance_min','distance_max','Дистанция по горизонтали: от / до'),
                         ('camera_height_min','camera_height_max','Высота над рельефом: от / до'), ('camera_clearance',)]),
             ('Служебные параметры', [('camera_attempts',), ('placement_attempts',), ('clipmap_feedback',), ('timeout',), ('min_warmup_renders',)])]

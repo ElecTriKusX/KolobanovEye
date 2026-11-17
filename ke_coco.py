@@ -31,6 +31,8 @@ def scene_metadata(blk):
         return values if vector else values[0]
     return {'tank_world_xyz': optional('tank_world', 'p3', True),
             'tank_yaw_deg': optional('yaw_deg', 'r'),
+            'turret_yaw_deg': optional('turret_yaw_deg', 'r'),
+            'gun_pitch_deg': optional('gun_pitch_deg', 'r'),
             'camera_eye_world_xyz': optional('eye', 'p3', True),
             'camera_look_at_world_xyz': optional('look_at', 'p3', True),
             'camera_horizontal_fov_deg': optional('fov_x_deg', 'r'),
