@@ -15,6 +15,7 @@ import tempfile
 
 from ke_annotation import parse_annotation, write_annotation
 from ke_frame_journal import JOURNAL, read_journal
+from ke_maps import MAP_ID
 
 REV = "9639942de5a8e5b01d91977f60ed82cda22d5f41"
 HERE = Path(__file__).resolve().parent
@@ -52,6 +53,7 @@ OFFSCREEN_RESOLVE_CAMERA_PATCH = HERE / "patches/dagor-offscreen-resolve-camera.
 HAZE_CONVERGENCE_PATCH = HERE / "patches/dagor-haze-convergence-warmup.patch"
 HAZE_STABILITY_PATCH = HERE / "patches/dagor-haze-frame-stability.patch"
 TANK_ARTICULATION_PATCH = HERE / "patches/dagor-tank-articulation.patch"
+TANK_MAP_PATCH = HERE / "patches/dagor-tank-map-bounds.patch"
 CLIPMAP_TILE_PATCH = HERE / "patches/dagor-clipmap-tile-readback.patch"
 PATCHES = (
     HERE / "patches/dagor-phase0.patch",
@@ -158,9 +160,9 @@ def shader_info(path):
     return {"signature": "VSPSdump", "version": "11.3"}
 
 
-def inspect(game, cdk):
+def inspect(game, cdk, level=LEVEL):
     required = {
-        game / LEVEL: level_info,
+        game / level: level_info,
         game / GRP: pack_info,
         cdk / "application.blk": None,
         cdk / "tools.ps50.shdump.bin": shader_info,
@@ -667,6 +669,11 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
         print(f"[KE] Applying {TANK_ARTICULATION_PATCH.name}", flush=True)
         subprocess.run([*apply, "--check"], input=diff, cwd=dagor, check=True)
         subprocess.run(apply, input=diff, cwd=dagor, check=True)
+    diff = TANK_MAP_PATCH.read_bytes().replace(b"\r\n", b"\n")
+    if subprocess.run([*apply, "--reverse", "--check"], input=diff, cwd=dagor, capture_output=True).returncode:
+        print(f"[KE] Applying {TANK_MAP_PATCH.name}", flush=True)
+        subprocess.run([*apply, "--check"], input=diff, cwd=dagor, check=True)
+        subprocess.run(apply, input=diff, cwd=dagor, check=True)
 
 
 def build(dagor, ooz=None):
@@ -798,6 +805,11 @@ def read_articulation(metadata, expected):
 
 
 def frame(args, game, cdk):
+    map_id = args.level
+    if not isinstance(map_id, str) or MAP_ID.fullmatch(map_id) is None:
+        raise ValueError("--level must be levels/avg_<name>.bin")
+    level = Path(map_id)
+    level_file = game / level
     if os.name != "nt":
         raise ValueError("DX11 capture requires Windows x64")
     if not (64 <= args.width <= 4096 and 64 <= args.height <= 4096 and 15 <= args.fov <= 100):
@@ -824,9 +836,9 @@ def frame(args, game, cdk):
         raise ValueError("Minimum ground height must be finite and within ±100000")
     if not math.isfinite(args.max_height_range) or not 0 <= args.max_height_range <= 100:
         raise ValueError("Maximum terrain height range must be 0–100")
-    if args.placement_mode == "whole_map":
+    if args.placement_mode in ("whole_map", "tank_map"):
         if args.seed is None:
-            raise ValueError("Whole-map search requires --seed")
+            raise ValueError("Map search requires --seed")
         candidate_groups = plan_map_compositions(args.seed, args.map_margin_percent, args.placement_attempts, args.count, args.frames_per_position)
     else:
         candidate_groups = plan_compositions(args.seed, args.tank_xz, args.placement_radius,
@@ -843,7 +855,7 @@ def frame(args, game, cdk):
         dagor_path(path)
     out.mkdir(parents=True, exist_ok=False)
 
-    report = inspect(game, cdk)
+    report = inspect(game, cdk, level)
     (out / "inventory.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     if report["errors"]:
         raise ValueError(f"Input check failed. See {out / 'inventory.json'}")
@@ -869,7 +881,8 @@ def frame(args, game, cdk):
     png, meta = out / "frame.pending.png", out / "frame.pending.blk"
     config = out / "capture.blk"
     entries = [
-        f'level:t="{dagor_path(game / LEVEL)}"',
+        f'level:t="{dagor_path(level_file)}"',
+        f'map_id:t="{map_id}"',
         f'model:t="{model}"',
         f'expected_grp:t="{GRP.name}"',
         f'skeleton:t="{skeleton}"',
@@ -883,6 +896,7 @@ def frame(args, game, cdk):
         f'minimum_ground_y:r={numbers([args.minimum_ground_y])}',
         f'candidate_count:i={len(candidate_groups[0])}',
         f'placement_whole_map:b={"yes" if args.placement_mode == "whole_map" else "no"}',
+        f'placement_tank_map:b={"yes" if args.placement_mode == "tank_map" else "no"}',
         f'frames_per_position:i={args.frames_per_position}',
         f'min_warmup_renders:i={args.min_warmup_renders}',
         f'wait_sky_convergence:b={"yes" if args.wait_sky_convergence else "no"}',
@@ -905,8 +919,8 @@ def frame(args, game, cdk):
             for camera in flat_orbits:
                 camera["height_above_ground"] = round(hrng.uniform(*args.camera_height_range), 5)
         orbit_plan = [flat_orbits[i * args.camera_attempts:(i + 1) * args.camera_attempts] for i in range(args.count)]
-        (out / "plan.json").write_text(json.dumps({"schema_version": 3, "seed": args.seed,
-            "tank_yaw_deg": args.yaw, "placement_mode": args.placement_mode, "map_margin_percent": args.map_margin_percent if args.placement_mode == "whole_map" else None, "placement_candidate_coordinates": "normalized_landscape_bbox" if args.placement_mode == "whole_map" else "world_xz", "placement_candidates_xz": candidate_groups, "frames_per_position": args.frames_per_position, "max_height_range": args.max_height_range,
+        (out / "plan.json").write_text(json.dumps({"schema_version": 3, "seed": args.seed, "map_id": map_id,
+            "tank_yaw_deg": args.yaw, "placement_mode": args.placement_mode, "map_margin_percent": args.map_margin_percent if args.placement_mode in ("whole_map", "tank_map") else None, "placement_candidate_coordinates": "normalized_tank_map" if args.placement_mode == "tank_map" else "normalized_landscape_bbox" if args.placement_mode == "whole_map" else "world_xz", "placement_candidates_xz": candidate_groups, "frames_per_position": args.frames_per_position, "max_height_range": args.max_height_range,
             "camera_distance_range": args.camera_distance_range, "camera_elevation_range": args.camera_elevation_range,
             "camera_attempts": args.camera_attempts, "camera_height_range": args.camera_height_range, "cameras": orbit_plan,
             **({"tank_articulation_deg": poses} if poses else {})}, indent=2) + "\n", encoding="utf-8")
@@ -952,8 +966,12 @@ def frame(args, game, cdk):
                f"-ws:{workspace_name}", project, batch]
     map_capture = None
     if args.capture_last_clip:
-        map_image = out / "maps" / f"{LEVEL.stem}.png"
-        map_cache = (out.parent / ".ke-map-cache" / map_image.name).resolve()
+        map_image = out / "maps" / f"{level.stem}.png"
+        stamp = level_file.stat()
+        cache_key = hashlib.sha256(
+            f"{level_file.resolve()}|{stamp.st_size}|{stamp.st_mtime_ns}".encode("utf-8")
+        ).hexdigest()[:16]
+        map_cache = (out.parent / ".ke-map-cache" / f"{level.stem}-{cache_key}.png").resolve()
         if map_cache.is_relative_to(game) or map_cache.is_relative_to(cdk):
             raise ValueError("Keep the maps cache outside War Thunder")
         map_image.parent.mkdir()
@@ -1029,7 +1047,7 @@ def frame(args, game, cdk):
         raise ValueError("Missing per-frame render diagnostics; rebuild Dagor and check the capture log")
     if "[KE] WATER_GROUND_FILTER " not in log:
         raise ValueError("Water ground filter missing: rebuild Dagor with current code")
-    if args.placement_mode == "whole_map" and "[KE] MAP_BOUNDS " not in log:
+    if args.placement_mode in ("whole_map", "tank_map") and "[KE] MAP_BOUNDS " not in log:
         raise ValueError("Whole-map mode requires the updated Dagor build; rebuild the editor")
     for marker in ("MAP_OK", "MODEL_OK", "PLACEMENT_OK", "WATER_PROXY", "CAMERA_TERRAIN", "SUPPORT_HEIGHTS", "CAMERA_OK", "FRAME_OK"):
         if f"[KE] {marker}" not in log:
@@ -1057,7 +1075,7 @@ def frame(args, game, cdk):
             expected_composition = i // args.frames_per_position
             if not composition_match or int(composition_match.group(1)) != expected_composition:
                 raise ValueError("Missing or invalid composition_index in Dagor metadata; rebuild the editor")
-            records.append({"seed": args.seed, "frame_index": i, "composition_index": expected_composition, "tank_yaw_deg": args.yaw,
+            records.append({"map_id": map_id, "seed": args.seed, "frame_index": i, "composition_index": expected_composition, "tank_yaw_deg": args.yaw,
                 "camera_azimuth_deg": camera["azimuth_deg"], "camera_horizontal_distance": camera["horizontal_distance"],
                 "planned_camera_elevation_deg": camera["elevation_deg"] if args.camera_height_range is None else None,
                 "planned_camera_offset": camera["offset"], "planned_height_above_ground": camera.get("height_above_ground"), "camera_attempt": camera_attempt,
@@ -1100,6 +1118,7 @@ def main():
         command.add_argument("--game", type=Path, default=Path(r"D:\Games\WarThunder"))
         command.add_argument("--cdk", type=Path, help="Default is <game>/WarThunderCDK")
     frame_cmd.add_argument("--out", type=Path, required=True, help="A new directory outside the game")
+    frame_cmd.add_argument("--level", type=str, default=LEVEL.as_posix(), help="Installed ground map ID: levels/avg_*.bin")
     frame_cmd.add_argument("--model")
     frame_cmd.add_argument("--skeleton")
     frame_cmd.add_argument("--tank-xz", nargs=2, type=float, default=(0, 0))
@@ -1112,7 +1131,7 @@ def main():
     frame_cmd.add_argument("--frames-per-position", type=int, default=6, help="Number of camera views per selected tank position")
     frame_cmd.add_argument("--camera-height-range", nargs=2, type=float, metavar=("MIN", "MAX"), help="Actual camera height above local heightmap for sequences")
     frame_cmd.add_argument("--camera-attempts", type=int, default=8, help="Maximum camera candidates per frame")
-    frame_cmd.add_argument("--placement-mode", choices=("around_point", "whole_map"), default="around_point")
+    frame_cmd.add_argument("--placement-mode", choices=("around_point", "whole_map", "tank_map"), default="around_point")
     frame_cmd.add_argument("--map-margin-percent", type=float, default=15.0, help="Margin on each landscape edge in percent, 0 <= value < 50")
     frame_cmd.add_argument("--placement-radius", type=float, default=0, help="Search radius around tank X/Z; 0 keeps fixed position")
     frame_cmd.add_argument("--placement-attempts", type=int, default=24, help="Up to 64 heightmap candidates")
