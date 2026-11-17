@@ -31,5 +31,10 @@
   "timeout": 360,
   "minimum_ground_y": 0.5,
   "capture_last_clip": false,
-  "map_id": "levels/avg_normandy.bin"
+  "map_id": "levels/avg_normandy.bin",
+  "map_ids": [
+    "levels/avg_normandy.bin"
+  ],
+  "capture_tank_map": true,
+  "tank_map_resolution": 1024
 }
