@@ -4,8 +4,8 @@ import unittest
 import zlib
 from pathlib import Path
 
-import ke_diagnose as diagnostic
-import ke_pixel_debug as pixel
+import tools.ke_diagnose as diagnostic
+import tools.ke_pixel_debug as pixel
 
 
 def chunk(kind, payload):
