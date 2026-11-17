@@ -9,7 +9,7 @@ import sys
 import zlib
 from pathlib import Path
 
-from ke_pixel_debug import load_png
+from tools.ke_pixel_debug import load_png
 
 
 def chunk(kind, payload):
