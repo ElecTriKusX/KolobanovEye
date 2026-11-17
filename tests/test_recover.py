@@ -2,8 +2,8 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from ke_recover import recover
-from ke_review import write_rgb_png
+from tools.ke_recover import recover
+from tools.ke_review import write_rgb_png
 
 
 def setup_run(root):
