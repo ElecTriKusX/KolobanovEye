@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tools import vendor_ooz
-from kolobanoveye import upgrade_roi_unique_tex, enable_batch_tank_map_output, reset_level_settings_on_reload, preserve_landmesh_renderer_release_on_reload
+from kolobanoveye import upgrade_roi_unique_tex, enable_batch_tank_map_output, reset_level_settings_on_reload, preserve_landmesh_renderer_release_on_reload, enable_single_editor_map_batch
 
 
 class LocalOOZSnapshotTests(unittest.TestCase):
@@ -123,6 +123,35 @@ class DagorCompiledROIRegressionTests(unittest.TestCase):
                 self.assertNotIn(b"  lmeshRenderer = NULL;", content)
                 if eol == b"\r\n":
                     self.assertNotIn(b"\n", content.replace(b"\r\n", b""))
+
+    def test_native_batch_command_installs_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "prog/tools/sceneTools/daEditorX"
+            base.mkdir(parents=True)
+            for eol in (b"\n", b"\r\n"):
+                (base / "de_appwnd.h").write_bytes(
+                    b"  bool runKolobanovEyeFrame(const char *config_path);" + eol)
+                lines = [
+                    b'  CONSOLE_CHECK_NAME_EX("kolobanoveye", "frame", 2, 2, "Render one compatibility probe frame.", "<config.blk>")',
+                    b"  {",
+                    b"    CONSOLE_COMMAND_BATCH_MODE_RESULT(get_app().runKolobanovEyeFrame(params[0]));",
+                    b"  }",
+                ]
+                (base / "de_appwndConCmd.cpp").write_bytes(eol.join(lines) + eol)
+                (base / "kolobanovEye.cpp").write_bytes(
+                    b'bool DagorEdAppWindow::runKolobanovEyeFrame(const char *config_path)\n'
+                    b'{ return true; }\n'.replace(b"\n", eol))
+                self.assertTrue(enable_single_editor_map_batch(Path(tmp)))
+                snapshot = {p.name: p.read_bytes() for p in base.iterdir()}
+                self.assertFalse(enable_single_editor_map_batch(Path(tmp)))
+                self.assertEqual(snapshot, {p.name: p.read_bytes() for p in base.iterdir()})
+                self.assertIn(b"MAP_BATCH_OK", snapshot["kolobanovEye.cpp"])
+                self.assertIn(b'CONSOLE_CHECK_NAME_EX("kolobanoveye", "batch"',
+                              snapshot["de_appwndConCmd.cpp"])
+                self.assertEqual(snapshot["kolobanovEye.cpp"].count(b"runKolobanovEyeBatch("), 1)
+                if eol == b"\r\n":
+                    for data in snapshot.values():
+                        self.assertNotIn(b"\n", data.replace(b"\r\n", b""))
 
     def test_new_patch_uses_unique_tex(self):
         patch_text = (Path(__file__).resolve().parent.parent /
