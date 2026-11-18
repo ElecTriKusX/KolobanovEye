@@ -722,6 +722,7 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
             subprocess.run(apply, input=diff, cwd=dagor, check=True)
     enable_batch_tank_map_output(map_cpp)
     reset_level_settings_on_reload(map_cpp)
+    preserve_landmesh_renderer_release_on_reload(map_cpp)
 
 
 
@@ -744,6 +745,28 @@ def upgrade_roi_unique_tex(source):
         return False
     source.write_bytes(data.replace(before, after, 1))
     print("[KE] Upgraded existing tank map render target to UniqueTex", flush=True)
+    return True
+
+
+def preserve_landmesh_renderer_release_on_reload(source: Path) -> bool:
+    """Do not orphan the previous map's LandMeshRenderer on scene reload.
+
+    Upstream loadLevel assigns lmeshRenderer = NULL before clear(), even though
+    clear() calls del_it(lmeshRenderer). For a single long-lived editor process,
+    that discards the pointer before it can be deleted. Let clear() own teardown.
+    """
+    contents = source.read_bytes()
+    old = b"  lmeshRenderer = NULL;\n  hasWater = false;"
+    new = b"  // clear() releases the previous map's lmeshRenderer during a batch reload.\n  hasWater = false;"
+    crlf = b"\r\n" in contents
+    normalized = contents.replace(b"\r\n", b"\n")
+    if normalized.count(new) == 1 and normalized.count(old) == 0:
+        return False
+    if normalized.count(old) != 1 or normalized.count(new):
+        raise ValueError("Ambiguous landmesh renderer reset in AcesScene::loadLevel")
+    normalized = normalized.replace(old, new, 1)
+    source.write_bytes(normalized.replace(b"\n", b"\r\n") if crlf else normalized)
+    print("[KE] Preserving landmesh renderer cleanup across maps", flush=True)
     return True
 
 
