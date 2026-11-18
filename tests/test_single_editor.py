@@ -23,8 +23,13 @@ def fake_editor(cmd):
     assert len(batch_commands) == 1, queue
     batch_file = Path(batch_commands[0].partition(" ")[2])
     config = batch_file.read_text(encoding="ascii")
-    count = int(re.search(r"^map_count:i=(\\d+)$", config, re.MULTILINE).group(1))
-    capture_paths = re.findall(r'^map_\\d+:t="([^"]+)"
+    count = int(re.search(r"^map_count:i=(\d+)$", config, re.MULTILINE).group(1))
+    capture_paths = re.findall(r'^map_\d+:t="([^"]+)"$', config, re.MULTILINE)
+    assert len(capture_paths) == count
+    log = [f"[KE] MAP_BATCH_BEGIN maps={count}"]
+    for map_index, capture_path in enumerate(capture_paths, 1):
+        path = Path(capture_path)
+        log.append(f"[KE] MAP_TASK_BEGIN index={map_index}/{count}")
         data = path.read_text(encoding="ascii")
         def value(name):
             match = re.search(rf'^{name}:[a-z][0-9]?=(.*)$', data, re.MULTILINE)
