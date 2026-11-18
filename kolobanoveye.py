@@ -721,6 +721,7 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
             subprocess.run([*apply, "--check"], input=diff, cwd=dagor, check=True)
             subprocess.run(apply, input=diff, cwd=dagor, check=True)
     enable_batch_tank_map_output(map_cpp)
+    reset_level_settings_on_reload(map_cpp)
 
 
 
@@ -743,6 +744,28 @@ def upgrade_roi_unique_tex(source):
         return False
     source.write_bytes(data.replace(before, after, 1))
     print("[KE] Upgraded existing tank map render target to UniqueTex", flush=True)
+    return True
+
+
+def reset_level_settings_on_reload(source: Path) -> bool:
+    """Avoid carrying the previous map's tankMapCoord0/1 into a later level.
+
+    AcesScene::loadLevel() invokes clear() and reloads levelSettingsBlk, but
+    clear() does not clear this DataBlock. An invalid/missing next level BLK must
+    not inherit valid tank bounds from the previous map.
+    """
+    data = source.read_bytes()
+    newer = b"  levelFileName = bindump;\n  clear();\n  levelSettingsBlk.clearData();"
+    older = b"  levelFileName = bindump;\n  clear();"
+    crlf = b"\r\n" in data
+    normalized = data.replace(b"\r\n", b"\n")
+    if normalized.count(newer) == 1:
+        return False
+    if normalized.count(older) != 1:
+        raise ValueError("Cannot identify unique AcesScene level reload in strmLevel.cpp")
+    updated = normalized.replace(older, newer, 1)
+    source.write_bytes(updated.replace(b"\n", b"\r\n") if crlf else updated)
+    print("[KE] AcesScene level-settings isolation enabled", flush=True)
     return True
 
 
