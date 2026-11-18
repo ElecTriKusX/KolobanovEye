@@ -10,6 +10,7 @@ from ke_dataset import run_dataset
 from ke_generate import DEFAULTS
 from tools.ke_review import write_rgb_png
 from tools.ke_analysis import analyze_dataset
+from kolobanoveye import editor_failure
 
 
 def fake_editor(cmd):
@@ -85,6 +86,20 @@ class SingleEditorTests(unittest.TestCase):
             "tank_map_resolution": 256, "capture_tank_map": True,
             "placement_mode": "tank_map",
             "map_ids": ["levels/avg_normandy.bin", "levels/avg_finland.bin"]}
+
+    def test_native_fastfail_reports_last_debug_and_pre_map_stage(self):
+        out = self.root / "failure"
+        debug = out / ".logs" / "daEditor3x-dev.exe-2026.11.19-02.59.15" / "debug"
+        debug.parent.mkdir(parents=True)
+        debug.write_text(
+            "daEditorX has loaded and ready for interaction\n"
+            "start async batch: D:/Projects/KolobanovEye/dataset/runs/run-x/probe.dcmd\n",
+            encoding="utf-8")
+        message = editor_failure(out, "daEditor3x-dev.exe exited with 3221226505")
+        self.assertIn("0xC0000409", message)
+        self.assertIn("before the first map", message)
+        self.assertIn("start async batch", message)
+        self.assertIn(str(debug), message)
 
     def test_sixty_maps_still_queue_one_native_command(self):
         run = self.root / "many"
