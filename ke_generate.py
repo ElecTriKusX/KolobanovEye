@@ -19,7 +19,7 @@ DEFAULTS = {
     'camera_height_min': 4.0, 'camera_height_max': 16.0, 'distance_min': 18.0, 'distance_max': 35.0, 'elevation_min': 10.0, 'elevation_max': 25.0,
     'turret_yaw_min': 0.0, 'turret_yaw_max': 0.0, 'gun_pitch_min': 0.0, 'gun_pitch_max': 0.0,
     'min_warmup_renders': 8, 'wait_sky_convergence': False, 'wait_frame_stability': True,
-    'keep_open': False, 'render_debug': False, 'scan_buildings': False, 'capture_last_clip': False, 'clipmap_feedback': 'software', 'timeout': 360,
+    'keep_open': False, 'render_debug': False, 'capture_last_clip': False, 'clipmap_feedback': 'software', 'timeout': 360,
 }
 INTS = {'count', 'seed', 'width', 'height', 'timeout', 'placement_attempts', 'camera_attempts', 'frames_per_position', 'min_warmup_renders', 'tank_map_resolution'}
 FLOATS = {'turret_yaw_min', 'turret_yaw_max', 'gun_pitch_min', 'gun_pitch_max', 'fov', 'tank_x', 'tank_z', 'tank_yaw', 'ground_offset', 'camera_clearance',
@@ -29,7 +29,7 @@ FLOATS = {'turret_yaw_min', 'turret_yaw_max', 'gun_pitch_min', 'gun_pitch_max', 
 def validate_config(raw):
     if not isinstance(raw, dict):
         raise ValueError('Настройки должны быть JSON-объектом')
-    raw = {k: v for k, v in raw.items() if k != 'collect_clipmap_tiles'}
+    raw = {k: v for k, v in raw.items() if k not in ('collect_clipmap_tiles', 'scan_buildings')}
     # Accept saved configurations from ordinary runs of the experimental branch.
     # Replay and resolve isolation require that branch when explicitly enabled.
     for key in ('resolve_no_ssao', 'resolve_no_ssr', 'resolve_no_sun',
@@ -80,10 +80,10 @@ def validate_config(raw):
         raise ValueError('Высота камеры: 0–10000, от не больше до')
     if c['camera_height_max'] < c['camera_clearance']:
         raise ValueError('Максимальная высота камеры меньше минимального зазора над землёй')
-    if not all(isinstance(c[k], bool) for k in ('keep_open', 'render_debug', 'capture_last_clip', 'scan_buildings')):
+    if not all(isinstance(c[k], bool) for k in ('keep_open', 'render_debug', 'capture_last_clip')):
         raise ValueError('Параметры keep_open, render_debug и архивные настройки должны быть true или false')
-    if c['capture_last_clip'] or c['scan_buildings']:
-        raise ValueError('Устаревшие диагностики last_clip и застройки удалены из генератора')
+    if c['capture_last_clip']:
+        raise ValueError('Устаревшая диагностика last_clip удалена из генератора')
     for key in ('wait_frame_stability', 'wait_sky_convergence'):
         if not isinstance(c[key], bool):
             raise ValueError(f'{key}: требуется true или false')
@@ -104,7 +104,7 @@ def command(c):
             '--placement-mode', c['placement_mode'], '--map-margin-percent', str(c['map_margin_percent']), '--frames-per-position', str(c['frames_per_position']), '--camera-attempts', str(c['camera_attempts']), '--placement-radius', str(c['placement_radius']), '--placement-attempts', str(c['placement_attempts']),
             '--max-height-range', str(c['max_height_range']), '--minimum-ground-y', str(c['minimum_ground_y']), '--camera-clearance', str(c['camera_clearance']), '--camera-height-range', str(c['camera_height_min']), str(c['camera_height_max']), '--camera-distance-range', str(c['distance_min']), str(c['distance_max']),
             '--camera-elevation-range', str(c['elevation_min']), str(c['elevation_max']),
-            '--clipmap-feedback', c['clipmap_feedback'], '--timeout', str(c['timeout'])] + (['--keep-open'] if c['keep_open'] else []) + (['--capture-last-clip'] if c['capture_last_clip'] else []) + (['--render-debug'] if c['render_debug'] else []) + (['--scan-buildings'] if c['scan_buildings'] else []) + (['--capture-tank-map'] if c['capture_tank_map'] else []))
+            '--clipmap-feedback', c['clipmap_feedback'], '--timeout', str(c['timeout'])] + (['--keep-open'] if c['keep_open'] else []) + (['--capture-last-clip'] if c['capture_last_clip'] else []) + (['--render-debug'] if c['render_debug'] else []) + (['--capture-tank-map'] if c['capture_tank_map'] else []))
 
     args.extend(('--turret-yaw-range', str(c['turret_yaw_min']), str(c['turret_yaw_max']),
                  '--gun-pitch-range', str(c['gun_pitch_min']), str(c['gun_pitch_max'])))
