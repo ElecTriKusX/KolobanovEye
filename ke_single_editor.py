@@ -131,11 +131,16 @@ def make_command(cfg, run, tasks):
         with workspace.open("ab") as stream:
             stream.write((f'\nworkspace {{\n name:t="{name}"\n application_dir:t="{dagor_path(cdk)}/"\n'
                           f' application_path:t="{dagor_path(cdk / "application.blk")}"\n}}\n').encode("ascii"))
+    if not 1 <= len(tasks) <= 256:
+        raise ValueError("Native DaEditor map batch supports 1..256 maps")
+    batch = run / "map-batch.blk"
+    batch.write_text(
+        f'map_count:i={len(tasks)}\n' +
+        "".join(f'map_{index}:t="{dagor_path(task["capture"])}"\n'
+                for index, task in enumerate(tasks)),
+        encoding="ascii")
     script = run / "probe.dcmd"
-    commands = ["wait.frame 8"]
-    for task in tasks:
-        commands.append(f'kolobanoveye.frame {dagor_path(task["capture"])}')
-        commands.append("wait.frame 8")
+    commands = ["wait.frame 8", f"kolobanoveye.batch {dagor_path(batch)}"]
     if not cfg["keep_open"]:
         commands.append("exit no")
     script.write_text("\n".join(commands) + "\n", encoding="ascii")
@@ -187,6 +192,8 @@ def extract_map_logs(log, tasks, *, stability=True):
 def finalize(cfg, run, raw, tasks):
     """Validate all images and journals, create the one and only COCO file."""
     log = require_file(run / "probe.dcmd.log").read_text(encoding="utf-8", errors="replace")
+    if f'[KE] MAP_BATCH_OK maps={len(tasks)}' not in log:
+        raise ValueError("DaEditor map batch did not report successful completion")
     map_logs = extract_map_logs(log, tasks, stability=cfg["wait_frame_stability"])
     images, annotations, records, scenes, maps = [], [], [], {}, []
     for task, map_log in zip(tasks, map_logs):
