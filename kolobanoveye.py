@@ -1093,8 +1093,6 @@ def frame(args, game, cdk):
                 if "height_above_ground" in camera:
                     entries.append(f"camera_height_{i}_{j}:r={numbers([camera['height_above_ground']])}")
             entries.append(f'output_{i}:t="{dagor_path(images / f"{i:06d}.png")}"')
-    if args.scan_buildings:
-        entries.append(f'building_scan:t="{dagor_path(out / "scene-instances.tsv")}"')
     if args.eye:
         entries.append(f'eye:p3={numbers(args.eye)}')
     render_debug = args.render_debug or args.indirection == "cpu" or args.dx11_trace
@@ -1238,10 +1236,6 @@ def frame(args, game, cdk):
     for marker in ("MAP_OK", "MODEL_OK", "PLACEMENT_OK", "WATER_PROXY", "CAMERA_TERRAIN", "SUPPORT_HEIGHTS", "CAMERA_OK", "FRAME_OK"):
         if f"[KE] {marker}" not in log:
             raise ValueError(f"{marker} missing from probe.dcmd.log")
-    if args.scan_buildings:
-        from tools.ke_urban import write_report
-        report = write_report(require_file(out / "scene-instances.tsv"), out / "urban-zones.json")
-        print(f"[KE] Urban candidates: {len(report['zones'])}; {out / 'urban-zones.json'}", flush=True)
     if args.seed is not None:
         if f"[KE] SEQUENCE_OK frames={args.count}" not in log or log.count("[KE] FRAME_OK ") != args.count or log.count("[KE] ORBIT_FRAME ") != args.count:
             raise ValueError("Sequence incomplete or old editor build: check SEQUENCE_OK and FRAME_OK in logs")
@@ -1336,7 +1330,6 @@ def main():
     frame_cmd.add_argument("--capture-tank-map", action="store_true", help="Render the selected tank square into a separate PNG")
     frame_cmd.add_argument("--tank-map-resolution", type=int, default=1024)
     frame_cmd.add_argument("--capture-last-clip", action="store_true", help="Save the overview in the run maps directory and reuse cached pixels")
-    frame_cmd.add_argument("--scan-buildings", action="store_true", help="Report candidate urban zones from loaded scene instances")
     frame_cmd.add_argument("--keep-open", action="store_true", help="Keep editor open until window is closed; no process timeout")
     frame_cmd.add_argument("--timeout", type=int, default=360)
     frame_cmd.add_argument("--dx11-trace", action="store_true", help="Log native DX11 draw state for terrain and clipmap updates")
