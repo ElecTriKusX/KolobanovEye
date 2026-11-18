@@ -109,8 +109,9 @@ class SingleEditorTests(unittest.TestCase):
         self.assertEqual(Path(command[0]).name, "daEditor3x-dev.exe")
         script = (run / "probe.dcmd").read_text(encoding="ascii")
         self.assertEqual(script.splitlines(), [
-            "wait.frame 8", f"kolobanoveye.batch {(run / 'map-batch.blk').as_posix()}",
+            f"kolobanoveye.batch {(run / 'map-batch.blk').as_posix()}",
             "exit no"])
+        self.assertNotIn("wait.frame", script)
         manifest = (run / "map-batch.blk").read_text(encoding="ascii")
         self.assertIn("map_count:i=60", manifest)
         self.assertIn("map_59:t=", manifest)
