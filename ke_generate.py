@@ -46,8 +46,8 @@ def validate_config(raw):
         raise ValueError('map_ids: требуется список уникальных карт')
     if any(not isinstance(x, str) or MAP_ID.fullmatch(x) is None for x in c['map_ids']):
         raise ValueError('map_ids: неправильный идентификатор карты')
-    if c['capture_tank_map'] is not True:
-        raise ValueError('Обзорная текстура tank_map обязательна для анализа')
+    if not isinstance(c['capture_tank_map'], bool):
+        raise ValueError('capture_tank_map: требуется true или false')
     if not 256 <= c['tank_map_resolution'] <= 4096 or c['tank_map_resolution'] & (c['tank_map_resolution'] - 1):
         raise ValueError('tank_map_resolution: степень двойки от 256 до 4096')
     if not isinstance(c['map_id'], str) or MAP_ID.fullmatch(c['map_id']) is None:
