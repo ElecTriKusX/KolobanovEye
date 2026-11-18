@@ -712,12 +712,15 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
         print(f"[KE] Applying {TANK_MAP_PATCH.name}", flush=True)
         subprocess.run([*apply, "--check"], input=diff, cwd=dagor, check=True)
         subprocess.run(apply, input=diff, cwd=dagor, check=True)
-    upgrade_roi_unique_tex(dagor / "prog/tools/sceneTools/daEditorX/binSceneView/strmLevel.cpp")
-    diff = TANK_MAP_RENDER_PATCH.read_bytes().replace(b"\r\n", b"\n")
-    if subprocess.run([*apply, "--reverse", "--check"], input=diff, cwd=dagor, capture_output=True).returncode:
-        print(f"[KE] Applying {TANK_MAP_RENDER_PATCH.name}", flush=True)
-        subprocess.run([*apply, "--check"], input=diff, cwd=dagor, check=True)
-        subprocess.run(apply, input=diff, cwd=dagor, check=True)
+    map_cpp = dagor / "prog/tools/sceneTools/daEditorX/binSceneView/strmLevel.cpp"
+    upgrade_roi_unique_tex(map_cpp)
+    if b"ke-tank-map-output-dir" not in map_cpp.read_bytes():
+        diff = TANK_MAP_RENDER_PATCH.read_bytes().replace(b"\r\n", b"\n")
+        if subprocess.run([*apply, "--reverse", "--check"], input=diff, cwd=dagor, capture_output=True).returncode:
+            print(f"[KE] Applying {TANK_MAP_RENDER_PATCH.name}", flush=True)
+            subprocess.run([*apply, "--check"], input=diff, cwd=dagor, check=True)
+            subprocess.run(apply, input=diff, cwd=dagor, check=True)
+    enable_batch_tank_map_output(map_cpp)
 
 
 
@@ -740,6 +743,39 @@ def upgrade_roi_unique_tex(source):
         return False
     source.write_bytes(data.replace(before, after, 1))
     print("[KE] Upgraded existing tank map render target to UniqueTex", flush=True)
+    return True
+
+
+def enable_batch_tank_map_output(source: Path) -> bool:
+    """Let one editor process save an independent overview for each loaded map.
+
+    The Dagor CLI argv is process-global; a single PNG destination would only
+    work for the first level. The new CLI flag names an output DIRECTORY and
+    AcesScene derives the output filename from its currently loaded BIN.
+    Safe on previously patched Windows checkouts (CRLF preserved).
+    """
+    data = source.read_bytes()
+    if b"ke-tank-map-output-dir" in data:
+        if data.count(b"ke-tank-map-output-dir") != 1 or b"keMapOutput.str()" not in data:
+            raise ValueError("Partial per-level tank-map output change")
+        return False
+    old = b'if (const char *output = dgs_get_argv("ke-tank-map-output"); output && *output && !dd_file_exist(output))'
+    old_save = b'const bool saved = pixels && save_png32(output, '
+    if data.count(old) != 1 or data.count(old_save) != 1:
+        raise ValueError("Cannot locate unique ROI output destination in strmLevel.cpp")
+    eol = b"\r\n" if b"\r\n" in data else b"\n"
+    lines = [
+        b'const char *keMapOutputDir = dgs_get_argv("ke-tank-map-output-dir");',
+        b'  const char *keMapOutputFile = dgs_get_argv("ke-tank-map-output");',
+        b'  const String keMapOutput(keMapOutputDir && *keMapOutputDir',
+        b'    ? String(0, "%s/%s-tank.png", keMapOutputDir, dd_get_fname(levelFileName))',
+        b'    : String(keMapOutputFile ? keMapOutputFile : ""));',
+        b'  if (*keMapOutput.str() && !dd_file_exist(keMapOutput.str()))',
+    ]
+    updated = data.replace(old, eol.join(lines), 1)
+    updated = updated.replace(old_save, b'const bool saved = pixels && save_png32(keMapOutput.str(), ', 1)
+    source.write_bytes(updated)
+    print("[KE] Enabled per-map overviews for single-editor batch", flush=True)
     return True
 
 
