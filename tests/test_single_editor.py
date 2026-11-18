@@ -32,7 +32,7 @@ def fake_editor(cmd):
         journal = Path(value("metadata_journal"))
         log += [
             f'[KE] MAP_BEGIN D:/game/{mid}', '[KE] MAP_OK terrain_y=123.456',
-            '[KE] MODEL_OK lod=0 nodes=206', '[KE] PLACEMENT_OK',
+            '[KE] MODEL_OK lod=0 nodes=206', '[KE] PLACEMENT_OK x=1 z=2',
             '[KE] WATER_GROUND_FILTER enabled=1',
             '[KE] TANK_BOUNDS min_x=0.000 max_x=4096.000 min_z=0.000 max_z=4096.000',
         ]
