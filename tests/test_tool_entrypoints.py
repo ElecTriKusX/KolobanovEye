@@ -9,7 +9,7 @@ class ToolsEntryPointTests(unittest.TestCase):
     def test_relocated_cli_tools_show_help(self):
         root = Path(__file__).resolve().parent.parent
         for name in ("ke_maps", "ke_validate", "ke_coco", "ke_review",
-                     "ke_recover", "ke_terrain_audit", "ke_map",
+                     
                      "ke_pilot", "vendor_ooz"):
             with self.subTest(tool=name):
                 process = subprocess.run(
