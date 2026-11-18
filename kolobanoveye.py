@@ -278,7 +278,7 @@ def editor_failure(out, detail):
             # A native fast-fail often leaves an incomplete final record like "97.85 [D]".
             # Report the last *meaningful* record instead of that empty timestamp.
             meaningful = [line.strip() for line in tail.splitlines()
-                          if line.strip() and not re.fullmatch(r"\\d+(?:\\.\\d+)? \\[\\w\\]", line.strip())]
+                          if line.strip() and not re.fullmatch(r"\d+(?:\.\d+)? \[\w\]", line.strip())]
             last_line = meaningful[-1] if meaningful else "unknown"
             command_lines = [line for line in meaningful if "CON: exec command" in line]
             last_command = command_lines[-1] if command_lines else "not executed"
