@@ -93,12 +93,15 @@ class SingleEditorTests(unittest.TestCase):
         debug.parent.mkdir(parents=True)
         debug.write_text(
             "daEditorX has loaded and ready for interaction\n"
-            "start async batch: D:/Projects/KolobanovEye/dataset/runs/run-x/probe.dcmd\n",
+            "97.65 [D] CON: exec command 'wait.frame 8'\n"
+            "97.85 [D]\n",
             encoding="utf-8")
         message = editor_failure(out, "daEditor3x-dev.exe exited with 3221226505")
         self.assertIn("0xC0000409", message)
         self.assertIn("before the first map", message)
-        self.assertIn("start async batch", message)
+        self.assertIn("Last command:", message)
+        self.assertIn("wait.frame 8", message)
+        self.assertNotIn("Last useful debug line: '97.85 [D]'", message)
         self.assertIn(str(debug), message)
 
     def test_sixty_maps_still_queue_one_native_command(self):
