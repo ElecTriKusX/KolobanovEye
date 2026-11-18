@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ke_single_editor import jobs_for, extract_map_logs
+from ke_single_editor import jobs_for, extract_map_logs, make_command
 from ke_dataset import run_dataset
 from ke_generate import DEFAULTS
 from tools.ke_review import write_rgb_png
@@ -85,6 +85,21 @@ class SingleEditorTests(unittest.TestCase):
             "tank_map_resolution": 256, "capture_tank_map": True,
             "placement_mode": "tank_map",
             "map_ids": ["levels/avg_normandy.bin", "levels/avg_finland.bin"]}
+
+    def test_sixty_maps_still_queue_one_native_command(self):
+        run = self.root / "many"
+        run.mkdir()
+        tasks = [{"capture": run / "capture" / f"{i:03d}.blk"} for i in range(60)]
+        command = make_command(self.config, run, tasks)
+        self.assertEqual(Path(command[0]).name, "daEditor3x-dev.exe")
+        script = (run / "probe.dcmd").read_text(encoding="ascii")
+        self.assertEqual(script.splitlines(), [
+            "wait.frame 8", f"kolobanoveye.batch {(run / 'map-batch.blk').as_posix()}",
+            "exit no"])
+        manifest = (run / "map-batch.blk").read_text(encoding="ascii")
+        self.assertIn("map_count:i=60", manifest)
+        self.assertIn("map_59:t=", manifest)
+        self.assertNotIn("kolobanoveye.frame", script)
 
     def test_two_maps_one_editor_no_duplicate_png_or_coco(self):
         commands = []
