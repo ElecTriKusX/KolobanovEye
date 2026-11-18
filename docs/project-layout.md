@@ -47,7 +47,7 @@ KolobanovEye/
 │   │       ├── journals/      # временные журналы при ошибке
 │   │       ├── probe.level.blk
 │   │       ├── probe.level.local.blk
-│   │       ├── probe.dcmd     # единая очередь заданий
+│   │       ├── probe.dcmd     # одна native-команда kolobanoveye.batch
 │   │       ├── probe.dcmd.log
 │   │       ├── host-stdout.log
 │   │       ├── manifest.json
