@@ -37,7 +37,7 @@ python .\kolobanoveye.py build --dagor D:\Projects\DagorEngine
 python .\ke_gui.py
 ```
 
-Начальный контроль: **1 карта, 2 кадра**. Проверить `dataset/raw/images`, `dataset/raw/annotations/instances.json`, `dataset/runs/run-.../maps/avg_normandy.bin-tank.png`. Далее выбрать две совместимые карты и 4 кадра; требовать `MAP_BEGIN`/ `MAP_OK` и `SEQUENCE_OK` **дважды в одном общем логе**, а не два запуска редактора. В `probe.dcmd` должно быть две команды `kolobanoveye.frame` и одна команда `exit no`.
+Начальный контроль: **1 карта, 2 кадра**. Проверить `dataset/raw/images`, `dataset/raw/annotations/instances.json`, `dataset/runs/run-.../maps/avg_normandy.bin-tank.png`. Далее выбрать две совместимые карты и 4 кадра; требовать `MAP_BEGIN`/ `MAP_OK` и `SEQUENCE_OK` **дважды в одном общем логе**, а не два запуска редактора. В `probe.dcmd` должна быть одна команда `kolobanoveye.batch` и одна команда `exit no`. В `map-batch.blk` должны быть два пути к конфигурациям карт.
 
 Затем нажать «Провести анализ» и сверить точки с реальными позициями на обеих обзорных текстурах. Если сборка, карта либо RGB не прошли, сохраняем лог, не переключаем `main`.
 
