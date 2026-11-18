@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tools import vendor_ooz
-from kolobanoveye import upgrade_roi_unique_tex
+from kolobanoveye import upgrade_roi_unique_tex, enable_batch_tank_map_output, reset_level_settings_on_reload
 
 
 class LocalOOZSnapshotTests(unittest.TestCase):
@@ -73,6 +73,37 @@ class DagorCompiledROIRegressionTests(unittest.TestCase):
             path.write_bytes(b"auto target = dag::create_tex(nullptr, size, size,\n")
             with self.assertRaisesRegex(ValueError, "Ambiguous"):
                 upgrade_roi_unique_tex(path)
+
+    def test_single_editor_map_export_migration_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "strmLevel.cpp"
+            for eol in (b"\n", b"\r\n"):
+                source = eol.join((
+                    b'if (const char *output = dgs_get_argv("ke-tank-map-output"); output && *output && !dd_file_exist(output))',
+                    b'{',
+                    b'  const bool saved = pixels && save_png32(output, pixels, 128, 128, 512, nullptr, 0, false);',
+                    b'}'
+                )) + eol
+                path.write_bytes(source)
+                self.assertTrue(enable_batch_tank_map_output(path))
+                self.assertFalse(enable_batch_tank_map_output(path))
+                content = path.read_bytes()
+                self.assertIn(b"ke-tank-map-output-dir", content)
+                self.assertIn(b"keMapOutput.str()", content)
+                if eol == b"\r\n":
+                    self.assertNotIn(b"\n", content.replace(b"\r\n", b""))
+
+    def test_level_settings_reset_for_each_map(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "strmLevel.cpp"
+            for eol in (b"\n", b"\r\n"):
+                path.write_bytes(eol.join((b'  levelFileName = bindump;', b'  clear();', b'  // next level')) + eol)
+                self.assertTrue(reset_level_settings_on_reload(path))
+                self.assertFalse(reset_level_settings_on_reload(path))
+                contents = path.read_bytes()
+                self.assertIn(b'  levelSettingsBlk.clearData();', contents)
+                if eol == b"\r\n":
+                    self.assertNotIn(b"\n", contents.replace(b"\r\n", b""))
 
     def test_new_patch_uses_unique_tex(self):
         patch_text = (Path(__file__).resolve().parent.parent /
