@@ -252,7 +252,6 @@ class App:
         data['render_debug'] = self.render_debug.get()
         data['wait_frame_stability'] = self.wait_frame_stability.get()
         data['wait_sky_convergence'] = self.wait_sky_convergence.get()
-        data['scan_buildings'] = False
         data['map_ids'] = available_whitelist(self.detected_maps, self.selected_maps or [])
         if not data['map_ids']:
             raise ValueError('Выберите хотя бы одну карту для генерации')
