@@ -115,36 +115,19 @@ def command(c):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--config', type=Path, required=True)
-    parser.add_argument('--replace-raw', action='store_true',
-                        help='Подтвердить замену существующего dataset/raw после успешной генерации')
-    parser.add_argument('--legacy-run', action='store_true',
-                        help='Диагностика: старый низкоуровневый каталог запуска, без сборки dataset/raw')
+    parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--replace-raw", action="store_true",
+                        help="Подтвердить замену dataset/raw после успешной генерации")
     args = parser.parse_args()
     try:
-        cfg = validate_config(json.loads(args.config.read_text(encoding='utf-8')))
-        if not args.legacy_run:
-            from ke_dataset import run_dataset
-            run_dataset(cfg, replace_raw=args.replace_raw)
-            return 0
-        if len(cfg['map_ids']) > 1:
-            from ke_multi_generate import run_multi
-            run_multi(cfg)
-            return 0
-        if len(cfg['map_ids']) == 1:
-            cfg['map_id'] = cfg['map_ids'][0]
-        if Path(cfg['output']).exists():
-            raise ValueError('Выходная папка уже существует; укажите новую')
-        result = subprocess.call(command(cfg), cwd=Path(__file__).resolve().parent)
-        output = Path(cfg['output'])
-        if output.is_dir():
-            with (output / 'generation-config.json').open('x', encoding='utf-8') as stream:
-                json.dump(cfg, stream, ensure_ascii=False, indent=2)
-                stream.write('\n')
-        return result
-    except (OSError, ValueError, RuntimeError) as exc:
-        print(f'[KE] ERROR {exc}', file=sys.stderr)
+        cfg = validate_config(json.loads(args.config.read_text(encoding="utf-8")))
+        from ke_dataset import run_dataset
+        run_dataset(cfg, replace_raw=args.replace_raw)
+        return 0
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+        print(f"[KE] ERROR {exc}", file=sys.stderr)
         return 1
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     sys.exit(main())
