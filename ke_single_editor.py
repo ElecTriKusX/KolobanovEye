@@ -157,3 +157,191 @@ def make_command(cfg, run, tasks):
     return args
 
 
+def extract_map_logs(log, tasks, *, stability=True):
+    """Separate the single console journal into individual map passes.
+
+    Never report a completed batch unless every map reports success.
+    """
+    starts = [match.start() for match in re.finditer(r"\[KE\] MAP_BEGIN\s+", log)]
+    if len(starts) != len(tasks):
+        raise ValueError(f"Ожидалось {len(tasks)} загрузок карт, найдено {len(starts)}")
+    result = []
+    for idx, task in enumerate(tasks):
+        section = log[starts[idx]:(starts[idx + 1] if idx + 1 < len(starts) else len(log))]
+        first = section.splitlines()[0]
+        if Path(task["map_id"]).name.casefold() not in first.casefold():
+            raise ValueError(f"Неверный порядок загрузки карты: {first}")
+        if f'[KE] SEQUENCE_OK frames={task["count"]}' not in section:
+            raise ValueError(f'Нет SEQUENCE_OK для {task["map_id"]}')
+        if section.count("[KE] FRAME_OK ") != task["count"]:
+            raise ValueError(f'Не получены все кадры карты {task["map_id"]}')
+        if stability and section.count("[KE] FRAME_STABILITY_FINAL enabled=1 stable=1") != task["count"]:
+            raise ValueError(f'Нет подтверждения стабильности {task["map_id"]}')
+        for marker in ("MAP_OK", "MODEL_OK", "PLACEMENT_OK", "WATER_GROUND_FILTER"):
+            if f"[KE] {marker} " not in section:
+                raise ValueError(f'Отсутствует {marker}: {task["map_id"]}')
+        result.append(section)
+    return result
+
+
+def finalize(cfg, run, raw, tasks):
+    """Validate all images and journals, create the one and only COCO file."""
+    log = require_file(run / "probe.dcmd.log").read_text(encoding="utf-8", errors="replace")
+    map_logs = extract_map_logs(log, tasks, stability=cfg["wait_frame_stability"])
+    images, annotations, records, scenes, maps = [], [], [], {}, []
+    for task, map_log in zip(tasks, map_logs):
+        journal = read_journal(require_file(task["journal"]))
+        if set(journal) != set(range(task["count"])):
+            raise ValueError(f'Неполный журнал кадров: {task["map_id"]}')
+        bounds = parse_tank_bounds_log(map_log, task["map_id"])
+        overview_name = f'{task["stem"]}.bin-tank.png'
+        overview = run / "maps" / overview_name
+        if cfg["capture_tank_map"]:
+            if bounds["status"] != "available":
+                raise ValueError(f'Нет координат танкового поля: {task["map_id"]}')
+            verify_png(overview, cfg["tank_map_resolution"], cfg["tank_map_resolution"])
+        maps.append({"map_id": task["map_id"], "frames": task["count"], "tank_bounds": bounds,
+                     "overview": f"maps/{overview_name}" if cfg["capture_tank_map"] else None})
+        for idx, image_path in enumerate(task["outputs"]):
+            verify_png(image_path, cfg["width"], cfg["height"])
+            validate_rgb_png(image_path, cfg["width"], cfg["height"])
+            blk = journal[idx]
+            level_match = re.search(r'^level:t="([^"\r\n]+)"', blk, re.MULTILINE)
+            if not level_match or Path(level_match.group(1)).name.casefold() != Path(task["map_id"]).name.casefold():
+                raise ValueError(f'Несовпадение карты в кадре {idx}: {task["map_id"]}')
+            annotation = parse_annotation(blk)["annotations"][0]
+            attempt, camera = select_camera_attempt(blk, task["cameras"][idx])
+            comp = idx // task["frames_per_position"]
+            if not re.search(rf"^composition_index:i={comp}\s*$", blk, re.MULTILINE):
+                raise ValueError("Неверный индекс расстановки техники")
+            articulation = read_articulation(blk, task["poses"][idx]) if task["poses"] else {}
+            image_id = len(images) + 1
+            scene_id = f'{run.name}:{task["stem"]}:{comp}'
+            group = group_for(blk, 256)
+            record = {
+                "image_id": image_id, "image": f"images/{image_path.name}",
+                "map_id": task["map_id"], "scene_id": scene_id, "scene_group_id": group,
+                "frame_index": idx, "composition_index": comp, "seed": task["seed"],
+                "camera_attempt": attempt, "camera_azimuth_deg": camera["azimuth_deg"],
+                "camera_horizontal_distance": camera["horizontal_distance"],
+                "planned_camera_offset": camera["offset"], "annotation": annotation,
+                "dagor_frame_metadata_blk": blk,
+                "sha256": hashlib.sha256(image_path.read_bytes()).hexdigest(), **articulation,
+            }
+            records.append(record)
+            images.append({
+                "id": image_id, "file_name": record["image"],
+                "width": cfg["width"], "height": cfg["height"], "map_id": task["map_id"],
+                "scene_id": scene_id, "scene_group": group, "scene_group_id": group,
+                "ke_scene": scene_metadata(blk),
+            })
+            x, y, w, h = annotation["bbox_xywh"]
+            annotations.append({
+                "id": image_id, "image_id": image_id, "category_id": 1,
+                "bbox": [x, y, w, h], "area": w * h, "iscrowd": 0,
+                "bbox_kind": annotation["bbox_kind"], "bbox_method": annotation["bbox_method"],
+            })
+            scenes.setdefault(scene_id, {
+                "scene_id": scene_id, "map_id": task["map_id"],
+                "scene_group_id": group, "image_ids": [],
+            })["image_ids"].append(image_id)
+        task["journal"].unlink()
+    (raw / "annotations").mkdir()
+    (raw / "metadata").mkdir()
+    write_json(raw / "annotations" / "instances.json", {
+        "info": {"description": "KolobanovEye raw, approximate projected 3D AABB, unsplit", "unsplit": True},
+        "images": images, "annotations": annotations, "categories": [{"id": 1, "name": "tank"}],
+    })
+    for name, rows in (("images.jsonl", records), ("scenes.jsonl", scenes.values())):
+        with (raw / "metadata" / name).open("w", encoding="utf-8") as stream:
+            for item in rows:
+                stream.write(json.dumps(item, ensure_ascii=False) + "\n")
+    write_json(raw / "metadata" / "maps.json", maps)
+    write_json(raw / "metadata" / "generation_config.json",
+        {k: v for k, v in cfg.items() if k not in ("dagor", "game", "output")})
+    overview = {
+        "schema_version": 2, "kind": "raw", "split": None,
+        "run_id": run.name, "images": len(images), "annotations": len(annotations),
+        "scenes": len(scenes), "maps": len(maps), "editor_processes": 1,
+    }
+    write_json(raw / "manifest.json", overview)
+    return overview
+
+
+def generate(config, run, raw, executor=None):
+    """Generate the raw dataset, invoking DaEditor exactly once.
+
+    executor is a low-level test hook: callable(args) -> integer exit status.
+    """
+    cfg = validate_config(config)
+    game, dagor = Path(cfg["game"]).resolve(), Path(cfg["dagor"]).resolve()
+    cdk = game / "WarThunderCDK"
+    run, raw = Path(run).resolve(), Path(raw).resolve()
+    for forbidden in (game, dagor):
+        if (run == forbidden or run.is_relative_to(forbidden) or
+                raw == forbidden or raw.is_relative_to(forbidden)):
+            raise ValueError("Результат не может находиться внутри Dagor или War Thunder")
+    quotas = jobs_for(cfg, scan_maps(game))
+    if run.exists() or raw.exists():
+        raise ValueError("Рабочий каталог или исходный датасет уже существует")
+    run.mkdir(parents=True)
+    raw.mkdir(parents=True)
+    (raw / "images").mkdir()
+    for name in ("capture", "plans", "maps", "journals"):
+        (run / name).mkdir()
+    write_json(run / "generation-config.json", cfg)
+    report = {
+        "schema_version": 2, "editor_processes": 1,
+        "requested_frames": cfg["count"], "complete": False,
+        "maps": [{"map_id": mid, "planned": n, "actual": 0, "status": "pending"} for mid, n in quotas],
+    }
+    write_json(run / "manifest.json", report)
+    try:
+        if executor is None:
+            inventory = inspect(game, cdk, Path(quotas[0][0]))
+            write_json(run / "inventory.json", inventory)
+            if inventory["errors"]:
+                raise ValueError("Неправильные ресурсы, см. inventory.json")
+            dump = require_file(dagor / BIN / "dumpGrp-dev.exe")
+            run_logged([dump, game / GRP, "-dumpR"], run / "grp.txt", run, 60)
+            resources = parse_resources((run / "grp.txt").read_text(encoding="utf-8", errors="replace"))
+            model, skeleton = choose_resources(resources, GRP.stem, None, None)
+        else:
+            model, skeleton = "pzkpfw_VI_ausf_h1_tiger", "pzkpfw_VI_ausf_h1_tiger_skeleton"
+        (run / "probe.level.blk").write_text("lastUniqueId:i=1\n", encoding="ascii")
+        (run / "probe.level.local.blk").write_text(
+            'viewport0 { currentProjection:t="Perspective"; orthogonalProjection:b=no; wireframe:b=no }\n'
+            'local_plugin_data { bin_scene_view { visible:b=no } }\n', encoding="ascii")
+        (run / "environment").mkdir()
+        (run / "environment" / "environment.plugin.blk").write_text(
+            'enviName:t="day"\nweatherType:t="clear"\n', encoding="ascii")
+        tasks = []
+        for index, (map_id, count) in enumerate(quotas, 1):
+            tasks.append(write_capture(cfg, map_id, count, map_seed(cfg["seed"], map_id),
+                run, raw, index, model, skeleton))
+        cmd = make_command(cfg, run, tasks)
+        print(f'[KE] SINGLE_EDITOR_START maps={len(tasks)} frames={cfg["count"]} instances=1', flush=True)
+        if executor is not None:
+            if (status := executor(cmd)):
+                raise RuntimeError(f"DaEditor завершился с кодом {status}")
+        else:
+            try:
+                run_logged(cmd, run / "host-stdout.log", run,
+                           None if cfg["keep_open"] else cfg["timeout"] * len(tasks))
+            except (ValueError, subprocess.TimeoutExpired) as exc:
+                raise ValueError(editor_failure(run, str(exc))) from exc
+        result = finalize(cfg, run, raw, tasks)
+        for item in report["maps"]:
+            item.update(actual=item["planned"], status="verified")
+        report["complete"] = True
+        write_json(run / "manifest.json", report)
+        print(f'[KE] SINGLE_EDITOR_OK frames={result["images"]} maps={result["maps"]} instances=1', flush=True)
+        return result
+    except Exception as exc:
+        report["error"] = str(exc)
+        for item in report["maps"]:
+            if item["status"] == "pending":
+                item["status"] = "failed"
+        write_json(run / "manifest.json", report)
+        raise
+
