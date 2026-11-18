@@ -6,7 +6,7 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, simpledialog
+from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 
 from ke_generate import DEFAULTS, INTS, FLOATS, validate_config, command
@@ -29,19 +29,8 @@ FIELDS = [
 ]
 
 
-MODE_LABELS = {'whole_map': 'Весь ландшафт', 'tank_map': 'Танковое поле', 'around_point': 'Вокруг точки'}
+MODE_LABELS = {'tank_map': 'Танковое поле', 'around_point': 'Вокруг точки'}
 DATASET_DIR = Path(__file__).resolve().parent / 'dataset'
-
-def next_numbered_directory(parent, prefix='ke-generate-'):
-    parent = Path(parent)
-    if not parent.is_dir():
-        raise ValueError('Родительская папка результатов не существует')
-    for number in range(1, 1000000):
-        candidate = parent / f'{prefix}{number:02d}'
-        if not candidate.exists():
-            return candidate
-    raise ValueError('Не удалось подобрать свободное имя папки')
-
 
 class App:
     def __init__(self, root):
@@ -54,20 +43,15 @@ class App:
         self.running = False
         self.values = {k: tk.StringVar(value=str(DEFAULTS[k])) for k, _ in FIELDS}
         self.keep_open = tk.BooleanVar(value=False)
-        self.capture_last_clip = tk.BooleanVar(value=False)
-        self.capture_tank_map = tk.BooleanVar(value=True)
         self.render_debug = tk.BooleanVar(value=False)
         self.wait_frame_stability = tk.BooleanVar(value=DEFAULTS['wait_frame_stability'])
         self.wait_sky_convergence = tk.BooleanVar(value=DEFAULTS['wait_sky_convergence'])
-        self.scan_buildings = tk.BooleanVar(value=False)
         self.values['output'].set(str(DATASET_DIR))
         # The GUI opts into the new tank-map sampler; old CLI configurations keep their defaults.
         self.values['placement_mode'].set(MODE_LABELS['tank_map'])
         self.values['map_margin_percent'].set('0.0')
-        self.last_run = None
         self.detected_maps = []
         self.selected_maps = None
-        self.active_map = tk.StringVar(value=DEFAULTS['map_id'])
         self.map_summary = tk.StringVar(value='Поиск avg-карт…')
         main = ttk.Frame(root, padding=12)
         main.pack(fill='both', expand=True)
@@ -76,11 +60,7 @@ class App:
         ttk.Label(map_bar, textvariable=self.map_summary).pack(side='left')
         ttk.Button(map_bar, text='Карты / белый список…', command=self.open_maps).pack(side='left', padx=10)
         ttk.Button(map_bar, text='Обновить', command=self.refresh_maps).pack(side='left')
-        ttk.Label(map_bar, text='Текущий запуск:').pack(side='left', padx=(15, 4))
-        self.active_map_combo = ttk.Combobox(map_bar, textvariable=self.active_map,
-                                             state='readonly', width=27)
-        self.active_map_combo.pack(side='left')
-        ttk.Label(main, text='Одна карта: текущий выбор; несколько: равные квоты по whitelist. Модель: Tiger H1.').pack(anchor='w')
+        ttk.Label(main, text='Выбранные карты последовательно обрабатываются в одном DaEditor. Кадры распределяются поровну.').pack(anchor='w')
         ttk.Label(main, text='Датасет: KolobanovEye/dataset/raw (обновляется после успешной генерации); технические файлы: dataset/runs.').pack(anchor='w', pady=(2, 8))
         form = ttk.Frame(main)
         form.pack(fill='x')
@@ -122,26 +102,17 @@ class App:
         ttk.Checkbutton(buttons, text='Оставить редактор открытым', variable=self.keep_open).pack(side='left', padx=8)
         menu_button = ttk.Menubutton(buttons, text='Дополнительно')
         menu = tk.Menu(menu_button, tearoff=False)
-        menu.add_command(label='Проверить существующую серию…', command=self.check_run)
-        menu.add_command(label='Проверить рельеф серии…', command=self.check_terrain)
-        menu.add_command(label='Восстановить метаданные после сбоя…', command=self.recover_run)
-        menu.add_checkbutton(label='Сохранять обзорную текстуру танкового поля', variable=self.capture_tank_map)
-        menu.add_checkbutton(label='Диагностика: last_clip всего ландшафта (старый режим)', variable=self.capture_last_clip)
-        menu.add_checkbutton(label='Найти предполагаемую застройку', variable=self.scan_buildings)
-        menu.add_command(label='Позиции на карте…', command=self.fixed_clip_map)
         menu.add_checkbutton(label='Ждать стабильности изображения', variable=self.wait_frame_stability)
         menu.add_checkbutton(label='Ждать сходимости освещения неба', variable=self.wait_sky_convergence)
-        menu.add_checkbutton(label='Диагностика рендера (MRT, глубина и другие буферы)', variable=self.render_debug)
-        menu.add_command(label='Показать рамки на копиях…', command=self.preview_run)
-        menu.add_command(label='Экспортировать COCO отдельно…', command=self.coco_run)
+        menu.add_checkbutton(label='Диагностика рендера (MRT, глубина)', variable=self.render_debug)
         menu.add_separator()
         menu.add_command(label='Открыть настройки…', command=self.open_config)
         menu.add_command(label='Сохранить настройки…', command=self.save_config)
         menu_button['menu'] = menu
         menu_button.pack(side='left', padx=8)
-        ttk.Button(buttons, text='? Справка', command=self.show_help).pack(side='left')
-        self.open_button = ttk.Button(buttons, text='Открыть папку', command=self.open_result, state='disabled')
+        self.open_button = ttk.Button(buttons, text='Открыть папку', command=self.open_result)
         self.open_button.pack(side='left', padx=5)
+        ttk.Button(buttons, text='Провести анализ', command=self.analyze_dataset).pack(side='left', padx=5)
         ttk.Button(buttons, text='Копировать журнал', command=self.copy_log).pack(side='left')
         self.state = tk.StringVar(value='Готово')
         ttk.Label(main, textvariable=self.state).pack(anchor='w')
@@ -152,16 +123,22 @@ class App:
         root.after(0, self.refresh_maps)
 
     def open_result(self):
-        if not self.last_run:
-            return
         try:
-            if not Path(self.last_run).is_dir():
-                raise OSError('Папка результата не найдена')
+            DATASET_DIR.mkdir(parents=True, exist_ok=True)
             if sys.platform != 'win32':
                 raise OSError('Открытие папки доступно в Windows')
-            os.startfile(self.last_run)
+            os.startfile(DATASET_DIR)
         except OSError as exc:
             messagebox.showerror('Не удалось открыть папку', str(exc))
+
+    def analyze_dataset(self):
+        if self.running:
+            return
+        if not (DATASET_DIR / 'raw' / 'manifest.json').is_file():
+            messagebox.showerror('Анализ', 'Сначала сгенерируйте dataset/raw.')
+            return
+        self.start_tool('ke_analysis.py', ['--dataset', str(DATASET_DIR)])
+
 
     def copy_log(self):
         try:
@@ -194,9 +171,6 @@ class App:
                 self.selected_maps = initial_whitelist(entries) if saved is None else saved
             self.detected_maps = entries
             valid = available_whitelist(entries, self.selected_maps)
-            self.active_map_combo['values'] = tuple(valid)
-            if self.active_map.get() not in valid:
-                self.active_map.set(valid[0] if valid else '')
             failures = sum(item['status'] != 'header_ok' for item in entries)
             stale = len(self.selected_maps) - len(valid)
             self.map_summary.set(
@@ -206,8 +180,6 @@ class App:
         except (OSError, ValueError) as exc:
             self.detected_maps = []
             self.map_summary.set(f'Ошибка обнаружения карт: {exc}')
-            self.active_map_combo['values'] = ()
-            self.active_map.set('')
 
     def open_maps(self):
         self.refresh_maps()
@@ -275,14 +247,16 @@ class App:
                 raise ValueError(f'{key}: неверное число') from exc
         data['output'] = str(DATASET_DIR)
         data['keep_open'] = self.keep_open.get()
-        data['capture_last_clip'] = self.capture_last_clip.get()
-        data['capture_tank_map'] = self.capture_tank_map.get()
+        data['capture_last_clip'] = False
+        data['capture_tank_map'] = True
         data['render_debug'] = self.render_debug.get()
         data['wait_frame_stability'] = self.wait_frame_stability.get()
         data['wait_sky_convergence'] = self.wait_sky_convergence.get()
-        data['scan_buildings'] = self.scan_buildings.get()
-        data['map_id'] = self.active_map.get()
+        data['scan_buildings'] = False
         data['map_ids'] = available_whitelist(self.detected_maps, self.selected_maps or [])
+        if not data['map_ids']:
+            raise ValueError('Выберите хотя бы одну карту для генерации')
+        data['map_id'] = data['map_ids'][0]
         return validate_config(data)
 
     def open_config(self):
@@ -291,18 +265,15 @@ class App:
         try:
             data = validate_config(json.loads(Path(path).read_text(encoding='utf-8')))
             self.keep_open.set(data['keep_open'])
-            self.capture_last_clip.set(data['capture_last_clip'])
-            self.capture_tank_map.set(data['capture_tank_map'])
             self.render_debug.set(data['render_debug'])
             self.wait_frame_stability.set(data['wait_frame_stability'])
             self.wait_sky_convergence.set(data['wait_sky_convergence'])
-            self.scan_buildings.set(data['scan_buildings'])
             for k, v in data.items():
                 if k in self.values:
                     self.values[k].set(str(DATASET_DIR) if k == 'output' else MODE_LABELS.get(v, v) if k == 'placement_mode' else str(v))
+            saved_maps = data.get('map_ids') or [data['map_id']]
+            self.selected_maps = saved_maps
             self.refresh_maps()
-            if data['map_id'] in available_whitelist(self.detected_maps, self.selected_maps or []):
-                self.active_map.set(data['map_id'])
         except (OSError, ValueError) as exc: messagebox.showerror('Ошибка настроек', str(exc))
 
     def save_config(self):
@@ -319,9 +290,9 @@ class App:
             return
         self.refresh_maps()
         active = available_whitelist(self.detected_maps, self.selected_maps or [])
-        if not active or self.active_map.get() not in active:
-            messagebox.showerror('Нет активной карты',
-                'В белом списке должна быть хотя бы одна доступная карта avg_*.bin.')
+        if not active:
+            messagebox.showerror('Карты не выбраны',
+                'Выберите одну или более доступных avg_*.bin в списке карт.')
             return
         try:
             data = self.get_config()
@@ -344,102 +315,6 @@ class App:
         self.run_button.config(state='disabled')
         self.state.set(f"Генерация {len(data['map_ids'])} карт → dataset/raw")
         threading.Thread(target=self.worker, args=(data, cmd), daemon=True).start()
-
-    def show_help(self):
-        messagebox.showinfo('Справка',
-            'Открыть папку — показывает последний успешный результат в Проводнике. Копировать журнал — копирует выделенный текст или весь журнал.\n\n'
-            'При открытом редакторе проверка и экспорт начнутся после закрытия его окна.\n\n'
-            'Основная кнопка: создаёт новую папку ke-generate-XX, рендерит кадры, проверяет их и создаёт COCO в подпапке coco.\n\n'
-            'Проверить серию — проверяет файлы и границы рамок существующей серии.\n'
-            'Проверить рельеф — оценивает перепад heightmap под углами габарита; воду и препятствия не проверяет.\n'
-            'Восстановление — проверяет уже записанные кадры и создаёт отдельные метаданные; рендер не продолжает.\n'
-            'Рамки — создаёт отдельные копии кадров с зелёной рамкой.\n'
-            'COCO — создаёт JSON-разметку для существующей серии без копирования изображений.\n\n'
-            'COCO — формат данных для обучения детектора; здесь рамка приблизительная, видимость не проверена. '
-            'Папку серии нельзя отделять от файлов coco: в JSON сохранены относительные пути к кадрам.\n\n'
-            'Где размещать: «Танковое поле» — координаты из tankMapCoord0/1 (максимальный вписанный квадрат); «Весь ландшафт» — старый режим; «Вокруг точки» — вручную указанный центр.\n\n'
-            'Минимальная высота земли Y: для Normandy по замеру вода около Y=0; 0.5 задаёт запас. Проверяются центр и углы габарита. Водоёмы выше порога могут остаться.\n\n'
-            'X и Z — координаты центра поиска точки на карте; при радиусе 0 танк ставится именно туда. Поворот — направление корпуса, в градусах.\n\n'
-            'Дистанция — горизонтальное расстояние от центра танка до камеры. Высота от–до — высота камеры над рельефом в точке расположения камеры.\n'
-            'Минимальный запас камеры — защитный порог высоты камеры над рельефом в точке камеры; это не диапазон случайной высоты.\n\n'
-            'Seed определяет расположение и ракурсы. Радиус 0 сохраняет указанную точку; при ненулевом радиусе выбираются точки; число ракурсов на каждую задаётся полем «Кадров на позицию». Вода, препятствия и маски пока не проверяются.')
-
-    def choose_run(self):
-        return filedialog.askdirectory(title='Выберите папку серии ke-generate-XX',
-                                       initialdir=str(self.last_run or self.values['output'].get().strip()))
-
-    def check_run(self):
-        run = self.choose_run()
-        if run: self.start_tool('ke_validate.py', ['--run', run])
-
-    def check_terrain(self):
-        run = self.choose_run()
-        if run: self.start_tool('ke_terrain_audit.py', ['--run', run])
-
-    def recover_run(self):
-        run = self.choose_run()
-        if run: self.start_tool('ke_recover.py', ['--run', run])
-
-    def fixed_clip_map(self):
-        run = self.choose_run()
-        if not run: return
-        from kolobanoveye import LEVEL
-        run = Path(run).resolve()
-        map_id = LEVEL.as_posix()
-        saved = run / 'generation-config.json'
-        if saved.is_file():
-            try:
-                map_id = json.loads(saved.read_text(encoding='utf-8')).get('map_id', map_id)
-            except (ValueError, OSError):
-                pass
-        tank_map = run / 'maps' / f'{Path(map_id).stem}-tank.png'
-        tank_bounds = run / 'tank-map-bounds.json'
-        if tank_map.is_file() and tank_bounds.is_file():
-            try:
-                info = json.loads(tank_bounds.read_text(encoding='utf-8'))
-                square = info.get('tank_square')
-                if not square:
-                    raise ValueError('В отчёте нет танкового квадрата')
-                b = [square[k] for k in ('min_x', 'max_x', 'min_z', 'max_z')]
-                output = next_numbered_directory(run, 'tank-map-')
-                output.mkdir()
-            except (OSError, ValueError, KeyError) as exc:
-                messagebox.showerror('Танковая карта', str(exc)); return
-            self.start_tool('ke_map.py', [
-                '--run', str(run), '--image', str(tank_map),
-                '--out', str(output / 'positions.html'), '--bounds',
-                *(str(x) for x in b), '--flip-z', '--link-image'])
-            return
-        image = run / 'maps' / f'{Path(map_id).stem}.png'
-        if not image.is_file():
-            image = run / 'render-debug' / 'terrain-last-clip.png'
-        if not image.is_file():
-            image = run.parent / 'maps' / f'{Path(map_id).stem}.png'
-        if not image.is_file():
-            messagebox.showerror('Нет текстуры', 'Для старой карты last_clip включите диагностику всего ландшафта и создайте новую серию.')
-            return
-        try:
-            from tools.ke_map import read_landscape_bounds
-            read_landscape_bounds(Path(run), fixed_clip=True)
-            out = next_numbered_directory(Path(run), 'fixed-clip-map-')
-            out.mkdir()
-        except (OSError, ValueError, KeyError) as exc:
-            messagebox.showerror('Нет границ текстуры', str(exc)); return
-        self.start_tool('ke_map.py', ['--run', str(run), '--image', str(image), '--out', str(out / 'positions.html'), '--fixed-clip', '--link-image'])
-
-    def preview_run(self):
-        run = self.choose_run()
-        if not run: return
-        try: out = next_numbered_directory(Path(run).parent, 'ke-review-')
-        except ValueError as exc: messagebox.showerror('Ошибка', str(exc)); return
-        self.start_tool('ke_review.py', ['--run', run, '--out', str(out)])
-
-    def coco_run(self):
-        run = self.choose_run()
-        if not run: return
-        try: out = next_numbered_directory(Path(run), 'coco-')
-        except ValueError as exc: messagebox.showerror('Ошибка', str(exc)); return
-        self.start_tool('ke_coco.py', ['--runs', run, '--out', str(out)])
 
     def start_tool(self, script, arguments):
         if self.running: return
@@ -482,10 +357,8 @@ class App:
                 else:
                     self.running = False; self.run_button.config(state='normal')
                     if kind == 'success':
-                        self.last_run = value
-                        self.open_button.config(state='normal')
                         self.state.set(f'Готово: {value}')
-                        messagebox.showinfo('Готово', f'Кадры и метаданные: {value}\nCOCO: {value}\\coco\\all.json\n\nРамка приблизительная; видимость не проверена.')
+                        messagebox.showinfo('Готово', f'Кадры и метаданные: {value}\nCOCO: {value}\\annotations\\instances.json\n\nРамка приблизительная; видимость не проверена.')
                     else:
                         self.state.set('Завершено' if kind == 'done' and value == 0 else f'Ошибка: {value}. Проверьте журнал.')
         except queue.Empty: pass
