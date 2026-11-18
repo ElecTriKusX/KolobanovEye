@@ -275,9 +275,15 @@ def editor_failure(out, detail):
             tail = latest.read_bytes()[-80000:].decode("utf-8", errors="replace")
             begin = "[KE] MAP_BEGIN" in tail or "[KE] MAP_TASK_BEGIN" in tail
             stage = "during map processing" if begin else "before the first map task"
-            last_line = tail.splitlines()[-1].strip() if tail.splitlines() else "unknown"
+            # A native fast-fail often leaves an incomplete final record like "97.85 [D]".
+            # Report the last *meaningful* record instead of that empty timestamp.
+            meaningful = [line.strip() for line in tail.splitlines()
+                          if line.strip() and not re.fullmatch(r"\\d+(?:\\.\\d+)? \\[\\w\\]", line.strip())]
+            last_line = meaningful[-1] if meaningful else "unknown"
+            command_lines = [line for line in meaningful if "CON: exec command" in line]
+            last_command = command_lines[-1] if command_lines else "not executed"
             return (f"Windows native crash 0xC0000409 ({stage}), not a Python exception. "
-                    f"Last debug line: {last_line!r}. "
+                    f"Last useful debug line: {last_line!r}. Last command: {last_command!r}. "
                     f"See {latest}; check Windows Application Error event 1000 for the failing module.")
     return f"{detail} See engine logs in {out / '.logs'}."
 
