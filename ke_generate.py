@@ -12,10 +12,10 @@ from tools.ke_maps import MAP_ID
 DEFAULTS = {
     'dagor': r'D:\Projects\DagorEngine', 'game': r'D:\Games\WarThunder',
     'output': r'D:\Projects\ke-generate-01', 'count': 6, 'seed': 42,
-    'map_id': 'levels/avg_normandy.bin', 'map_ids': [], 'capture_tank_map': False, 'tank_map_resolution': 1024,
+    'map_id': 'levels/avg_normandy.bin', 'map_ids': [], 'capture_tank_map': True, 'tank_map_resolution': 1024,
     'width': 1280, 'height': 720, 'fov': 55.0, 'tank_x': 0.0, 'tank_z': 0.0,
     'tank_yaw': 20.0, 'ground_offset': 0.05, 'minimum_ground_y': 0.5, 'camera_clearance': 0.5,
-    'placement_mode': 'whole_map', 'map_margin_percent': 15.0, 'placement_radius': 0.0, 'placement_attempts': 24, 'frames_per_position': 6, 'max_height_range': 0.5, 'camera_attempts': 8,
+    'placement_mode': 'tank_map', 'map_margin_percent': 0.0, 'placement_radius': 0.0, 'placement_attempts': 24, 'frames_per_position': 6, 'max_height_range': 0.5, 'camera_attempts': 8,
     'camera_height_min': 4.0, 'camera_height_max': 16.0, 'distance_min': 18.0, 'distance_max': 35.0, 'elevation_min': 10.0, 'elevation_max': 25.0,
     'turret_yaw_min': 0.0, 'turret_yaw_max': 0.0, 'gun_pitch_min': 0.0, 'gun_pitch_max': 0.0,
     'min_warmup_renders': 8, 'wait_sky_convergence': False, 'wait_frame_stability': True,
@@ -46,8 +46,8 @@ def validate_config(raw):
         raise ValueError('map_ids: требуется список уникальных карт')
     if any(not isinstance(x, str) or MAP_ID.fullmatch(x) is None for x in c['map_ids']):
         raise ValueError('map_ids: неправильный идентификатор карты')
-    if not isinstance(c['capture_tank_map'], bool):
-        raise ValueError('capture_tank_map: требуется true или false')
+    if c['capture_tank_map'] is not True:
+        raise ValueError('Обзорная текстура tank_map обязательна для анализа')
     if not 256 <= c['tank_map_resolution'] <= 4096 or c['tank_map_resolution'] & (c['tank_map_resolution'] - 1):
         raise ValueError('tank_map_resolution: степень двойки от 256 до 4096')
     if not isinstance(c['map_id'], str) or MAP_ID.fullmatch(c['map_id']) is None:
@@ -72,8 +72,8 @@ def validate_config(raw):
         raise ValueError('FOV: 15–100; высота камеры: 0–100; таймаут положительный')
     if any(abs(c[k]) > 100000 for k in ('tank_x', 'tank_z', 'tank_yaw', 'ground_offset', 'minimum_ground_y')):
         raise ValueError('Координаты и поворот должны быть в пределах ±100000')
-    if c['placement_mode'] not in ('whole_map', 'around_point', 'tank_map') or not 0 <= c['map_margin_percent'] < 50:
-        raise ValueError('Режим размещения или отступ от краёв карты некорректен (0–49.99%)')
+    if c['placement_mode'] not in ('around_point', 'tank_map') or not 0 <= c['map_margin_percent'] < 50:
+        raise ValueError('Режим размещения: только Танковое поле или Вокруг точки (0–49.99% отступ)')
     if not 0 <= c['placement_radius'] <= 10000 or not 1 <= c['placement_attempts'] <= 64 or not 1 <= c['camera_attempts'] <= 64 or not 0 <= c['max_height_range'] <= 100:
         raise ValueError('Радиус: 0–10000; попытки: 1–64; перепад: 0–100')
     if not 0 <= c['camera_height_min'] <= c['camera_height_max'] <= 10000:
@@ -81,7 +81,9 @@ def validate_config(raw):
     if c['camera_height_max'] < c['camera_clearance']:
         raise ValueError('Максимальная высота камеры меньше минимального зазора над землёй')
     if not all(isinstance(c[k], bool) for k in ('keep_open', 'render_debug', 'capture_last_clip', 'scan_buildings')):
-        raise ValueError('Параметры keep_open, render_debug, capture_last_clip и scan_buildings должны быть true или false')
+        raise ValueError('Параметры keep_open, render_debug и архивные настройки должны быть true или false')
+    if c['capture_last_clip'] or c['scan_buildings']:
+        raise ValueError('Устаревшие диагностики last_clip и застройки удалены из генератора')
     for key in ('wait_frame_stability', 'wait_sky_convergence'):
         if not isinstance(c[key], bool):
             raise ValueError(f'{key}: требуется true или false')
