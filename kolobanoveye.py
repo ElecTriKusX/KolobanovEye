@@ -723,6 +723,7 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
     enable_batch_tank_map_output(map_cpp)
     reset_level_settings_on_reload(map_cpp)
     preserve_landmesh_renderer_release_on_reload(map_cpp)
+    enable_single_editor_map_batch(dagor)
 
 
 
@@ -746,6 +747,111 @@ def upgrade_roi_unique_tex(source):
     source.write_bytes(data.replace(before, after, 1))
     print("[KE] Upgraded existing tank map render target to UniqueTex", flush=True)
     return True
+
+
+def enable_single_editor_map_batch(dagor: Path) -> bool:
+    """Install a single native batch command into an already-patched DaEditor.
+
+    A 60-map session previously inserted 121 strings into Dagor's ConBatch queue.
+    The native command keeps the queue constant-size: just wait, one C++ job,
+    and exit. The crash may have another cause; this is a robustness change,
+    not proof that queue size caused Windows STATUS_STACK_BUFFER_OVERRUN.
+    The migration is safe to repeat and preserves each file's line endings.
+    """
+    base = dagor / "prog/tools/sceneTools/daEditorX"
+    header = base / "de_appwnd.h"
+    commands = base / "de_appwndConCmd.cpp"
+    source = base / "kolobanovEye.cpp"
+
+    updates = []
+    raw = header.read_bytes()
+    eol = b"\r\n" if b"\r\n" in raw else b"\n"
+    normalized = raw.replace(b"\r\n", b"\n")
+    old = b"  bool runKolobanovEyeFrame(const char *config_path);"
+    addition = old + b"\n  bool runKolobanovEyeBatch(const char *config_path);"
+    if normalized.count(addition) == 1:
+        pass
+    elif normalized.count(old) == 1 and b"runKolobanovEyeBatch" not in normalized:
+        updates.append((header, normalized.replace(old, addition, 1), eol))
+    else:
+        raise ValueError(f"Cannot safely add native batch method to {header}")
+
+    raw = commands.read_bytes()
+    eol = b"\r\n" if b"\r\n" in raw else b"\n"
+    normalized = raw.replace(b"\r\n", b"\n")
+    old = (b'  CONSOLE_CHECK_NAME_EX("kolobanoveye", "frame", 2, 2,'
+           b' "Render one compatibility probe frame.", "<config.blk>")\n'
+           b'  {\n'
+           b'    CONSOLE_COMMAND_BATCH_MODE_RESULT(get_app().runKolobanovEyeFrame(params[0]));\n'
+           b'  }\n')
+    addition = (b'\n'
+                b'  CONSOLE_CHECK_NAME_EX("kolobanoveye", "batch", 2, 2,\n'
+                b'    "Generate all selected maps in this DaEditor process.", "<batch.blk>")\n'
+                b'  {\n'
+                b'    CONSOLE_COMMAND_BATCH_MODE_RESULT(get_app().runKolobanovEyeBatch(params[0]));\n'
+                b'  }\n')
+    if normalized.count(addition) == 1:
+        pass
+    elif normalized.count(old) == 1 and b'runKolobanovEyeBatch' not in normalized:
+        updates.append((commands, normalized.replace(old, old + addition, 1), eol))
+    else:
+        raise ValueError(f"Cannot safely register native batch command in {commands}")
+
+    raw = source.read_bytes()
+    eol = b"\r\n" if b"\r\n" in raw else b"\n"
+    normalized = raw.replace(b"\r\n", b"\n")
+    code = b'''// One command per dataset, all maps stay inside the same DaEditor instance.
+bool DagorEdAppWindow::runKolobanovEyeBatch(const char *config_path)
+{
+  DataBlock config;
+  if (!config.load(config_path))
+  {
+    console->addMessage(ILogWriter::ERROR, "[KE] FAIL BATCH_CONFIG: Cannot read map batch");
+    return false;
+  }
+  const int mapCount = config.getInt("map_count", 0);
+  if (mapCount < 1 || mapCount > 256)
+  {
+    console->addMessage(ILogWriter::ERROR, "[KE] FAIL BATCH_CONFIG: Expected 1..256 maps");
+    return false;
+  }
+  console->addMessage(ILogWriter::NOTE, "[KE] MAP_BATCH_BEGIN maps=%d", mapCount);
+  for (int index = 0; index < mapCount; ++index)
+  {
+    char name[32];
+    snprintf(name, sizeof(name), "map_%d", index);
+    const char *capture = config.getStr(name, "");
+    if (!*capture || !dd_file_exist(capture))
+    {
+      console->addMessage(ILogWriter::ERROR, "[KE] FAIL BATCH_CONFIG: Missing capture for map %d", index + 1);
+      return false;
+    }
+    console->addMessage(ILogWriter::NOTE, "[KE] MAP_TASK_BEGIN index=%d/%d capture=%s", index + 1, mapCount, capture);
+    if (!runKolobanovEyeFrame(capture))
+    {
+      console->addMessage(ILogWriter::ERROR, "[KE] FAIL MAP_TASK index=%d/%d", index + 1, mapCount);
+      return false;
+    }
+    console->addMessage(ILogWriter::NOTE, "[KE] MAP_TASK_OK index=%d/%d", index + 1, mapCount);
+  }
+  console->addMessage(ILogWriter::NOTE, "[KE] MAP_BATCH_OK maps=%d", mapCount);
+  return true;
+}
+'''
+    marker = b"bool DagorEdAppWindow::runKolobanovEyeBatch(const char *config_path)"
+    if normalized.count(marker) == 1:
+        if b"[KE] MAP_BATCH_OK" not in normalized:
+            raise ValueError(f"Partial native batch implementation in {source}")
+    elif normalized.count(marker) == 0 and b"bool DagorEdAppWindow::runKolobanovEyeFrame(" in normalized:
+        updates.append((source, normalized.rstrip() + b"\n\n" + code, eol))
+    else:
+        raise ValueError(f"Cannot safely add native batch implementation to {source}")
+
+    for path, data, eol in updates:
+        path.write_bytes(data.replace(b"\n", b"\r\n") if eol == b"\r\n" else data)
+    if updates:
+        print(f"[KE] Installed native single-editor map batch in {len(updates)} Dagor files", flush=True)
+    return bool(updates)
 
 
 def preserve_landmesh_renderer_release_on_reload(source: Path) -> bool:
