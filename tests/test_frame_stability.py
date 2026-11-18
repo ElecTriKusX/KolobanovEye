@@ -111,7 +111,7 @@ class FrameStabilityTest(unittest.TestCase):
                     (out / 'probe.dcmd.log').write_text('\n'.join(lines))
 
                 argv = command({'dagor': str(dagor), 'game': str(game), 'output': str(out),
-                                'count': 2, 'width': 64, 'height': 64, 'min_warmup_renders': 24,
+                                'count': 2, 'width': 64, 'height': 64, 'min_warmup_renders': 24, 'capture_tank_map': False,
                                 'turret_yaw_min': 45, 'turret_yaw_max': 45, 'gun_pitch_min': 5, 'gun_pitch_max': 5})
                 with patch.object(ke, 'os', SimpleNamespace(name='nt', SEEK_END=ke.os.SEEK_END)), patch.object(
                     ke, 'inspect', return_value={'errors': []}
