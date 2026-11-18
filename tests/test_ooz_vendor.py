@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tools import vendor_ooz
-from kolobanoveye import upgrade_roi_unique_tex, enable_batch_tank_map_output, reset_level_settings_on_reload
+from kolobanoveye import upgrade_roi_unique_tex, enable_batch_tank_map_output, reset_level_settings_on_reload, preserve_landmesh_renderer_release_on_reload
 
 
 class LocalOOZSnapshotTests(unittest.TestCase):
@@ -104,6 +104,25 @@ class DagorCompiledROIRegressionTests(unittest.TestCase):
                 self.assertIn(b'  levelSettingsBlk.clearData();', contents)
                 if eol == b"\r\n":
                     self.assertNotIn(b"\n", contents.replace(b"\r\n", b""))
+
+    def test_previous_map_landmesh_renderer_is_not_orphaned(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "strmLevel.cpp"
+            for eol in (b"\n", b"\r\n"):
+                source.write_bytes(eol.join((
+                    b"  rebuildLastClip = true;",
+                    b"  lmeshRenderer = NULL;",
+                    b"  hasWater = false;",
+                    b"  levelFileName = bindump;",
+                    b"  clear();",
+                )) + eol)
+                self.assertTrue(preserve_landmesh_renderer_release_on_reload(source))
+                self.assertFalse(preserve_landmesh_renderer_release_on_reload(source))
+                content = source.read_bytes()
+                self.assertIn(b"clear() releases the previous map", content)
+                self.assertNotIn(b"  lmeshRenderer = NULL;", content)
+                if eol == b"\r\n":
+                    self.assertNotIn(b"\n", content.replace(b"\r\n", b""))
 
     def test_new_patch_uses_unique_tex(self):
         patch_text = (Path(__file__).resolve().parent.parent /
