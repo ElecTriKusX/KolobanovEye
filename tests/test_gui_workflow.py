@@ -6,20 +6,29 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from ke_gui import App, next_numbered_directory
+from ke_gui import App
 from tools.ke_coco import export
 from tests.test_coco import make_run
 
 
 class WorkflowTest(unittest.TestCase):
-    def test_numbered_paths_skip_existing_files_and_dirs(self):
-        with tempfile.TemporaryDirectory() as d:
-            p = Path(d)
-            (p/'ke-generate-01').mkdir()
-            (p/'ke-generate-02').write_text('existing')
-            self.assertEqual(next_numbered_directory(p).name, 'ke-generate-03')
-            self.assertFalse((p/'ke-generate-03').exists())
-            with self.assertRaises(ValueError): next_numbered_directory(p/'missing')
+    def test_open_folder_always_available_and_does_not_require_last_run(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "dataset"
+            with patch("ke_gui.DATASET_DIR", path), patch("ke_gui.sys.platform", "win32"), \
+                 patch("ke_gui.os.startfile", create=True) as opened:
+                App.open_result(SimpleNamespace())
+                self.assertTrue(path.is_dir())
+                opened.assert_called_once_with(path)
+
+    def test_no_selected_maps_prevents_generation(self):
+        app = SimpleNamespace(running=False, refresh_maps=lambda: None,
+                              detected_maps=[], selected_maps=[])
+        with patch("ke_gui.available_whitelist", return_value=[]), \
+             patch("ke_gui.messagebox.showerror") as error:
+            App.run(app)
+            error.assert_called_once()
+
 
     def test_one_pipeline_process_and_error_propagation(self):
         for failure in (False, True):
