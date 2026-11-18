@@ -42,7 +42,8 @@ class WholeMapPlacementTest(unittest.TestCase):
             with self.assertRaises(ValueError): plan_map_compositions(42, margin, 8, 7, 3)
 
     def test_mode_and_margin_forwarded(self):
-        args = command({'placement_mode': 'whole_map', 'map_margin_percent': 20})
-        self.assertEqual(args[args.index('--placement-mode') + 1], 'whole_map')
+        args = command({'placement_mode': 'tank_map', 'map_margin_percent': 20})
+        self.assertEqual(args[args.index('--placement-mode') + 1], 'tank_map')
         self.assertEqual(args[args.index('--map-margin-percent') + 1], '20')
+        with self.assertRaises(ValueError): validate_config({'placement_mode': 'whole_map'})
         with self.assertRaises(ValueError): validate_config({'map_margin_percent': 50})
