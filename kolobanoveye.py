@@ -267,7 +267,7 @@ def editor_failure(out, detail):
                     f"Dagor was built with the Oodle stub. The War Thunder build requires Oodle "
                     f"to decode its compressed textures. See {log} and README.md."
                 )
-    if "3221226505" in detail or "0xC0000409" in detail.upper():
+    if "3221226505" in detail or "0XC0000409" in detail.upper():
         debug_logs = sorted((out / ".logs").glob("daEditor3x-dev.exe-*/debug"),
                             key=lambda p: p.stat().st_mtime)
         if debug_logs:
