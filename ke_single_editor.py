@@ -43,7 +43,7 @@ def write_json(path, obj):
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def write_capture(cfg, map_id, count, seed, run, raw, index, model, skeleton):
+def write_capture(cfg, map_id, count, seed, run, raw, index, model, skeleton, first_image_id):
     """Write map-specific capture config; workspace and editor belong to the batch."""
     level = Path(cfg["game"]) / map_id
     frames_per = cfg["frames_per_position"]
@@ -69,7 +69,7 @@ def write_capture(cfg, map_id, count, seed, run, raw, index, model, skeleton):
     stem = Path(map_id).stem
     capture = run / "capture" / f"{index:03d}-{stem}.blk"
     journal = run / "journals" / f"{index:03d}-{stem}.jsonl"
-    outputs = [raw / "images" / f"{index:03d}-{i:06d}.png" for i in range(count)]
+    outputs = [raw / "images" / f"{first_image_id + i:08d}.png" for i in range(count)]
     lines = [
         f'level:t="{dagor_path(level)}"', f'map_id:t="{map_id}"',
         f'model:t="{model}"', f'expected_grp:t="{GRP.name}"', f'skeleton:t="{skeleton}"',
@@ -316,9 +316,11 @@ def generate(config, run, raw, executor=None):
         (run / "environment" / "environment.plugin.blk").write_text(
             'enviName:t="day"\nweatherType:t="clear"\n', encoding="ascii")
         tasks = []
+        next_image_id = 1
         for index, (map_id, count) in enumerate(quotas, 1):
             tasks.append(write_capture(cfg, map_id, count, map_seed(cfg["seed"], map_id),
-                run, raw, index, model, skeleton))
+                run, raw, index, model, skeleton, next_image_id))
+            next_image_id += count
         cmd = make_command(cfg, run, tasks)
         print(f'[KE] SINGLE_EDITOR_START maps={len(tasks)} frames={cfg["count"]} instances=1', flush=True)
         if executor is not None:
