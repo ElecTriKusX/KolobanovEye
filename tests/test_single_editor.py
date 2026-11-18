@@ -9,6 +9,7 @@ from ke_single_editor import jobs_for, extract_map_logs
 from ke_dataset import run_dataset
 from ke_generate import DEFAULTS
 from tools.ke_review import write_rgb_png
+from tools.ke_analysis import analyze_dataset
 
 
 def fake_editor(cmd):
@@ -129,6 +130,21 @@ class SingleEditorTests(unittest.TestCase):
         self.assertTrue((raw / "metadata" / "maps.json").is_file())
         self.assertNotIn("game", json.loads((raw / "metadata" / "generation_config.json").read_text()))
         self.assertFalse((raw / "train").exists())
+
+    def test_analysis_is_generated_only_on_request(self):
+        run_dataset(self.config, self.dataset, executor=fake_editor)
+        self.assertFalse((self.dataset / "analysis").exists())
+        report = analyze_dataset(self.dataset)
+        self.assertEqual(len(report["maps"]), 2)
+        self.assertEqual(sum(m["images"] for m in report["maps"]), 3)
+        self.assertTrue((self.dataset / "analysis" / "index.html").is_file())
+        pages = sorted((self.dataset / "analysis" / "maps").glob("*.html"))
+        self.assertEqual(len(pages), 2)
+        for page in pages:
+            html = page.read_text(encoding="utf-8")
+            self.assertIn("const points=", html)
+            self.assertIn("tank.png", html)
+        self.assertFalse((self.dataset / "analysis" / "images").exists())
 
     def test_batch_detects_incomplete_map(self):
         tasks = [{"map_id": "levels/avg_a.bin", "count": 2}]
