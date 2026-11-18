@@ -140,7 +140,10 @@ def make_command(cfg, run, tasks):
                 for index, task in enumerate(tasks)),
         encoding="ascii")
     script = run / "probe.dcmd"
-    commands = ["wait.frame 8", f"kolobanoveye.batch {dagor_path(batch)}"]
+    # The editor logs "ready for interaction" before invoking its async command queue.
+    # Do not yield eight idle frames before processing the first map: a Windows
+    # 0xC0000409 crash was observed during this initial wait, before MAP_BATCH_BEGIN.
+    commands = [f"kolobanoveye.batch {dagor_path(batch)}"]
     if not cfg["keep_open"]:
         commands.append("exit no")
     script.write_text("\n".join(commands) + "\n", encoding="ascii")
