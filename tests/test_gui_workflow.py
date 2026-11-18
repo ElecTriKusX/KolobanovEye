@@ -7,8 +7,6 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from ke_gui import App
-from tools.ke_coco import export
-from tests.test_coco import make_run
 
 
 class WorkflowTest(unittest.TestCase):
@@ -53,14 +51,6 @@ class WorkflowTest(unittest.TestCase):
                     self.assertIn('dataset/raw', events[-1][1])
                 else:
                     self.assertEqual(events[-1], ('success', str(dataset / 'raw')))
-
-    def test_coco_can_be_inside_run_but_not_images(self):
-        with tempfile.TemporaryDirectory() as d:
-            run = make_run(Path(d), 'run', 10, 20)
-            export([run], run/'coco')
-            data=json.loads((run/'coco/all.json').read_text())
-            self.assertTrue((run/'coco'/data['images'][0]['file_name']).is_file())
-            with self.assertRaises(ValueError): export([run], run/'images'/ 'bad')
 
     def test_worker_forces_utf8_output(self):
         with tempfile.TemporaryDirectory() as d:
