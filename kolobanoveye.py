@@ -267,6 +267,18 @@ def editor_failure(out, detail):
                     f"Dagor was built with the Oodle stub. The War Thunder build requires Oodle "
                     f"to decode its compressed textures. See {log} and README.md."
                 )
+    if "3221226505" in detail or "0xC0000409" in detail.upper():
+        debug_logs = sorted((out / ".logs").glob("daEditor3x-dev.exe-*/debug"),
+                            key=lambda p: p.stat().st_mtime)
+        if debug_logs:
+            latest = debug_logs[-1]
+            tail = latest.read_bytes()[-80000:].decode("utf-8", errors="replace")
+            begin = "[KE] MAP_BEGIN" in tail or "[KE] MAP_TASK_BEGIN" in tail
+            stage = "during map processing" if begin else "before the first map task"
+            last_line = tail.splitlines()[-1].strip() if tail.splitlines() else "unknown"
+            return (f"Windows native crash 0xC0000409 ({stage}), not a Python exception. "
+                    f"Last debug line: {last_line!r}. "
+                    f"See {latest}; check Windows Application Error event 1000 for the failing module.")
     return f"{detail} See engine logs in {out / '.logs'}."
 
 
