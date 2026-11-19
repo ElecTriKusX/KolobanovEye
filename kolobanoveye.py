@@ -294,7 +294,7 @@ def editor_failure(out, detail):
         raw = fatal.read_text(encoding="utf-8", errors="replace")
         if "FATAL ERROR:" not in raw and "assert failed" not in raw:
             continue
-        dst = re.search(r"Invalid update_sub_region dst:[^\\r\\n]*", raw)
+        dst = re.search(r"Invalid update_sub_region dst:[^\r\n]*", raw)
         if dst:
             description = dst.group(0)
         else:
@@ -306,7 +306,7 @@ def editor_failure(out, detail):
         stage = ""
         if debug.is_file():
             content = debug.read_bytes()[-250000:].decode("utf-8", errors="replace")
-            tasks = re.findall(r"CON: \\[KE\\] MAP_TASK_BEGIN index=\\d+/\\d+[^\\r\\n]*", content)
+            tasks = re.findall(r"CON: \[KE\] MAP_TASK_BEGIN index=\d+/\d+[^\r\n]*", content)
             if tasks:
                 stage = f" Last map task: {tasks[-1]}."
         return f"DaEditor native fatal assertion: {description}.{stage} Full stack: {fatal}"
