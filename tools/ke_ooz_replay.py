@@ -114,6 +114,8 @@ def main(argv=None):
                         keep_outputs=args.keep_outputs)
     except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
         parser.exit(1, f"[KE] ERROR {exc}\n")
+    if result.get("sha256_equal") is False:
+        parser.exit(1, "[KE] OOZ_DECODER_MISMATCH: decoded bytes differ; do not use either result as validated\n")
     if not result["cpp_ok"] and not result.get("rust_ok"):
         parser.exit(1, "[KE] OOZ_REPLAY_UNRESOLVED: neither decoder confirmed successful\n")
 
