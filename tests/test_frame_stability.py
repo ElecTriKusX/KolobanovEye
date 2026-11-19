@@ -2,8 +2,13 @@
 
 import json
 import re
+import errno
+import os
+import shutil
 import tempfile
+import time
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -13,6 +18,32 @@ from tools.ke_coco import export
 from ke_generate import command, validate_config
 from tools.ke_review import write_rgb_png
 from tools.ke_validate import validate
+
+
+@contextmanager
+def temporary_directory_with_windows_cleanup_retry():
+    """Retry a transient WinError 145/32 on folders Windows still indexes.
+
+    Unlike ignore_cleanup_errors=True this eventually raises for persistent
+    failures instead of silently leaking test artifacts. Linux remains strict.
+    """
+    root = Path(tempfile.mkdtemp(prefix="ke-frame-test-"))
+    try:
+        yield str(root)
+    finally:
+        for attempt in range(15):
+            try:
+                shutil.rmtree(root)
+                break
+            except FileNotFoundError:
+                break
+            except OSError as exc:
+                windows_retryable = (os.name == "nt" and
+                                     (getattr(exc, "winerror", None) in (32, 145) or
+                                      exc.errno in (errno.EACCES, errno.ENOTEMPTY)))
+                if not windows_retryable or attempt == 14:
+                    raise
+                time.sleep(min(0.05 * (attempt + 1), 0.5))
 
 
 class FrameStabilityTest(unittest.TestCase):
@@ -73,7 +104,7 @@ class FrameStabilityTest(unittest.TestCase):
 
     def test_sequence_protocol_requires_stability_and_exports_normal_annotations(self):
         for stable in (True, False):
-            with self.subTest(stable=stable), tempfile.TemporaryDirectory() as temp:
+            with self.subTest(stable=stable), temporary_directory_with_windows_cleanup_retry() as temp:
                 root = Path(temp)
                 out, dagor, game = root / 'run', root / 'dagor', root / 'game'
                 binary = dagor / ke.BIN
