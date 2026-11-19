@@ -44,3 +44,67 @@ def guard_kraken_multi_array(path: Path) -> bool:
         data = data.replace(original, replacement, 1)
     path.write_bytes(data.replace(b"\n", b"\r\n") if crlf else data)
     return True
+
+
+def trace_kraken_failures(path: Path) -> bool:
+    """Add failure-only decoder telemetry to the disposable OOZ build copy.
+
+    Diagnostics go to stderr/host-stdout.log. Successful quanta are silent.
+    Exact anchors prevent silently instrumenting an unrelated upstream version.
+    """
+    path = Path(path)
+    data = path.read_bytes()
+    crlf = b"\r\n" in data
+    normalized = data.replace(b"\r\n", b"\n")
+    marker = b'[KE] OOZ_STEP_FAIL'
+    if marker in normalized:
+        if normalized.count(marker) != 1 or b'[KE] OOZ_QUANTUM_FAIL' not in normalized:
+            raise ValueError("Partial OOZ failure telemetry")
+        return False
+    replacements = (
+        (
+            b'  if (n != qhdr.compressed_size)\n    return false;\n',
+            b'  if (n != qhdr.compressed_size)\n'
+            b'  {\n'
+            b'    fprintf(stderr, "[KE] OOZ_QUANTUM_FAIL codec=%d decoded_offset=%d quantum_packed=%u got=%d\\n",\n'
+            b'      dec->hdr.decoder_type, offset, qhdr.compressed_size, n);\n'
+            b'    return false;\n'
+            b'  }\n',
+        ),
+        (
+            b'    if (!Kraken_DecodeStep(dec, dst, offset, dst_len, src, src_len))\n'
+            b'      goto FAIL;\n',
+            b'    if (!Kraken_DecodeStep(dec, dst, offset, dst_len, src, src_len))\n'
+            b'    {\n'
+            b'      fprintf(stderr, "[KE] OOZ_STEP_FAIL decoded_offset=%d packed_remaining=%zu output_remaining=%zu\\n",\n'
+            b'        offset, src_len, dst_len);\n'
+            b'      goto FAIL;\n'
+            b'    }\n',
+        ),
+        (
+            b'        if (!Leviathan_ReadLzTable(mode,\n'
+            b'            src, src + src_used,\n'
+            b'            dst, dst_count,\n'
+            b'            dst - dst_start,\n'
+            b'            scratch + sizeof(LeviathanLzTable), scratch + scratch_usage,\n'
+            b'            (LeviathanLzTable*)scratch))\n'
+            b'          return -1;\n',
+            b'        if (!Leviathan_ReadLzTable(mode,\n'
+            b'            src, src + src_used,\n'
+            b'            dst, dst_count,\n'
+            b'            dst - dst_start,\n'
+            b'            scratch + sizeof(LeviathanLzTable), scratch + scratch_usage,\n'
+            b'            (LeviathanLzTable*)scratch))\n'
+            b'        {\n'
+            b'          fprintf(stderr, "[KE] OOZ_LEVIATHAN_LZ_TABLE_FAIL mode=%d output_chunk=%d packed_chunk=%d\\n",\n'
+            b'            mode, dst_count, src_used);\n'
+            b'          return -1;\n'
+            b'        }\n',
+        ),
+    )
+    for original, replacement in replacements:
+        if normalized.count(original) != 1:
+            raise ValueError(f"Missing unique OOZ trace anchor: {original[:96]!r}")
+        normalized = normalized.replace(original, replacement, 1)
+    path.write_bytes(normalized.replace(b"\n", b"\r\n") if crlf else normalized)
+    return True
