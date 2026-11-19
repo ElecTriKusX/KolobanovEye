@@ -483,7 +483,9 @@ def prepare_ooz(ooz, logs):
     cl, lib = shutil.which("cl.exe"), shutil.which("lib.exe")
     if not cl or not lib or os.environ.get("VSCMD_ARG_TGT_ARCH") != "x64":
         raise ValueError("Run build --ooz from Developer PowerShell configured for x64")
-    work = logs / "ooz-local"
+    # Keep build-logs/ooz-local as an immutable pinned staging source. Only
+    # ooz-compiled contains the hardened, compiler-ready derived snapshot.
+    work = logs / "ooz-compiled"
     dagor_path(work)
     work.mkdir(exist_ok=True)
     if ooz is not None:
