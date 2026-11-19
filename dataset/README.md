@@ -28,7 +28,7 @@ dataset/
 │       ├── probe.level.local.blk
 │       ├── map-batch.blk           # пути к заданиям всех карт
 │       ├── probe.dcmd              # одна native-команда kolobanoveye.batch
-│       ├── probe.dcmd.log
+│       ├── .logs/                 # настоящий debug-журнал пакетной консоли
 │       ├── host-stdout.log
 │       ├── generation-config.json
 │       └── manifest.json
