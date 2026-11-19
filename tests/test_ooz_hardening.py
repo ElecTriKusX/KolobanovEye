@@ -7,7 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.ke_ooz_hardening import guard_kraken_multi_array
+from tools.ke_ooz_hardening import guard_kraken_multi_array, trace_kraken_failures
+from kolobanoveye import enable_failed_ooz_stream_capture
 
 
 ORIGINAL = (
@@ -52,6 +53,60 @@ class KrakenHardeningTests(unittest.TestCase):
                                 code.index(b"  for (int i = 0; i < num_arrays_in_file; i++)"))
                 if newline == "\r\n":
                     self.assertNotIn(b"\n", patched.replace(b"\r\n", b""))
+
+    def test_trace_insertions_are_exact_and_idempotent(self):
+        with tempfile.TemporaryDirectory() as root:
+            target = Path(root) / "kraken.cpp"
+            source = (
+                "  if (n != qhdr.compressed_size)\n"
+                "    return false;\n"
+                "    if (!Kraken_DecodeStep(dec, dst, offset, dst_len, src, src_len))\n"
+                "      goto FAIL;\n"
+                "        if (!Leviathan_ReadLzTable(mode,\n"
+                "            src, src + src_used,\n"
+                "            dst, dst_count,\n"
+                "            dst - dst_start,\n"
+                "            scratch + sizeof(LeviathanLzTable), scratch + scratch_usage,\n"
+                "            (LeviathanLzTable*)scratch))\n"
+                "          return -1;\n"
+            )
+            for newline in ("\n", "\r\n"):
+                target.write_bytes(source.replace("\n", newline).encode("ascii"))
+                self.assertTrue(trace_kraken_failures(target))
+                after = target.read_bytes()
+                self.assertFalse(trace_kraken_failures(target))
+                self.assertEqual(after, target.read_bytes())
+                self.assertIn(b"OOZ_QUANTUM_FAIL", after)
+                self.assertIn(b"OOZ_STEP_FAIL", after)
+                self.assertIn(b"OOZ_LEVIATHAN_LZ_TABLE_FAIL", after)
+                if newline == "\r\n":
+                    self.assertNotIn(b"\n", after.replace(b"\r\n", b""))
+
+    def test_failed_ooz_capture_engine_migration(self):
+        with tempfile.TemporaryDirectory() as root:
+            code = (
+                "#include <cstdlib>\n"
+                "bool decode() {\n"
+                "  if (result != static_cast<int>(unpacked_size))\n"
+                "  {\n"
+                "    logerr(\"ooz: decode failed\");\n"
+                "    return false;\n"
+                "  }\n"
+                "}\n"
+            )
+            source = Path(root) / "prog/engine/ioSys/oodleIoOoz.cpp"
+            source.parent.mkdir(parents=True)
+            for newline in ("\n", "\r\n"):
+                source.write_bytes(code.replace("\n", newline).encode("ascii"))
+                self.assertTrue(enable_failed_ooz_stream_capture(Path(root)))
+                after = source.read_bytes()
+                self.assertFalse(enable_failed_ooz_stream_capture(Path(root)))
+                self.assertEqual(after, source.read_bytes())
+                for keyword in (b"KE_OOZ_FAILURE_DIR", b"failed-ooz.bin",
+                                b"failed-ooz.txt", b"std::atomic_flag", b"std::fwrite"):
+                    self.assertIn(keyword, after)
+                if newline == "\r\n":
+                    self.assertNotIn(b"\n", after.replace(b"\r\n", b""))
 
     def test_unknown_decoder_layout_rejected_without_mutation(self):
         with tempfile.TemporaryDirectory() as root:
