@@ -509,13 +509,10 @@ def prepare_ooz(ooz, logs):
     library = work / "ke-ooz.lib"
     run_logged([lib, "/nologo", "/machine:x64", "/out:ke-ooz.lib", "kraken.obj", "lzna.obj", "bitknit.obj"],
                logs / "ooz-lib.log", work)
-    # A tiny standalone executable links the *same* OOZ objects as daKernel,
-    # enabling replay of failed compressed streams without 90s editor startup.
-    replay_source = HERE / "tools" / "native" / "ke_ooz_replay.cpp"
-    replay = work / "ke-ooz-replay.exe"
-    run_logged([cl, "/nologo", "/O2", "/MT", "/Z7", replay_source, "/link",
-                library, f"/OUT:{replay}"], logs / "ooz-replay-compile.log", work)
-    require_file(replay)
+    # A security product classified the optional ke-ooz-replay.exe as high-risk
+    # heuristic malware (VHO:Trojan.Win32.Agent.gen). Until independently
+    # reviewed, do NOT build or execute that optional diagnostic binary.
+    # The essential ke-ooz.lib is still compiled for the actual DaEditor.
     return require_file(library)
 
 
@@ -618,9 +615,49 @@ def has_last_clip_bounds(source: Path) -> bool:
     return all(found)
 
 
+def ooz_patch_installed(dagor: Path) -> bool:
+    """Recognize the pinned OOZ patch even after a later native migration.
+
+    The first build patches oodleIoOoz.cpp and then injects failed-stream
+    capture into its error branch. That mutation invalidates git apply
+    --reverse --check for the original multi-file patch, despite the Oodle
+    integration being present. Never re-apply it or reset the Dagor checkout.
+    Refuse incomplete combinations rather than treating them as installed.
+    """
+    io = dagor / "prog/engine/ioSys"
+    jam = io / "jamfile"
+    cpp = io / "oodleIoOoz.cpp"
+    if not jam.is_file():
+        raise ValueError(f"Missing Dagor IO Jamfile: {jam}")
+    j = jam.read_bytes()
+    installed_jam = (
+        b"local ooz_enabled =" in j and
+        b"Sources += oodleIoOoz.cpp oodleIoFatal.cpp" in j and
+        b"Building daKernel with the decode-only ooz backend" in j
+    )
+    candidates = (b"local ooz_enabled =", b"UseOoz", b"OozLib",
+                  b"oodleIoOoz.cpp oodleIoFatal.cpp")
+    partial_jam = any(x in j for x in candidates)
+    if cpp.is_file():
+        data = cpp.read_bytes()
+        required = (b"Kraken_Decompress(", b"void OodleLoadCB::open(",
+                    b"inline int OodleLoadCB::decodeData(", b"size_t oodle_decompress(",
+                    b"bool OodleLoadCB::ceaseReading()")
+        if not installed_jam or not all(x in data for x in required):
+            raise ValueError("Partial or unexpected Dagor OOZ integration; "
+                             f"inspect {jam} and {cpp}, do not reset sources")
+        return True
+    if partial_jam:
+        raise ValueError(f"Dagor OOZ Jamfile is modified but decoder source is absent: {cpp}")
+    return False
+
+
 def apply_dagor_patches(dagor, *, with_ooz=False):
     apply = ["git", "apply", "--whitespace=error-all"]
     patches = (*PATCHES, OOZ_PATCH) if with_ooz else PATCHES
+    ooz_already_applied = ooz_patch_installed(dagor) if with_ooz else False
+    if ooz_already_applied:
+        print("[KE] OOZ_PATCH already_applied=1 (including post-patch diagnostics)", flush=True)
     direct_depth_diff = DIRECT_DEPTH_PATCH.read_bytes().replace(b"\r\n", b"\n")
     direct_depth_applied = subprocess.run([*apply, "--reverse", "--check"], input=direct_depth_diff, cwd=dagor,
                                           capture_output=True).returncode == 0
@@ -679,6 +716,8 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
     texture_pump_applied = offscreen_frame_clock_applied or subprocess.run([*apply, "--reverse", "--check"],
         input=TEXTURE_PUMP_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     for patch in patches:
+        if patch == OOZ_PATCH and ooz_already_applied:
+            continue
         if last_clip_bounds_applied and patch == LAST_CLIP_BOUNDS_PATCH:
             continue
         if upgraded_capture and patch == OFFSCREEN_STREAMING_WAIT_PATCH:
