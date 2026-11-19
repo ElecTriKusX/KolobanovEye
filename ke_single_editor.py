@@ -212,6 +212,16 @@ def explain_batch_failure(run: Path, log: str, source: Path) -> str:
     message = failed or "нет [KE] MAP_BATCH_OK (пакет не завершился)"
     if details:
         message += f"; native errors: {details}"
+    # Decoder-stage telemetry is written to stderr by the standalone OOZ C++
+    # code, not to CoolConsole's debug journal.
+    host = run / "host-stdout.log"
+    if host.is_file():
+        telemetry = [line.strip() for line in host.read_text(
+            encoding="utf-8", errors="replace").splitlines()
+            if "[KE] OOZ_" in line and (
+                "FAIL" in line or "MISMATCH" in line)]
+        if telemetry:
+            message += "; decoder stage: " + "; ".join(telemetry[-3:])
     failed = run / "ooz-failures" / "failed-ooz.bin"
     if failed.is_file():
         message += f"; OOZ_INPUT_CAPTURED={failed} (local file; do not publish proprietary game data)"
