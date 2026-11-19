@@ -1,8 +1,7 @@
-"""Offline tests for reproducible OOZ failure inputs and cross-decoder comparison."""
+"""Offline metadata tests and AV-driven executable replay denial."""
 import tempfile
 import unittest
 from pathlib import Path
-from subprocess import CompletedProcess
 from unittest.mock import patch
 
 from tools.ke_ooz_replay import choose_run, load_capture, replay
@@ -41,22 +40,13 @@ class OozReplayTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "неполон"):
             load_capture(self.run)
 
-    def test_native_failure_then_rust_success_is_reported(self):
+    def test_unverified_native_decoder_is_never_executed(self):
         unoodle = self.root / "unoodle.exe"
         unoodle.touch()
-        calls = []
-        def fake_process(command, **kwargs):
-            calls.append(command)
-            if Path(command[0]) == self.cpp:
-                return CompletedProcess(command, 1, stdout="[KE] OOZ_STEP_FAIL decoded_offset=0")
-            rust_output = Path(command[command.index("--output") + 1])
-            rust_output.write_bytes(b"x" * 16)
-            return CompletedProcess(command, 0, stdout="Extracted 16 bytes")
-        with patch("tools.ke_ooz_replay.subprocess.run", side_effect=fake_process):
-            result = replay(self.run, cpp=self.cpp, unoodle=unoodle)
-        self.assertFalse(result["cpp_ok"])
-        self.assertTrue(result["rust_ok"])
-        self.assertEqual(len(calls), 2)
+        with patch("tools.ke_ooz_replay.subprocess.run") as runner:
+            with self.assertRaisesRegex(ValueError, "suspended after Kaspersky"):
+                replay(self.run, cpp=self.cpp, unoodle=unoodle)
+            runner.assert_not_called()
         self.assertFalse((self.failure / "rust-decoded.raw").exists())
         self.assertFalse((self.failure / "native-decoded.raw").exists())
 
