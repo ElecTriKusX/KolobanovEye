@@ -48,7 +48,7 @@ KolobanovEye/
 │   │       ├── probe.level.blk
 │   │       ├── probe.level.local.blk
 │   │       ├── probe.dcmd     # одна native-команда kolobanoveye.batch
-│   │       ├── probe.dcmd.log
+│   │       ├── .logs/                 # настоящий debug-журнал пакетной консоли
 │   │       ├── host-stdout.log
 │   │       ├── manifest.json
 │   │       └── generation-config.json
