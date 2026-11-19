@@ -286,6 +286,30 @@ def editor_failure(out, detail):
             return (f"Windows native crash 0xC0000409 ({stage}), not a Python exception. "
                     f"Last useful debug line: {last_line!r}. Last command: {last_command!r}. "
                     f"See {latest}; check Windows Application Error event 1000 for the failing module.")
+    # Non-fastfail DaEditor assertions also produce native exit 1, e.g.
+    # DX11 invalid atlas slice. Report the actual native message and map index.
+    fatal_logs = sorted((out / ".logs").glob("daEditor3x-dev.exe-*/fatalerr"),
+                        key=lambda p: p.stat().st_mtime_ns)
+    for fatal in reversed(fatal_logs):
+        raw = fatal.read_text(encoding="utf-8", errors="replace")
+        if "FATAL ERROR:" not in raw and "assert failed" not in raw:
+            continue
+        dst = re.search(r"Invalid update_sub_region dst:[^\\r\\n]*", raw)
+        if dst:
+            description = dst.group(0)
+        else:
+            meaningful = [line.strip() for line in raw.splitlines()
+                          if line.strip() and not line.lstrip().startswith("Call stack")]
+            description = next((line for line in meaningful if "assert failed" in line),
+                               meaningful[0] if meaningful else "native assertion")
+        debug = fatal.parent / "debug"
+        stage = ""
+        if debug.is_file():
+            content = debug.read_bytes()[-250000:].decode("utf-8", errors="replace")
+            tasks = re.findall(r"CON: \\[KE\\] MAP_TASK_BEGIN index=\\d+/\\d+[^\\r\\n]*", content)
+            if tasks:
+                stage = f" Last map task: {tasks[-1]}."
+        return f"DaEditor native fatal assertion: {description}.{stage} Full stack: {fatal}"
     return f"{detail} See engine logs in {out / '.logs'}."
 
 
