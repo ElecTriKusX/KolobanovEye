@@ -233,8 +233,16 @@ class SingleEditorTests(unittest.TestCase):
                 "  7.93 [E] ooz: decode failed in 'D:/game/levels/avg_abandoned_factory.bin' "
                 "(stream type=12, packed=3630624, expected=13009598, result=-1)\n",
                 encoding="utf-8")
+            failure = run / "ooz-failures"
+            failure.mkdir()
+            (failure / "failed-ooz.bin").write_bytes(b"\\x8c\\x0c")
+            (run / "host-stdout.log").write_text(
+                "[KE] OOZ_STEP_FAIL decoded_offset=131072 packed_remaining=44512\\n",
+                encoding="utf-8")
             log, source = read_editor_log(run)
             error = explain_batch_failure(run, log, source)
+            self.assertIn("OOZ_INPUT_CAPTURED", error)
+            self.assertIn("OOZ_STEP_FAIL decoded_offset=131072", error)
             self.assertIn("FAIL MAP", error)
             self.assertIn("avg_abandoned_factory.bin", error)
             self.assertIn("stream type=12", error)
