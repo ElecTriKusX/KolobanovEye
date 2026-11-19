@@ -165,6 +165,55 @@ def make_command(cfg, run, tasks):
     return args
 
 
+def read_editor_log(run: Path) -> tuple[str, Path]:
+    """Read the actual async DaEditor console log, not a nonexistent .dcmd.log.
+
+    Dagor ConBatch::startLog() counts console messages; it never saves a file.
+    Async editor sessions emit those messages to .logs/<process>/debug with
+    'CON: ' prefixes. Discard duplicate raw [KE] debug() records to avoid
+    counting each MAP_BEGIN twice.
+    """
+    legacy = run / "probe.dcmd.log"
+    if legacy.is_file():
+        return legacy.read_text(encoding="utf-8", errors="replace"), legacy
+    logs = list((run / ".logs").glob("daEditor3x-dev.exe-*/debug"))
+    if not logs:
+        raise ValueError(f"DaEditor не создал debug-журнал в {run / '.logs'}")
+    current = max(logs, key=lambda p: p.stat().st_mtime_ns)
+    raw = current.read_text(encoding="utf-8", errors="replace")
+    messages = []
+    for line in raw.splitlines():
+        match = re.search(r"\bCON: (\[KE\] .*)$", line)
+        if match:
+            messages.append(match.group(1))
+    if not messages:
+        raise ValueError(f"DaEditor не выполнил ни одной команды KolobanovEye. Проверьте {current}")
+    return "\n".join(messages), current
+
+
+def explain_batch_failure(run: Path, log: str, source: Path) -> str:
+    """Preserve the first actionable native error instead of File missing."""
+    failed = next((line for line in log.splitlines() if "[KE] FAIL " in line), None)
+    native_errors = []
+    for filename in ("logerr", "debug"):
+        path = source.parent / filename
+        if path.is_file():
+            native_errors.extend(path.read_text(encoding="utf-8", errors="replace").splitlines())
+    errors = [
+        line.strip() for line in native_errors if (
+            "ooz: decode failed" in line.lower() or
+            "Oodle read error" in line or
+            "Land dump load error" in line
+        )
+    ]
+    unique = list(dict.fromkeys(errors))
+    details = "; ".join(unique[:3])
+    message = failed or "нет [KE] MAP_BATCH_OK (пакет не завершился)"
+    if details:
+        message += f"; native errors: {details}"
+    return f"{message}; debug: {source}"
+
+
 def extract_map_logs(log, tasks, *, stability=True):
     """Separate the single console journal into individual map passes.
 
@@ -194,9 +243,9 @@ def extract_map_logs(log, tasks, *, stability=True):
 
 def finalize(cfg, run, raw, tasks):
     """Validate all images and journals, create the one and only COCO file."""
-    log = require_file(run / "probe.dcmd.log").read_text(encoding="utf-8", errors="replace")
+    log, source = read_editor_log(run)
     if f'[KE] MAP_BATCH_OK maps={len(tasks)}' not in log:
-        raise ValueError("DaEditor map batch did not report successful completion")
+        raise ValueError(explain_batch_failure(run, log, source))
     map_logs = extract_map_logs(log, tasks, stability=cfg["wait_frame_stability"])
     images, annotations, records, scenes, maps = [], [], [], {}, []
     for task, map_log in zip(tasks, map_logs):
