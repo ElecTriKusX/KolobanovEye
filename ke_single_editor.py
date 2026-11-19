@@ -6,6 +6,7 @@ logs and map overviews, but never duplicate RGB frames or COCO files.
 """
 import hashlib
 import json
+import os
 import random
 import re
 import subprocess
@@ -211,6 +212,9 @@ def explain_batch_failure(run: Path, log: str, source: Path) -> str:
     message = failed or "нет [KE] MAP_BATCH_OK (пакет не завершился)"
     if details:
         message += f"; native errors: {details}"
+    failed = run / "ooz-failures" / "failed-ooz.bin"
+    if failed.is_file():
+        message += f"; OOZ_INPUT_CAPTURED={failed} (local file; do not publish proprietary game data)"
     return f"{message}; debug: {source}"
 
 
@@ -386,9 +390,15 @@ def generate(config, run, raw, executor=None):
             if (status := executor(cmd)):
                 raise RuntimeError(f"DaEditor завершился с кодом {status}")
         else:
+            # Capture only a rejected compressed Oodle stream, on this machine,
+            # so the decoder can be tested without 90s DaEditor startup cycles.
+            failure_dir = run / "ooz-failures"
+            failure_dir.mkdir()
+            editor_env = {**os.environ, "KE_OOZ_FAILURE_DIR": str(failure_dir)}
             try:
                 run_logged(cmd, run / "host-stdout.log", run,
-                           None if cfg["keep_open"] else cfg["timeout"] * len(tasks))
+                           None if cfg["keep_open"] else cfg["timeout"] * len(tasks),
+                           env=editor_env)
             except (ValueError, subprocess.TimeoutExpired) as exc:
                 raise ValueError(editor_failure(run, str(exc))) from exc
         result = finalize(cfg, run, raw, tasks)
