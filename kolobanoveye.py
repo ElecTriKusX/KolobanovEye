@@ -798,9 +798,57 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
     reset_level_settings_on_reload(map_cpp)
     preserve_landmesh_renderer_release_on_reload(map_cpp)
     enable_single_editor_map_batch(dagor)
+    guard_impostor_shadow_atlas_slices(dagor)
     if with_ooz:
         enable_failed_ooz_stream_capture(dagor)
 
+
+
+def guard_impostor_shadow_atlas_slices(dagor: Path) -> bool:
+    """Prevent invalid palette slice writes in the pinned Dagor DX11 renderer.
+
+    Real 20-map batch failed at map 4 avg_alaska_town.bin, targeting subres=7
+    (slice 1) on the one-slice tree_fagus_hurtgen_pl_l_a_s shadow atlas.
+    The error originates in ImpostorTextureManager::update_shadow(), not
+    BcCompressor or validate_update_sub_region_params(). Never weaken driver
+    validation or remap to a different atlas slice.
+
+    For KolobanovEye only, skip that *preshadow update* and record a quality
+    warning; normal Dagor callers receive false. Base scene/mesh rendering
+    still occurs, but the affected palette-specific preshadow is unavailable.
+    """
+    source = dagor / "prog/gameLibs/rendInst/impostorTextureMgr.cpp"
+    raw = source.read_bytes()
+    crlf = b"\r\n" in raw
+    data = raw.replace(b"\r\n", b"\n")
+    anchor = (b"  TextureInfo texInfo;\n"
+              b"  arrayTex->getinfo(texInfo);\n"
+              b"  BaseTexture *targetTex = arrayTex;\n")
+    marker = b"  // [KE] IMPOSTOR_SHADOW_SLICE_GUARD_V1\n"
+    patch = (
+        b"  // [KE] IMPOSTOR_SHADOW_SLICE_GUARD_V1\n"
+        b"  // Some WT maps use a rotation palette with more entries than the\n"
+        b"  // baked shadow-atlas resource has array slices. Never write beyond it.\n"
+        b"  if (palette_id < 0 || palette_id >= texInfo.a)\n"
+        b"  {\n"
+        b"    const bool keCapture = dgs_get_argv(\"kolobanoveye-probe\") != nullptr;\n"
+        b"    logwarn(\"[KE] IMPOSTOR_SHADOW_SLICE_SKIPPED asset=%s palette_id=%d atlas_slices=%d mips=%d layer=%d ri=%d ke_capture=%d\",\n"
+        b"      arrayTex->getTexName(), palette_id, texInfo.a, texInfo.mipLevels, layer_id, ri_id, int(keCapture));\n"
+        b"    release_managed_tex(res->getImpostorTextures().shadowAtlas);\n"
+        b"    return keCapture; // Only the dataset probe accepts reduced preshadow quality.\n"
+        b"  }\n"
+    )
+    if data.count(marker) == 1:
+        if data.count(patch) != 1:
+            raise ValueError(f"Partial KolobanovEye impostor slice guard in {source}")
+        return False
+    if data.count(anchor) != 1 or marker in data:
+        raise ValueError(f"Cannot locate unique original impostor slice update in {source}")
+    data = data.replace(anchor, anchor.replace(b"  BaseTexture *targetTex = arrayTex;\n", b"") +
+                        patch + b"  BaseTexture *targetTex = arrayTex;\n", 1)
+    source.write_bytes(data.replace(b"\n", b"\r\n") if crlf else data)
+    print(f"[KE] IMPOSTOR_SHADOW_SLICE_GUARD enabled source={source}", flush=True)
+    return True
 
 
 def enable_failed_ooz_stream_capture(dagor: Path) -> bool:
