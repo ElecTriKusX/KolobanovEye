@@ -499,7 +499,7 @@ def prepare_ooz(ooz, logs):
             shutil.copyfile(OOZ_VENDOR / filename, work / filename)
     # Hardening applies ONLY to work/kraken.cpp, never to the SHA-256-pinned vendor snapshot.
     hardened = guard_kraken_multi_array(work / "kraken.cpp")
-    print(f"[KE] OOZ_KRAKEN_GUARD_OK capacity=32 patched={int(hardened)}", flush=True)
+    print(f"[KE] OOZ_KRAKEN_GUARD_OK capacity=64 encoded_max=63 patched={int(hardened)}", flush=True)
     # /Z7 embeds symbols and source line tables into the .obj so the daKernel PDB
     # can identify exact decoder lines on any remaining Windows native crash.
     run_logged([cl, "/nologo", "/c", "/O2", "/MT", "/Zl", "/Z7", "kraken.cpp", "lzna.cpp", "bitknit.cpp"],
