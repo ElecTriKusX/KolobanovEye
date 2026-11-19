@@ -509,6 +509,13 @@ def prepare_ooz(ooz, logs):
     library = work / "ke-ooz.lib"
     run_logged([lib, "/nologo", "/machine:x64", "/out:ke-ooz.lib", "kraken.obj", "lzna.obj", "bitknit.obj"],
                logs / "ooz-lib.log", work)
+    # A tiny standalone executable links the *same* OOZ objects as daKernel,
+    # enabling replay of failed compressed streams without 90s editor startup.
+    replay_source = HERE / "tools" / "native" / "ke_ooz_replay.cpp"
+    replay = work / "ke-ooz-replay.exe"
+    run_logged([cl, "/nologo", "/O2", "/MT", "/Z7", replay_source, "/link",
+                library, f"/OUT:{replay}"], logs / "ooz-replay-compile.log", work)
+    require_file(replay)
     return require_file(library)
 
 
