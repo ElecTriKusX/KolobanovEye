@@ -17,7 +17,7 @@ from tools.ke_annotation import parse_annotation, write_annotation
 from tools.ke_frame_journal import JOURNAL, read_journal
 from tools.ke_maps import MAP_ID, parse_tank_bounds_log
 from tools.vendor_ooz import VENDOR as OOZ_VENDOR, verify_vendor as verify_vendor_ooz, install as install_vendor_ooz
-from tools.ke_ooz_hardening import guard_kraken_multi_array
+from tools.ke_ooz_hardening import guard_kraken_multi_array, trace_kraken_failures
 
 REV = "9639942de5a8e5b01d91977f60ed82cda22d5f41"
 HERE = Path(__file__).resolve().parent
@@ -500,6 +500,8 @@ def prepare_ooz(ooz, logs):
     # Hardening applies ONLY to work/kraken.cpp, never to the SHA-256-pinned vendor snapshot.
     hardened = guard_kraken_multi_array(work / "kraken.cpp")
     print(f"[KE] OOZ_KRAKEN_GUARD_OK capacity=64 encoded_max=63 patched={int(hardened)}", flush=True)
+    traced = trace_kraken_failures(work / "kraken.cpp")
+    print(f"[KE] OOZ_DECODER_TRACE_OK patched={int(traced)}", flush=True)
     # /Z7 embeds symbols and source line tables into the .obj so the daKernel PDB
     # can identify exact decoder lines on any remaining Windows native crash.
     run_logged([cl, "/nologo", "/c", "/O2", "/MT", "/Zl", "/Z7", "kraken.cpp", "lzna.cpp", "bitknit.cpp"],
