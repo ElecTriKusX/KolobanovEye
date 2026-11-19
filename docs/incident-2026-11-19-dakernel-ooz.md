@@ -31,52 +31,36 @@ Parsed from MINIDUMP_EXCEPTION_STREAM:
 The failure is in the decoder/IO path, not evidence of a multi-editor launch,
 map-switch or oversized batch queue. \`wait.frame\` removal did not resolve it.
 
-## Confirmed source-level defect and defensive fix
+## Decoder bounds correction after the November 19 retry
 
-Pinned upstream: \`powzix/ooz\` commit
-\`05038060aa68f9187ae9923b2388ca8db40e58d1\`,
-used as a decode-only locally staged snapshot.
+New archive `.logs(5).zip` records a real, non-crashing editor start and successful entry into `kolobanoveye.batch` for `levels/avg_abandoned_factory.bin`:
 
-In \`Kraken_DecodeMultiArray\` (\`kraken.cpp\` near upstream lines 1311–1355):
+```text
+[KE] MAP_BATCH_BEGIN maps=1
+[KE] MAP_TASK_BEGIN index=1/1
+[KE] MAP_BEGIN .../avg_abandoned_factory.bin
+ooz: decode failed ... stream type=12, packed=3630624,
+     expected=13009598, result=-1
+[KE] FAIL MAP: Binary dump did not produce a terrain renderer
+```
 
-\`\`\`cpp
-int num_arrays_in_file = *src++;
-num_arrays_in_file &= 0x3f; // Possible values: 0..63
-uint8 *entropy_array_data[32];
+The previous `0xC0000409` **did not recur** in this trace. The decoding failure could have been triggered by the earlier count guard but that is unproven without a dedicated diagnostic marker or a second test run.
+
+The pinned upstream `kraken.cpp` (near lines 1311–1355) uses:
+
+```cpp
+num_arrays_in_file &= 0x3f;       // Six-bit count: 0..63
+uint8 *entropy_array_data[32];   // Too small for some representable counts
 uint32 entropy_array_size[32];
-for (int i = 0; i < num_arrays_in_file; i++) {
-    // Writes to entropy_array_data[i] and entropy_array_size[i].
-}
-\`\`\`
+```
 
-There is no check ensuring \`num_arrays_in_file <= 32\` before the loop,
-so malformed input with 33–63 declared entropy arrays can overwrite local
-stack variables. **This is a real unchecked array bound, consistent with
-the stack-cookie failure, but its activation in the specific War Thunder
-stream has not been proven.**
+Initially we rejected values 33–63, preventing the specific overflow but potentially rejecting valid encoded data. **Current build-copy fix:** expand both arrays to `[64]`, preserving the entire representable count range without allowing that stack overwrite. No upstream or pinned vendor source files change. The compilation copy is `build-logs/ooz-compiled/kraken.cpp`; `build-logs/ooz-local` remains the original staged snapshot. MSVC `/Z7` remains enabled to help decode any future crash.
 
-\`tools/ke_ooz_hardening.py\` adds immediately after the \`&= 0x3f\` step:
+The editor's async `ConBatch::startLog()` never creates `probe.dcmd.log`: it only resets console counters. `ke_single_editor.py` now reads `.logs/<DaEditor>/debug` and normalizes `CON: [KE]` messages. It excludes duplicate bare `debug("[KE] MAP_BEGIN")` records and reports native `logerr` details for failed maps. The previous `File missing: probe.dcmd.log` was a Python-observability error, not proof the editor had not started.
 
-\`\`\`cpp
-// KolobanovEye: reject counts above the fixed local arrays[32].
-if (num_arrays_in_file > 32)
-  return -1;
-\`\`\`
+A separate Windows test flake `WinError 145` deleting `tempfile.TemporaryDirectory` is addressed with bounded retries in `tests/test_frame_stability.py`. This does not silence persistent cleanup errors.
 
-Build pipeline \`kolobanoveye.py prepare_ooz()\` now:
-
-1. Verifies the SHA-256 pinned \`vendor/ooz\` snapshot.
-2. Copies the source to separate \`build-logs/ooz-compiled\`.
-3. Applies only this guarded, idempotent bounds check to the compilation copy.
-4. Compiles with MSVC \`/Z7\` to preserve source line information in future
-   \`daKernel-dev.pdb\` dumps.
-5. Relinks the OOZ static library and DaEditor/daKernel via Dagor Jam.
-
-Neither \`vendor/ooz/kraken.cpp\` nor the original
-\`build-logs/ooz-local/kraken.cpp\` is altered; all existing hashes stay valid.
-
-Tests in \`tests/test_ooz_hardening.py\` cover insertion before the writes,
-idempotence, both newline styles and refusal to modify unknown/partial sources.
+**Still unverified:** full decoding of abandoned_factory with [64] arrays and two-level sequence on the actual Windows editor. The `360s` timeout belongs to a *different* run `run-20261119T005713Z-df57877a`; that run's native logs were not in this archive, so its particular cause remains unknown.
 
 ## Windows verification gate
 
@@ -91,12 +75,13 @@ python .\ke_gui.py
 Choose Normandy only, two RGB images. During build verify:
 
 \`\`\`text
-[KE] OOZ_KRAKEN_GUARD_OK capacity=32 patched=1
+[KE] OOZ_KRAKEN_GUARD_OK capacity=64 encoded_max=63 patched=1
 [KE] BUILD_OK ...
 \`\`\`
 
-If the guard rejects the compressed stream, the engine must report a decoding
-failure without a stack-cookie fast-fail. This may still interrupt generation.
+If the new 64-entry arrays decode this stream successfully, proceed to validating
+terrain, RGB and COCO. If decoding still fails, use the new native log details
+to isolate the remaining unsupported or invalid decoder operation.
 If \`0xC0000409\` persists, preserve the newly generated \`daKernel-dev.pdb\`
 and WER dump and use the new \`/Z7\` line tables to locate the remaining
 unsafe code; do not assume this single guard solves every decoder defect.
