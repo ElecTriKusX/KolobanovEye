@@ -2,7 +2,7 @@
 
 Локальный генератор синтетических RGB-изображений и COCO-аннотаций для детекции танков (`tank`) на ресурсах War Thunder с использованием открытых исходников Dagor Engine, CDK и закреплённого OOZ.
 
-**Разбор Windows-crash от 19.11.2026:** процесс завершался с `0xC0000409` сразу после начала async batch, до первого `MAP_BEGIN`. В ответ большая очередь из 60 команд заменена одной native-командой `kolobanoveye.batch`. Это изменение требует повторной сборки и Windows-теста: первопричина сбоя по архиву не доказана.
+**Диагностика 19.11.2026:** дамп и совпадающий PDB подтвердили нарушение stack cookie внутри декодера OOZ (`daKernel-dev.dll`). Защита локального C++ OOZ больше не приводит к этому crash, но карта `avg_abandoned_factory.bin` по-прежнему возвращает `ooz: decode failed` (Leviathan). Теперь генератор сохраняет первый проблемный блок локально для автономного анализа; подробности — в [отчёте об инциденте](docs/incident-2026-11-19-dakernel-ooz.md). **Это ещё не исправление декодера:** успешно загрузить карту на Windows предстоит.
 
 **Текущая ветка:** [feature/avg-map-catalog-whitelist](https://github.com/ElecTriKusX/KolobanovEye/tree/feature/avg-map-catalog-whitelist). **Пока не сливать в `main`: последовательная обработка нескольких карт в одном DaEditor требует реального Windows/DX11-теста.**
 
@@ -17,6 +17,29 @@
 В случае неудачного рендера/валидации прежний `dataset/raw` остаётся неизменным. GUI спрашивает подтверждение перед заменой последнего результата. Историю технических запусков в `dataset/runs` пользователь очищает самостоятельно. Всё `dataset/`, кроме README, исключено из Git.
 
 [Структура проекта и выходных папок](docs/project-layout.md) · [Подробно о dataset](dataset/README.md) · [Текущее состояние по ТЗ](docs/project-status.md) · [План каталога карт](docs/map-catalog-roadmap.md)
+
+## Проверка отказа OOZ без многократного запуска DaEditor
+
+Если `avg_abandoned_factory.bin` не загружается с `ooz: decode failed`, после новой сборки `kolobanoveye.py build` и одного запуска GUI в техническом `dataset/runs/run-.../ooz-failures/` появятся локальные `failed-ooz.bin` и `failed-ooz.txt`. Они не добавляются в Git. `host-stdout.log` дополнительно содержит `OOZ_STEP_FAIL`, `OOZ_QUANTUM_FAIL` и `OOZ_LEVIATHAN_LZ_TABLE_FAIL` при соответствующей ошибке.
+
+Без запуска DaEditor можно воспроизвести декодирование именно той же C++ библиотекой:
+
+```powershell
+python -m tools.ke_ooz_replay
+```
+
+Для независимой проверки Rust `oozextract` версии 0.5.7 (необязательно, устанавливается локально):
+
+```powershell
+winget install -e --id Rustlang.Rustup
+# Откройте новую Developer PowerShell, чтобы cargo попал в PATH
+cargo install oozextract --version 0.5.7 --locked --features cli,verbose_errors --root D:\Projects\ke-decoders
+python -m tools.ke_ooz_replay --unoodle D:\Projects\ke-decoders\bin\unoodle.exe
+```
+
+Если Rust успешно распакует тот же блок, а C++ нет, это обоснование для отдельной замены декодера внутри **того же** процесса DaEditor. До такой проверки рабочий backend не переключается на неподтверждённую альтернативу.
+
+**Не публикуйте `failed-ooz.bin` в GitHub:** он содержит фрагмент ресурсов War Thunder. Для диагностики достаточно текстового вывода команды и `host-stdout.log`.
 
 ## Запуск в Windows Developer PowerShell x64
 
