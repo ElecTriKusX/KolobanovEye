@@ -228,6 +228,29 @@ def explain_batch_failure(run: Path, log: str, source: Path) -> str:
     return f"{message}; debug: {source}"
 
 
+def read_impostor_quality(source: Path, count: int) -> list[dict]:
+    """Associate native preshadow warnings with map tasks in the editor debug log.
+
+    A skipped shadow-atlas slice is a quality degradation, not a normal render.
+    Unlike console [KE] messages, Dagor logwarn() is a raw debug record.
+    """
+    found = [{"skipped_updates": 0, "assets": set()} for _ in range(count)]
+    if source.name != "debug" or not source.is_file():
+        return [{"skipped_updates": 0, "assets": []} for _ in range(count)]
+    current = None
+    for line in source.read_text(encoding="utf-8", errors="replace").splitlines():
+        match = re.search(r"CON: \[KE\] MAP_TASK_BEGIN index=(\d+)/(\d+)", line)
+        if match:
+            pos = int(match.group(1)) - 1
+            current = pos if 0 <= pos < count and int(match.group(2)) == count else None
+        if current is not None and "[KE] IMPOSTOR_SHADOW_SLICE_SKIPPED " in line:
+            found[current]["skipped_updates"] += 1
+            asset = re.search(r"\basset=(\S+)", line)
+            if asset:
+                found[current]["assets"].add(asset.group(1))
+    return [{"skipped_updates": x["skipped_updates"], "assets": sorted(x["assets"])} for x in found]
+
+
 def extract_map_logs(log, tasks, *, stability=True):
     """Separate the single console journal into individual map passes.
 
@@ -261,8 +284,9 @@ def finalize(cfg, run, raw, tasks):
     if f'[KE] MAP_BATCH_OK maps={len(tasks)}' not in log:
         raise ValueError(explain_batch_failure(run, log, source))
     map_logs = extract_map_logs(log, tasks, stability=cfg["wait_frame_stability"])
+    shadow_quality = read_impostor_quality(source, len(tasks))
     images, annotations, records, scenes, maps = [], [], [], {}, []
-    for task, map_log in zip(tasks, map_logs):
+    for task, map_log, quality in zip(tasks, map_logs, shadow_quality):
         journal = read_journal(require_file(task["journal"]))
         if set(journal) != set(range(task["count"])):
             raise ValueError(f'Неполный журнал кадров: {task["map_id"]}')
@@ -274,7 +298,15 @@ def finalize(cfg, run, raw, tasks):
                 raise ValueError(f'Нет координат танкового поля: {task["map_id"]}')
             verify_png(overview, cfg["tank_map_resolution"], cfg["tank_map_resolution"])
         maps.append({"map_id": task["map_id"], "frames": task["count"], "tank_bounds": bounds,
-                     "overview": f"maps/{overview_name}" if cfg["capture_tank_map"] else None})
+                     "overview": f"maps/{overview_name}" if cfg["capture_tank_map"] else None,
+                     "render_quality_flags": (["impostor_preshadow_incomplete"]
+                                              if quality["skipped_updates"] else []),
+                     "impostor_shadow_skipped_updates": quality["skipped_updates"],
+                     "impostor_shadow_assets": quality["assets"]})
+        if quality["skipped_updates"]:
+            print(f'[KE] RENDER_QUALITY_WARNING map={task["map_id"]} '
+                  f'impostor_shadow_skipped={quality["skipped_updates"]} '
+                  f'assets={len(quality["assets"])}; visual review required', flush=True)
         for idx, image_path in enumerate(task["outputs"]):
             verify_png(image_path, cfg["width"], cfg["height"])
             validate_rgb_png(image_path, cfg["width"], cfg["height"])
@@ -336,6 +368,10 @@ def finalize(cfg, run, raw, tasks):
         "schema_version": 2, "kind": "raw", "split": None,
         "run_id": run.name, "images": len(images), "annotations": len(annotations),
         "scenes": len(scenes), "maps": len(maps), "editor_processes": 1,
+        "render_quality": {
+            "impostor_shadow_skipped_updates": sum(m["impostor_shadow_skipped_updates"] for m in maps),
+            "maps_requiring_visual_review": sum(bool(m["render_quality_flags"]) for m in maps),
+        },
     }
     write_json(raw / "manifest.json", overview)
     return overview
