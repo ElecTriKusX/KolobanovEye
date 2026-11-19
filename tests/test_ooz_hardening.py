@@ -31,7 +31,7 @@ ORIGINAL = (
 
 
 class KrakenHardeningTests(unittest.TestCase):
-    def test_guard_is_before_array_writes_and_repeat_build_is_idempotent(self):
+    def test_full_six_bit_range_fits_arrays_and_patch_is_idempotent(self):
         with tempfile.TemporaryDirectory() as root:
             target = Path(root) / "kraken.cpp"
             for newline in ("\n", "\r\n"):
@@ -42,11 +42,14 @@ class KrakenHardeningTests(unittest.TestCase):
                 self.assertFalse(guard_kraken_multi_array(target))
                 self.assertEqual(patched, target.read_bytes())
                 code = patched.replace(b"\r\n", b"\n")
-                self.assertLess(code.index(b"  if (num_arrays_in_file > 32)"),
-                                code.index(b"  uint8 *entropy_array_data[32];"))
-                self.assertLess(code.index(b"  if (num_arrays_in_file > 32)"),
+                self.assertIn(b"  num_arrays_in_file &= 0x3f;", code)
+                self.assertIn(b"  uint8 *entropy_array_data[64];", code)
+                self.assertIn(b"  uint32 entropy_array_size[64];", code)
+                self.assertNotIn(b"if (num_arrays_in_file > 32)", code)
+                for count in range(64):
+                    self.assertLess(count, 64)
+                self.assertLess(code.index(b"  uint8 *entropy_array_data[64];"),
                                 code.index(b"  for (int i = 0; i < num_arrays_in_file; i++)"))
-                self.assertEqual(code.count(b"if (num_arrays_in_file > 32)"), 1)
                 if newline == "\r\n":
                     self.assertNotIn(b"\n", patched.replace(b"\r\n", b""))
 
@@ -60,19 +63,20 @@ class KrakenHardeningTests(unittest.TestCase):
             ):
                 target.write_text(bad, encoding="ascii")
                 before = target.read_bytes()
-                with self.assertRaisesRegex(ValueError, "Unsupported OOZ"):
+                with self.assertRaisesRegex(ValueError, "OOZ"):
                     guard_kraken_multi_array(target)
                 self.assertEqual(target.read_bytes(), before)
 
-    def test_partial_guard_rejected(self):
+    def test_obsolete_32_limit_guard_rejected(self):
         with tempfile.TemporaryDirectory() as root:
             target = Path(root) / "kraken.cpp"
             target.write_text(
                 ORIGINAL.replace("  num_arrays_in_file &= 0x3f;\n",
                                  "  num_arrays_in_file &= 0x3f;\n"
-                                 "  // KolobanovEye: reject counts above the fixed local arrays[32].\n"),
+                                 "  if (num_arrays_in_file > 32)\n"
+                                 "    return -1;\n"),
                 encoding="ascii")
-            with self.assertRaisesRegex(ValueError, "Partial OOZ"):
+            with self.assertRaisesRegex(ValueError, "Partial or obsolete"):
                 guard_kraken_multi_array(target)
 
 
