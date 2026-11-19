@@ -1,11 +1,12 @@
-r"""Replay one locally captured Oodle block without starting DaEditor.
+r"""Local OOZ captured-stream reader; executable replay is suspended.
 
-After a failure, the editor puts the first failed input stream at
-dataset/runs/<run>/ooz-failures/failed-ooz.bin (never added to git).
-Usage:
-    python -m tools.ke_ooz_replay
-    python -m tools.ke_ooz_replay --run dataset/runs/<run>
-    python -m tools.ke_ooz_replay --unoodle D:\Projects\ke-decoders\bin\unoodle.exe
+On 19 November 2026 Kaspersky File Antivirus detected generated
+ke-ooz-replay.exe as VHO:Trojan.Win32.Agent.gen (high risk, heuristic).
+The verdict has not been independently resolved, so the CLI refuses
+to execute *any* native decoder, including an already-built EXE.
+This module can still parse local failed-ooz.bin metadata.
+
+Do not restore a quarantined executable or disable antivirus protection.
 """
 import argparse
 import hashlib
@@ -55,6 +56,11 @@ def load_capture(run: Path) -> tuple[Path, dict]:
 
 
 def replay(run: Path, cpp: Path = CPP, unoodle: Path | None = None, *, keep_outputs: bool = False) -> dict:
+    # Security stop: previous builds may still have a locally created executable.
+    # Even an explicit --cpp path must not bypass an unresolved AV finding.
+    raise ValueError("Native OOZ replay is suspended after Kaspersky "
+                     "VHO:Trojan.Win32.Agent.gen detection. Do not run "
+                     "ke-ooz-replay.exe or restore it from quarantine.")
     stream, info = load_capture(run)
     print("[KE] OOZ_INPUT", json.dumps(info, ensure_ascii=False), flush=True)
     results = {}
