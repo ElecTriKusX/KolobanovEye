@@ -1,4 +1,4 @@
-"""Replay one locally captured Oodle block without starting DaEditor.
+r"""Replay one locally captured Oodle block without starting DaEditor.
 
 After a failure, the editor puts the first failed input stream at
 dataset/runs/<run>/ooz-failures/failed-ooz.bin (never added to git).
