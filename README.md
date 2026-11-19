@@ -18,28 +18,13 @@
 
 [Структура проекта и выходных папок](docs/project-layout.md) · [Подробно о dataset](dataset/README.md) · [Текущее состояние по ТЗ](docs/project-status.md) · [План каталога карт](docs/map-catalog-roadmap.md)
 
-## Проверка отказа OOZ без многократного запуска DaEditor
+## Безопасность сборки OOZ и диагностика
 
-Если `avg_abandoned_factory.bin` не загружается с `ooz: decode failed`, после новой сборки `kolobanoveye.py build` и одного запуска GUI в техническом `dataset/runs/run-.../ooz-failures/` появятся локальные `failed-ooz.bin` и `failed-ooz.txt`. Они не добавляются в Git. `host-stdout.log` дополнительно содержит `OOZ_STEP_FAIL`, `OOZ_QUANTUM_FAIL` и `OOZ_LEVIATHAN_LZ_TABLE_FAIL` при соответствующей ошибке.
+19 ноября 2026 Kaspersky File Antivirus при сборке `ke-ooz-replay.exe` выдал **высокоприоритетное эвристическое обнаружение** `VHO:Trojan.Win32.Agent.gen` (MD5 `B5797152ED80A29AD81E464805F82A84`). До независимой проверки файла нельзя считать срабатывание ложноположительным. **Не восстанавливайте этот EXE из карантина, не отключайте антивирус и не запускайте его.** Обычная команда `kolobanoveye.py build` больше не создаёт `ke-ooz-replay.exe`: автономный C++ инструмент исключён из обязательного пути сборки. Файлы диагностики сохраняются в `dataset/runs/run-.../ooz-failures/` без запуска этого EXE.
 
-Без запуска DaEditor можно воспроизвести декодирование именно той же C++ библиотекой:
+Если `avg_abandoned_factory.bin` не загружается, сохранённый локально `failed-ooz.bin` и `failed-ooz.txt` можно исследовать после завершения проверки инструментария. Данные карты не добавлять в Git и не отправлять на публичные сервисы без разрешения правообладателя. Для дальнейшего исследования достаточно сообщить текст `host-stdout.log` и результаты штатных проверок.
 
-```powershell
-python -m tools.ke_ooz_replay
-```
-
-Для независимой проверки Rust `oozextract` версии 0.5.7 (необязательно, устанавливается локально):
-
-```powershell
-winget install -e --id Rustlang.Rustup
-# Откройте новую Developer PowerShell, чтобы cargo попал в PATH
-cargo install oozextract --version 0.5.7 --locked --features cli,verbose_errors --root D:\Projects\ke-decoders
-python -m tools.ke_ooz_replay --unoodle D:\Projects\ke-decoders\bin\unoodle.exe
-```
-
-Если Rust успешно распакует тот же блок, а C++ нет, это обоснование для отдельной замены декодера внутри **того же** процесса DaEditor. До такой проверки рабочий backend не переключается на неподтверждённую альтернативу.
-
-**Не публикуйте `failed-ooz.bin` в GitHub:** он содержит фрагмент ресурсов War Thunder. Для диагностики достаточно текстового вывода команды и `host-stdout.log`.
+**Ни один из этих изменений не требует восстановления файла из карантина.**
 
 ## Запуск в Windows Developer PowerShell x64
 
