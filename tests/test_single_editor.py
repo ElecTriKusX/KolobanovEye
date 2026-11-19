@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ke_single_editor import jobs_for, extract_map_logs, make_command
+from ke_single_editor import jobs_for, extract_map_logs, make_command, read_editor_log, explain_batch_failure
 from ke_dataset import run_dataset
 from ke_generate import DEFAULTS
 from tools.ke_review import write_rgb_png
@@ -190,6 +190,55 @@ class SingleEditorTests(unittest.TestCase):
             self.assertIn("const points=", html)
             self.assertIn("tank.png", html)
         self.assertFalse((self.dataset / "analysis" / "images").exists())
+
+    def test_async_debug_log_is_source_of_truth_without_dcmd_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / "run"
+            debug = run / ".logs" / "daEditor3x-dev.exe-2026.11.19-06.04.53" / "debug"
+            debug.parent.mkdir(parents=True)
+            debug.write_text(
+                '  7.73 [D] CON: [KE] MAP_BATCH_BEGIN maps=1\n'
+                '  7.83 [D] CON: [KE] MAP_TASK_BEGIN index=1/1 capture=test.blk\n'
+                '  7.83 [D] CON: [KE] MAP_BEGIN D:/game/levels/avg_normandy.bin\n'
+                '  7.83 [D] [KE] MAP_BEGIN D:/game/levels/avg_normandy.bin\n'
+                '  7.93 [D] CON: [KE] MAP_OK terrain_y=183.75\n'
+                '  7.94 [D] CON: [KE] FRAME_OK index=0\n'
+                '  7.94 [D] CON: [KE] FRAME_STABILITY_FINAL enabled=1 stable=1\n'
+                '  8.00 [D] CON: [KE] SEQUENCE_OK frames=1\n'
+                '  8.00 [D] CON: [KE] MAP_TASK_OK index=1/1\n'
+                '  8.00 [D] CON: [KE] MAP_BATCH_OK maps=1\n',
+                encoding="utf-8")
+            log, source = read_editor_log(run)
+            self.assertEqual(source, debug)
+            self.assertEqual(log.count("[KE] MAP_BEGIN "), 1)
+            self.assertIn("[KE] MAP_BATCH_OK maps=1", log)
+            self.assertEqual(len(extract_map_logs(
+                log, [{"map_id": "levels/avg_normandy.bin", "count": 1}],
+                stability=True)), 1)
+
+    def test_async_log_fails_with_actionable_ooz_reason(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / "run"
+            dirname = run / ".logs" / "daEditor3x-dev.exe-2026.11.19-06.04.53"
+            dirname.mkdir(parents=True)
+            (dirname / "debug").write_text(
+                "  7.73 [D] CON: [KE] MAP_BATCH_BEGIN maps=1\n"
+                "  7.83 [D] CON: [KE] MAP_BEGIN D:/game/levels/avg_abandoned_factory.bin\n"
+                "  8.90 [E] CON: [KE] FAIL MAP: Binary dump did not produce a terrain renderer\n"
+                "  8.90 [E] CON: [KE] FAIL MAP_TASK index=1/1\n", encoding="utf-8")
+            (dirname / "logerr").write_text(
+                "  7.93 [E] ooz: decode failed in 'D:/game/levels/avg_abandoned_factory.bin' "
+                "(stream type=12, packed=3630624, expected=13009598, result=-1)\n",
+                encoding="utf-8")
+            log, source = read_editor_log(run)
+            error = explain_batch_failure(run, log, source)
+            self.assertIn("FAIL MAP", error)
+            self.assertIn("avg_abandoned_factory.bin", error)
+            self.assertIn("stream type=12", error)
+            self.assertNotIn("File missing", error)
+            with self.assertRaisesRegex(ValueError, "ooz: decode failed"):
+                from ke_single_editor import finalize
+                finalize(self.config, run, run / "raw", [{"map_id": "levels/avg_abandoned_factory.bin"}])
 
     def test_batch_detects_incomplete_map(self):
         tasks = [{"map_id": "levels/avg_a.bin", "count": 2}]
