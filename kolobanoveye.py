@@ -251,10 +251,10 @@ def numbers(values):
     return ", ".join(f"{value:.9g}" for value in values)
 
 
-def run_logged(command, log, cwd, timeout=None):
+def run_logged(command, log, cwd, timeout=None, env=None):
     print(f"[KE] {log.name}  {subprocess.list2cmdline(list(map(str, command)))}", flush=True)
     with log.open("wb") as stream:
-        run = subprocess.run(command, cwd=cwd, stdout=stream, stderr=subprocess.STDOUT, timeout=timeout)
+        run = subprocess.run(command, cwd=cwd, stdout=stream, stderr=subprocess.STDOUT, timeout=timeout, env=env)
     if run.returncode:
         raise ValueError(f"{Path(command[0]).name} exited with {run.returncode}. Logs: {log.parent}")
 
@@ -750,7 +750,73 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
     reset_level_settings_on_reload(map_cpp)
     preserve_landmesh_renderer_release_on_reload(map_cpp)
     enable_single_editor_map_batch(dagor)
+    if with_ooz:
+        enable_failed_ooz_stream_capture(dagor)
 
+
+
+def enable_failed_ooz_stream_capture(dagor: Path) -> bool:
+    """Save only the first rejected Oodle block for isolated decoder A/B tests.
+
+    Enabled only if Python passes KE_OOZ_FAILURE_DIR to the editor process.
+    This avoids collecting proprietary game data in the repository or logs.
+    Does not alter the original 5 pinned OOZ source files.
+    """
+    source = dagor / "prog/engine/ioSys/oodleIoOoz.cpp"
+    raw = source.read_bytes()
+    crlf = b"\r\n" in raw
+    data = raw.replace(b"\r\n", b"\n")
+    signature = b"if (result != static_cast<int>(unpacked_size))\n  {\n"
+    mark = b"    // [KE] OOZ_FAILED_STREAM_CAPTURE_V1\n"
+    if data.count(mark) == 1:
+        if b"KE_OOZ_FAILURE_DIR" not in data or b"failed-ooz.bin" not in data:
+            raise ValueError(f"Partial rejected Oodle stream capture in {source}")
+        return False
+    if data.count(signature) != 1 or mark in data:
+        raise ValueError(f"Cannot find exact OOZ decoder failure branch in {source}")
+    # Protect against unbounded dumps; on this level the rejected packed block
+    # has a length of 3,630,624 bytes, comfortably below the 16 MiB cap.
+    code = r'''    // [KE] OOZ_FAILED_STREAM_CAPTURE_V1
+    const char *keDumpDir = std::getenv("KE_OOZ_FAILURE_DIR");
+    if (keDumpDir && *keDumpDir && packed_size <= 16u * 1024u * 1024u)
+    {
+      static std::atomic_flag keCaptured = ATOMIC_FLAG_INIT;
+      if (!keCaptured.test_and_set())
+      {
+        char keDumpPath[2048];
+        char keMetaPath[2048];
+        const int keN = std::snprintf(keDumpPath, sizeof(keDumpPath), "%s/failed-ooz.bin", keDumpDir);
+        const int keM = std::snprintf(keMetaPath, sizeof(keMetaPath), "%s/failed-ooz.txt", keDumpDir);
+        if (keN > 0 && keN < int(sizeof(keDumpPath)) && keM > 0 && keM < int(sizeof(keMetaPath)))
+        {
+          if (FILE *keFile = std::fopen(keDumpPath, "wb"))
+          {
+            const size_t keWritten = std::fwrite(input, 1, packed_size, keFile);
+            std::fclose(keFile);
+            if (keWritten == packed_size)
+            {
+              if (FILE *keMeta = std::fopen(keMetaPath, "wb"))
+              {
+                std::fprintf(keMeta, "packed=%zu\nunpacked=%zu\ncodec=%d\nsource=%s\n",
+                  packed_size, unpacked_size, codec, name ? name : "<unknown>");
+                std::fclose(keMeta);
+              }
+              logerr("ooz: rejected compressed block saved for local replay: %s (packed=%u, expected=%u)",
+                keDumpPath, static_cast<unsigned>(packed_size), static_cast<unsigned>(unpacked_size));
+            }
+          }
+        }
+      }
+    }
+'''.encode("ascii")
+    data = data.replace(signature, signature + code, 1)
+    include_anchor = b"#include <cstdlib>\n"
+    if data.count(include_anchor) != 1:
+        raise ValueError(f"Cannot safely include atomic/stdio in {source}")
+    data = data.replace(include_anchor, include_anchor + b"#include <atomic>\n#include <cstdio>\n", 1)
+    source.write_bytes(data.replace(b"\n", b"\r\n") if crlf else data)
+    print("[KE] Enabled first-failed-Oodle-block capture for native decoder diagnosis", flush=True)
+    return True
 
 
 def upgrade_roi_unique_tex(source):
