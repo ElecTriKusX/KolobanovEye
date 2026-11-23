@@ -20,7 +20,7 @@ DEFAULTS = {
     'camera_height_min': 4.0, 'camera_height_max': 16.0, 'distance_min': 18.0, 'distance_max': 35.0, 'elevation_min': 10.0, 'elevation_max': 25.0,
     'turret_yaw_min': 0.0, 'turret_yaw_max': 0.0, 'gun_pitch_min': 0.0, 'gun_pitch_max': 0.0,
     'min_warmup_renders': 8, 'wait_sky_convergence': False, 'wait_frame_stability': True,
-    'screen_position_weights': DEFAULT_WEIGHTS.copy(),
+    'screen_position_weights': DEFAULT_WEIGHTS.copy(), 'capture_visibility_masks': False,
     'keep_open': False, 'render_debug': False, 'capture_last_clip': False, 'clipmap_feedback': 'software', 'timeout': 360,
 }
 INTS = {'count', 'seed', 'width', 'height', 'timeout', 'placement_attempts', 'camera_attempts', 'frames_per_position', 'min_warmup_renders', 'tank_map_resolution'}
@@ -45,6 +45,8 @@ def validate_config(raw):
         raise ValueError('Неизвестные параметры: ' + ', '.join(sorted(unknown)))
     c = {**DEFAULTS, **raw}
     c['screen_position_weights'] = validate_weights(c['screen_position_weights'])
+    if not isinstance(c['capture_visibility_masks'], bool):
+        raise ValueError('capture_visibility_masks: требуется true или false')
     if not isinstance(c['map_ids'], list) or len(c['map_ids']) != len(set(str(x).casefold() for x in c['map_ids'])):
         raise ValueError('map_ids: требуется список уникальных карт')
     if any(not isinstance(x, str) or MAP_ID.fullmatch(x) is None for x in c['map_ids']):

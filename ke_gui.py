@@ -44,6 +44,8 @@ class App:
         self.values = {k: tk.StringVar(value=str(DEFAULTS[k])) for k, _ in FIELDS}
         self.keep_open = tk.BooleanVar(value=False)
         self.render_debug = tk.BooleanVar(value=False)
+        self.capture_visibility_masks = tk.BooleanVar(value=DEFAULTS['capture_visibility_masks'])
+        self.screen_position_weights = DEFAULTS['screen_position_weights'].copy()
         self.wait_frame_stability = tk.BooleanVar(value=DEFAULTS['wait_frame_stability'])
         self.wait_sky_convergence = tk.BooleanVar(value=DEFAULTS['wait_sky_convergence'])
         self.values['output'].set(str(DATASET_DIR))
@@ -105,6 +107,7 @@ class App:
         menu.add_checkbutton(label='Ждать стабильности изображения', variable=self.wait_frame_stability)
         menu.add_checkbutton(label='Ждать сходимости освещения неба', variable=self.wait_sky_convergence)
         menu.add_checkbutton(label='Диагностика рендера (MRT, глубина)', variable=self.render_debug)
+        menu.add_checkbutton(label='Маски видимости (эксперимент)', variable=self.capture_visibility_masks)
         menu.add_separator()
         menu.add_command(label='Открыть настройки…', command=self.open_config)
         menu.add_command(label='Сохранить настройки…', command=self.save_config)
@@ -250,6 +253,8 @@ class App:
         data['capture_last_clip'] = False
         data['capture_tank_map'] = True
         data['render_debug'] = self.render_debug.get()
+        data['capture_visibility_masks'] = self.capture_visibility_masks.get()
+        data['screen_position_weights'] = self.screen_position_weights.copy()
         data['wait_frame_stability'] = self.wait_frame_stability.get()
         data['wait_sky_convergence'] = self.wait_sky_convergence.get()
         data['map_ids'] = available_whitelist(self.detected_maps, self.selected_maps or [])
@@ -265,6 +270,8 @@ class App:
             data = validate_config(json.loads(Path(path).read_text(encoding='utf-8')))
             self.keep_open.set(data['keep_open'])
             self.render_debug.set(data['render_debug'])
+            self.capture_visibility_masks.set(data['capture_visibility_masks'])
+            self.screen_position_weights = data['screen_position_weights'].copy()
             self.wait_frame_stability.set(data['wait_frame_stability'])
             self.wait_sky_convergence.set(data['wait_sky_convergence'])
             for k, v in data.items():
@@ -357,7 +364,7 @@ class App:
                     self.running = False; self.run_button.config(state='normal')
                     if kind == 'success':
                         self.state.set(f'Готово: {value}')
-                        messagebox.showinfo('Готово', f'Кадры и метаданные: {value}\nCOCO: {value}\\annotations\\instances.json\n\nРамка приблизительная; видимость не проверена.')
+                        messagebox.showinfo('Готово', f'Кадры и метаданные: {value}\nCOCO: {value}\\annotations\\instances.json\n\nПроверьте manifest.json: маски видимости экспериментальные; без масок рамка приблизительная.')
                     else:
                         self.state.set('Завершено' if kind == 'done' and value == 0 else f'Ошибка: {value}. Проверьте журнал.')
         except queue.Empty: pass

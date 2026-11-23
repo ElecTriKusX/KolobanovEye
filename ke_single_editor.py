@@ -18,6 +18,7 @@ from tools.ke_coco import group_for, scene_metadata
 from tools.ke_png_fast import validate_rgb_png
 from tools.ke_annotation import parse_annotation
 from tools.ke_composition import plan_screen_positions
+from tools.ke_visibility import read_capture_masks
 from tools.ke_frame_journal import read_journal
 from kolobanoveye import (
     BIN, GRP, inspect, choose_resources, parse_resources, require_file,
@@ -92,6 +93,7 @@ def write_capture(cfg, map_id, count, seed, run, raw, index, model, skeleton, fi
         f'tank:p3={numbers([cfg["tank_x"], cfg["ground_offset"], cfg["tank_z"]])}',
         f"frame_count:i={count}", f'camera_attempts:i={cfg["camera_attempts"]}',
         f'metadata_journal:t="{dagor_path(journal)}"',
+        f'capture_visibility_masks:b={"yes" if cfg["capture_visibility_masks"] else "no"}',
     ]
     if poses:
         lines.append("articulate_tank:b=yes")
@@ -101,6 +103,10 @@ def write_capture(cfg, map_id, count, seed, run, raw, index, model, skeleton, fi
             lines.append(f"candidate_{scene_idx}_{idx}:p3={numbers((x, cfg['ground_offset'], z))}")
     for i, options in enumerate(cameras):
         lines.append(f'output_{i}:t="{dagor_path(outputs[i])}"')
+        if cfg["capture_visibility_masks"]:
+            for kind in ("amodal", "visible"):
+                mask_path = raw / "masks" / kind / outputs[i].name
+                lines.append(f'mask_{kind}_{i}:t="{dagor_path(mask_path)}"')
         lines.append(f'screen_offset_{i}:p2={numbers(screen_positions[i]["offset_uv"])}')
         lines.append(f'screen_bin_{i}:t="{screen_positions[i]["bin"]}"')
         for j, cam in enumerate(options):
@@ -327,16 +333,18 @@ def finalize(cfg, run, raw, tasks):
                 raise ValueError("Неверный индекс расстановки техники")
             articulation = read_articulation(blk, task["poses"][idx]) if task["poses"] else {}
             position = task["screen_positions"][idx]
-            screen_bin = re.search(r'^screen_bin_planned:t="([^"\\r\\n]+)"', blk, re.MULTILINE)
+            screen_bin = re.search(r'^screen_bin_planned:t="([^"\r\n]+)"', blk, re.MULTILINE)
             if not screen_bin or screen_bin.group(1) != position["bin"]:
                 raise ValueError("Native Dagor screen-composition metadata missing or mismatched")
-            match_uv = re.search(r'^screen_offset_uv:p2=([^\\r\\n]+)', blk, re.MULTILINE)
+            match_uv = re.search(r'^screen_offset_uv:p2=([^\r\n]+)', blk, re.MULTILINE)
             if not match_uv:
                 raise ValueError("Native Dagor did not report the camera screen offset")
             actual_uv = [float(q.strip()) for q in match_uv.group(1).split(",")]
             if len(actual_uv) != 2 or any(abs(a - b) > 1e-4 for a, b in
                                           zip(actual_uv, position["offset_uv"])):
                 raise ValueError("Native Dagor camera offset differs from the capture plan")
+            visibility = (read_capture_masks(raw, image_path.name, blk, cfg["width"], cfg["height"])
+                          if cfg["capture_visibility_masks"] else None)
             image_id = len(images) + 1
             scene_id = f'{run.name}:{task["stem"]}:{comp}'
             group = group_for(blk, 256)
@@ -349,7 +357,7 @@ def finalize(cfg, run, raw, tasks):
                 "planned_camera_offset": camera["offset"],
                 "screen_position_bin_planned": position["bin"],
                 "screen_position_target_uv": position["target_uv"],
-                "annotation": annotation,
+                "annotation": annotation, "visibility_measurement": visibility,
                 "dagor_frame_metadata_blk": blk,
                 "sha256": hashlib.sha256(image_path.read_bytes()).hexdigest(), **articulation,
             }
@@ -359,13 +367,18 @@ def finalize(cfg, run, raw, tasks):
                 "width": cfg["width"], "height": cfg["height"], "map_id": task["map_id"],
                 "scene_id": scene_id, "scene_group": group, "scene_group_id": group,
                 "ke_scene": scene_metadata(blk),
+                **({"ke_visibility": visibility} if visibility is not None else {}),
             })
-            x, y, w, h = annotation["bbox_xywh"]
-            annotations.append({
-                "id": image_id, "image_id": image_id, "category_id": 1,
-                "bbox": [x, y, w, h], "area": w * h, "iscrowd": 0,
-                "bbox_kind": annotation["bbox_kind"], "bbox_method": annotation["bbox_method"],
-            })
+            box = annotation["bbox_xywh"] if visibility is None else visibility["bbox_visible_xywh"]
+            if box is not None:
+                x, y, w, h = box
+                annotations.append({
+                    "id": image_id, "image_id": image_id, "category_id": 1,
+                    "bbox": [x, y, w, h], "area": w * h, "iscrowd": 0,
+                    "bbox_kind": annotation["bbox_kind"] if visibility is None else "visible_opaque",
+                    "bbox_method": annotation["bbox_method"] if visibility is None else visibility["method"],
+                    **({"ke_visibility": visibility} if visibility is not None else {}),
+                })
             scenes.setdefault(scene_id, {
                 "scene_id": scene_id, "map_id": task["map_id"],
                 "scene_group_id": group, "image_ids": [],
@@ -374,7 +387,10 @@ def finalize(cfg, run, raw, tasks):
     (raw / "annotations").mkdir()
     (raw / "metadata").mkdir()
     write_json(raw / "annotations" / "instances.json", {
-        "info": {"description": "KolobanovEye raw, approximate projected 3D AABB, unsplit", "unsplit": True},
+        "info": {"description": ("KolobanovEye raw, experimental opaque depth masks, unsplit"
+                                  if cfg["capture_visibility_masks"] else
+                                  "KolobanovEye raw, approximate projected 3D AABB, unsplit"),
+                 "unsplit": True, "visibility_diagnostic": cfg["capture_visibility_masks"]},
         "images": images, "annotations": annotations, "categories": [{"id": 1, "name": "tank"}],
     })
     for name, rows in (("images.jsonl", records), ("scenes.jsonl", scenes.values())):
@@ -388,6 +404,10 @@ def finalize(cfg, run, raw, tasks):
         "schema_version": 2, "kind": "raw", "split": None,
         "run_id": run.name, "images": len(images), "annotations": len(annotations),
         "scenes": len(scenes), "maps": len(maps), "editor_processes": 1,
+        "visibility_diagnostic": cfg["capture_visibility_masks"],
+        "visibility_bins": ({name: sum(r["visibility_measurement"]["visibility_bin"] == name for r in records)
+                             for name in ("open", "light", "moderate", "heavy", "reject_too_occluded")}
+                            if cfg["capture_visibility_masks"] else None),
         "render_quality": {
             "impostor_shadow_skipped_updates": sum(m["impostor_shadow_skipped_updates"] for m in maps),
             "maps_requiring_visual_review": sum(bool(m["render_quality_flags"]) for m in maps),
@@ -416,6 +436,9 @@ def generate(config, run, raw, executor=None):
     run.mkdir(parents=True)
     raw.mkdir(parents=True)
     (raw / "images").mkdir()
+    if cfg["capture_visibility_masks"]:
+        for kind in ("amodal", "visible"):
+            (raw / "masks" / kind).mkdir(parents=True)
     for name in ("capture", "plans", "maps", "journals"):
         (run / name).mkdir()
     write_json(run / "generation-config.json", cfg)

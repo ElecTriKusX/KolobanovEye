@@ -42,5 +42,6 @@
     "offset": 65,
     "edge": 15,
     "near_clip": 5
-  }
+  },
+  "capture_visibility_masks": false
 }

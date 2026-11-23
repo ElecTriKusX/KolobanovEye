@@ -55,6 +55,20 @@ def fake_editor(cmd):
                        f'camera_attempt:i=0\ncomposition_index:i={idx // int(value("frames_per_position"))}\n'
                        f'screen_bin_planned:t="{value(f"screen_bin_{idx}")}"\n'
                        f'screen_offset_uv:p2={value(f"screen_offset_{idx}")}\n')
+                if value("capture_visibility_masks") == "yes":
+                    amodal = bytearray(width * height * 3)
+                    visible = bytearray(width * height * 3)
+                    for x, y in ((2, 2), (3, 2), (2, 3), (3, 3)):
+                        off = (y * width + x) * 3
+                        amodal[off:off+3] = b'\xff\xff\xff'
+                        if idx % 2 == 0 and x == 2:
+                            visible[off:off+3] = b'\xff\xff\xff'
+                    write_rgb_png(Path(value(f"mask_amodal_{idx}")), width, height, amodal)
+                    write_rgb_png(Path(value(f"mask_visible_{idx}")), width, height, visible)
+                    actual = 2 if idx % 2 == 0 else 0
+                    blk += ('visibility_method:t="reverse_z_opaque_depth_compare_v1"\n'
+                            f'amodal_pixels:i=4\nvisible_pixels:i={actual}\n'
+                            f'unmatched_depth_pixels:i=0\nvisible_fraction:r={actual / 4}\n')
                 payload = blk.encode("utf-8")
                 stream.write(f"KEFRAME {idx} {len(payload)}\n".encode("ascii") + payload)
                 log += ["[KE] FRAME_OK ", "[KE] FRAME_STABILITY_FINAL enabled=1 stable=1"]
@@ -152,6 +166,23 @@ class SingleEditorTests(unittest.TestCase):
         self.assertEqual(q.count("kolobanoveye.frame "), 0)
         self.assertIn("map_count:i=2", (run / "map-batch.blk").read_text())
         self.assertEqual(q.count("exit no"), 1)
+
+    def test_visibility_capture_exports_mask_boxes_and_hidden_frame(self):
+        cfg = {**self.config, "count": 2, "map_ids": ["levels/avg_normandy.bin"],
+               "capture_visibility_masks": True}
+        result = run_dataset(cfg, self.dataset, executor=fake_editor)
+        raw = self.dataset / "raw"
+        self.assertTrue(result["visibility_diagnostic"])
+        self.assertEqual(result["images"], 2)
+        self.assertEqual(result["annotations"], 1)
+        self.assertEqual(result["visibility_bins"]["moderate"], 1)
+        self.assertEqual(result["visibility_bins"]["reject_too_occluded"], 1)
+        coco = json.loads((raw / "annotations/instances.json").read_text())
+        ann, = coco["annotations"]
+        self.assertEqual(ann["bbox_kind"], "visible_opaque")
+        self.assertEqual(ann["bbox"], [2, 2, 1, 2])
+        self.assertEqual(ann["ke_visibility"]["visible_fraction"], .5)
+        self.assertTrue((raw / ann["ke_visibility"]["amodal_mask"]).is_file())
 
     def test_replace_preserves_old_raw_when_batch_fails(self):
         run_dataset(self.config, self.dataset, executor=fake_editor)
