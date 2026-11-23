@@ -1,0 +1,103 @@
+diff --git a/prog/gameLibs/publicInclude/landMesh/lastClip.h b/prog/gameLibs/publicInclude/landMesh/lastClip.h
+--- a/prog/gameLibs/publicInclude/landMesh/lastClip.h
++++ b/prog/gameLibs/publicInclude/landMesh/lastClip.h
+@@ -49,1 +49,3 @@
+ void render_last_clip_to_tex(Texture *tex, LandMeshData &data, const Point3 &view_pos);
++// Offscreen bake of only the provided world-space X/Z rectangle, without changing the normal last_clip.
++void render_last_clip_region_to_tex(Texture *tex, const BBox3 &region, LandMeshData &data, const Point3 &view_pos);
+diff --git a/prog/gameLibs/landMesh/lastClip.cpp b/prog/gameLibs/landMesh/lastClip.cpp
+--- a/prog/gameLibs/landMesh/lastClip.cpp
++++ b/prog/gameLibs/landMesh/lastClip.cpp
+@@ -377,6 +377,31 @@
+ void render_last_clip_to_tex(Texture *tex, LandMeshData &data, const Point3 &view_pos)
+ {
+   G_ASSERT(data.lmeshMgr && data.lmeshRenderer);
+   FixedClipRenderStateGuard renderStateGuard(data.lmeshMgr->getHmapHandler());
+   fixed_clip_plain_render(tex, data, view_pos);
+ }
++
++void render_last_clip_region_to_tex(Texture *tex, const BBox3 &region, LandMeshData &data, const Point3 &view_pos)
++{
++  G_ASSERT(tex && data.lmeshMgr && data.lmeshRenderer);
++  G_ASSERT(data.texture_size > 0);
++  FixedClipRenderStateGuard renderStateGuard(data.lmeshMgr->getHmapHandler());
++  d3d::GpuAutoLock acquire;
++  d3d::setwire(0);
++  {
++    SCOPE_RENDER_TARGET;
++    d3d::set_render_target({}, DepthAccess::RW, {{tex, 0, 0}});
++    d3d::clearview(CLEAR_TARGET, 0x00000000, 1.0f, 0);
++    for (int y = 0; y < data.texture_size; y += 128)
++    {
++      const int lines = min(128, data.texture_size - y);
++      d3d::driver_command(Drv3dCommand::D3D_FLUSH);
++      d3d::setview(0, y, data.texture_size - 1, lines, 0, 1);
++      const float z0 = lerp(region[0].z, region[1].z, float(y) / data.texture_size);
++      const float z1 = lerp(region[0].z, region[1].z, float(y + lines) / data.texture_size);
++      const BBox3 part(Point3(region[0].x, region[0].y, z0), Point3(region[1].x, region[1].y, z1));
++      render_last_clip_in_box(part, Point2(0.f, 0.f), view_pos, data);
++    }
++  }
++  d3d::resource_barrier({tex, RB_RO_SRV | RB_STAGE_PIXEL, 0, 0});
++}
+diff --git a/prog/tools/sceneTools/daEditorX/binSceneView/strmLevel.cpp b/prog/tools/sceneTools/daEditorX/binSceneView/strmLevel.cpp
+--- a/prog/tools/sceneTools/daEditorX/binSceneView/strmLevel.cpp
++++ b/prog/tools/sceneTools/daEditorX/binSceneView/strmLevel.cpp
+@@ -25,2 +25,9 @@
+ #include <landMesh/lastClip.h>
++#include <image/dag_png.h>
++#include <image/dag_texPixel.h>
++#include <3d/dag_lockTexture.h>
++#include <3d/dag_resPtr.h>
++#include <3d/dag_texMgrTags.h>
++#include <cstdlib>
++#include <cmath>
+ #include <landMesh/lmeshMirroring.h>
+@@ -1045,2 +1045,47 @@
+   prepare_fixed_clip(last_clip, last_clip_sampler, data, false, ::grs_cur_view.pos);
++  // The regular full-landscape clip is still required for RGB rendering. The user
++  // overview is a separate uncompressed render target covering the tank square.
++  if (const char *output = dgs_get_argv("ke-tank-map-output"); output && *output && !dd_file_exist(output))
++  {
++    const bool haveBounds = levelSettingsBlk.paramExists("tankMapCoord0") && levelSettingsBlk.paramExists("tankMapCoord1");
++    const Point2 mn = levelSettingsBlk.getPoint2("tankMapCoord0", Point2(0.f, 0.f));
++    const Point2 mx = levelSettingsBlk.getPoint2("tankMapCoord1", Point2(0.f, 0.f));
++    if (haveBounds && std::isfinite(mn.x) && std::isfinite(mn.y) && std::isfinite(mx.x) && std::isfinite(mx.y) &&
++        mn.x < mx.x && mn.y < mx.y)
++    {
++      int size = 1024;
++      if (const char *requested = dgs_get_argv("ke-tank-map-size"); requested && *requested)
++        size = atoi(requested);
++      const int maxSize = min(d3d::get_driver_desc().maxtexw, d3d::get_driver_desc().maxtexh);
++      if (size >= 256 && size <= 4096 && size <= maxSize && (size & (size - 1)) == 0)
++      {
++        const float side = min(mx.x - mn.x, mx.y - mn.y);
++        const float cx = (mn.x + mx.x) * 0.5f, cz = (mn.y + mx.y) * 0.5f;
++        BBox3 square = lmeshMgr->getBBox();
++        square[0].x = cx - side * 0.5f;
++        square[1].x = cx + side * 0.5f;
++        square[0].z = cz - side * 0.5f;
++        square[1].z = cz + side * 0.5f;
++        UniqueTex target = dag::create_tex(nullptr, size, size,
++          TEXFMT_A8R8G8B8 | TEXCF_RTARGET | TEXCF_SRGBWRITE | TEXCF_SRGBREAD, 1, "ke_tank_map_rt", RESTAG_LAND);
++        if (target.getTex2D())
++        {
++          LandMeshData region = data;
++          region.texture_size = size;
++          render_last_clip_region_to_tex(target.getTex2D(), square, region, ::grs_cur_view.pos);
++          const auto pixels = lock_texture<const TexPixel32>(target.getTex2D(), 0, TEXLOCK_READ);
++          const bool saved = pixels && save_png32(output, reinterpret_cast<const TexPixel32 *>(pixels.get()),
++            pixels.getWidthInElems(), pixels.getHeightInElems(), pixels.getByteStride(), nullptr, 0, false);
++          debug("[KE] TANK_MAP_RENDER saved=%d resolution=%d x=%.3f..%.3f z=%.3f..%.3f",
++            saved ? 1 : 0, size, square[0].x, square[1].x, square[0].z, square[1].z);
++        }
++        else
++          debug("[KE] TANK_MAP_RENDER cannot_allocate_render_target resolution=%d", size);
++      }
++      else
++        debug("[KE] TANK_MAP_RENDER invalid_resolution=%d max=%d", size, maxSize);
++    }
++    else
++      debug("[KE] TANK_MAP_RENDER missing_or_invalid_tankMapCoord0_1");
++  }
+   lmeshRenderer->setLMeshRenderingMode(oldm);

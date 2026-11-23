@@ -1,0 +1,13 @@
+{
+  "source_repository": "https://github.com/powzix/ooz",
+  "source_commit": "05038060aa68f9187ae9923b2388ca8db40e58d1",
+  "staging": "decode-only, modified by KolobanovEye build adapter, not upstream files",
+  "license": "No explicit upstream license verified. Local-only snapshot; do not publish the source without permission.",
+  "files": {
+    "bitknit.cpp": "6e448d52fe485032e8b7aaf3efff2f0efd6394c776d0c6b14f91d2e1d286ed73",
+    "kraken.cpp": "9396252fd7f6865532e36393c0df61bb882872c5898ffe74ef0193a0238799c1",
+    "lzna.cpp": "d375cb99c1a489da0d7ed3597587d48fed40808fe346ff2f04f66ec4c03f7a53",
+    "stdafx.h": "92b798615ee1ac90ed53a2685fc62dfbe7133d5ba69e567733d8081d420cf701",
+    "targetver.h": "7f988ed4cd4fe1acdede1f014931a08c508cc82f9407bc2b869ec2195c10c9c9"
+  }
+}

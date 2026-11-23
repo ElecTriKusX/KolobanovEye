@@ -13,61 +13,66 @@ import subprocess
 import sys
 import tempfile
 
-from ke_annotation import parse_annotation, write_annotation
-from ke_frame_journal import JOURNAL, read_journal
+from tools.ke_annotation import parse_annotation, write_annotation
+from tools.ke_frame_journal import JOURNAL, read_journal
+from tools.ke_maps import MAP_ID, parse_tank_bounds_log
+from tools.vendor_ooz import VENDOR as OOZ_VENDOR, verify_vendor as verify_vendor_ooz, install as install_vendor_ooz
+from tools.ke_ooz_hardening import guard_kraken_multi_array, trace_kraken_failures
 
 REV = "9639942de5a8e5b01d91977f60ed82cda22d5f41"
 HERE = Path(__file__).resolve().parent
-RENDER_DEBUG_PATCH = HERE / "patches/dagor-render-debug.patch"
-DIRECT_DEPTH_PATCH = HERE / "patches/dagor-direct-debug-depth.patch"
-INDIRECTION_PATCH = HERE / "patches/dagor-indirection-check.patch"
-INDIRECTION_FIX_PATCH = HERE / "patches/dagor-indirection-readback-fix.patch"
-INDIRECTION_CPU_PATCH = HERE / "patches/dagor-indirection-cpu-test.patch"
-RESOLVE_PASS_PATCH = HERE / "patches/dagor-resolve-pass-capture.patch"
-RESOLVE_FLOAT_PATCH = HERE / "patches/dagor-resolve-float-capture.patch"
-DX11_TRACE_PATCH = HERE / "patches/dagor-dx11-terrain-trace.patch"
-CLIPMAP_LEGACY_PATCH = HERE / "patches/dagor-clipmap-legacy-color.patch"
-SEQUENCE_PATCH = HERE / "patches/dagor-sequence.patch"
-ORBIT_PATCH = HERE / "patches/dagor-orbit-camera.patch"
-CLEAN_CAPTURE_PATCH = HERE / "patches/dagor-clean-capture.patch"
-CAMERA_TERRAIN_PATCH = HERE / "patches/dagor-camera-terrain.patch"
-PLACEMENT_PATCH = HERE / "patches/dagor-placement-search.patch"
-CAMERA_RETRY_PATCH = HERE / "patches/dagor-camera-retry.patch"
-WATER_PROBE_PATCH = HERE / "patches/dagor-water-probe.patch"
-MULTI_COMPOSITION_PATCH = HERE / "patches/dagor-multi-composition.patch"
-CAMERA_HEIGHT_PATCH = HERE / "patches/dagor-camera-ground-height.patch"
-MAP_PLACEMENT_PATCH = HERE / "patches/dagor-map-placement.patch"
-WATER_FILTER_PATCH = HERE / "patches/dagor-water-ground-filter.patch"
-LAST_CLIP_BOUNDS_PATCH = HERE / "patches/dagor-last-clip-bounds.patch"
-REMOVE_CLIPMAP_EXPORT_PATCH = HERE / "patches/dagor-remove-clipmap-export.patch"
-LAST_CLIP_OUTPUT_PATCH = HERE / "patches/dagor-last-clip-output.patch"
-FRAME_JOURNAL_PATCH = HERE / "patches/dagor-frame-journal.patch"
-SCENE_QUALITY_PATCH = HERE / "patches/dagor-scene-quality.patch"
-OFFSCREEN_STREAMING_PATCH = HERE / "patches/dagor-offscreen-streaming.patch"
-TEXTURE_PUMP_PATCH = HERE / "patches/dagor-offscreen-texture-pump.patch"
-OFFSCREEN_FRAME_CLOCK_PATCH = HERE / "patches/dagor-offscreen-frame-clock.patch"
-OFFSCREEN_SERIAL_STREAMING_PATCH = HERE / "patches/dagor-offscreen-serial-streaming.patch"
-OFFSCREEN_STREAMING_WAIT_PATCH = HERE / "patches/dagor-offscreen-streaming-wait.patch"
-OFFSCREEN_RESOLVE_CAMERA_PATCH = HERE / "patches/dagor-offscreen-resolve-camera.patch"
-HAZE_CONVERGENCE_PATCH = HERE / "patches/dagor-haze-convergence-warmup.patch"
-HAZE_STABILITY_PATCH = HERE / "patches/dagor-haze-frame-stability.patch"
-TANK_ARTICULATION_PATCH = HERE / "patches/dagor-tank-articulation.patch"
-CLIPMAP_TILE_PATCH = HERE / "patches/dagor-clipmap-tile-readback.patch"
+RENDER_DEBUG_PATCH = HERE / "engine/patches/dagor-render-debug.patch"
+DIRECT_DEPTH_PATCH = HERE / "engine/patches/dagor-direct-debug-depth.patch"
+INDIRECTION_PATCH = HERE / "engine/patches/dagor-indirection-check.patch"
+INDIRECTION_FIX_PATCH = HERE / "engine/patches/dagor-indirection-readback-fix.patch"
+INDIRECTION_CPU_PATCH = HERE / "engine/patches/dagor-indirection-cpu-test.patch"
+RESOLVE_PASS_PATCH = HERE / "engine/patches/dagor-resolve-pass-capture.patch"
+RESOLVE_FLOAT_PATCH = HERE / "engine/patches/dagor-resolve-float-capture.patch"
+DX11_TRACE_PATCH = HERE / "engine/patches/dagor-dx11-terrain-trace.patch"
+CLIPMAP_LEGACY_PATCH = HERE / "engine/patches/dagor-clipmap-legacy-color.patch"
+SEQUENCE_PATCH = HERE / "engine/patches/dagor-sequence.patch"
+ORBIT_PATCH = HERE / "engine/patches/dagor-orbit-camera.patch"
+CLEAN_CAPTURE_PATCH = HERE / "engine/patches/dagor-clean-capture.patch"
+CAMERA_TERRAIN_PATCH = HERE / "engine/patches/dagor-camera-terrain.patch"
+PLACEMENT_PATCH = HERE / "engine/patches/dagor-placement-search.patch"
+CAMERA_RETRY_PATCH = HERE / "engine/patches/dagor-camera-retry.patch"
+WATER_PROBE_PATCH = HERE / "engine/patches/dagor-water-probe.patch"
+MULTI_COMPOSITION_PATCH = HERE / "engine/patches/dagor-multi-composition.patch"
+CAMERA_HEIGHT_PATCH = HERE / "engine/patches/dagor-camera-ground-height.patch"
+MAP_PLACEMENT_PATCH = HERE / "engine/patches/dagor-map-placement.patch"
+WATER_FILTER_PATCH = HERE / "engine/patches/dagor-water-ground-filter.patch"
+LAST_CLIP_BOUNDS_PATCH = HERE / "engine/patches/dagor-last-clip-bounds.patch"
+REMOVE_CLIPMAP_EXPORT_PATCH = HERE / "engine/patches/dagor-remove-clipmap-export.patch"
+LAST_CLIP_OUTPUT_PATCH = HERE / "engine/patches/dagor-last-clip-output.patch"
+FRAME_JOURNAL_PATCH = HERE / "engine/patches/dagor-frame-journal.patch"
+SCENE_QUALITY_PATCH = HERE / "engine/patches/dagor-scene-quality.patch"
+OFFSCREEN_STREAMING_PATCH = HERE / "engine/patches/dagor-offscreen-streaming.patch"
+TEXTURE_PUMP_PATCH = HERE / "engine/patches/dagor-offscreen-texture-pump.patch"
+OFFSCREEN_FRAME_CLOCK_PATCH = HERE / "engine/patches/dagor-offscreen-frame-clock.patch"
+OFFSCREEN_SERIAL_STREAMING_PATCH = HERE / "engine/patches/dagor-offscreen-serial-streaming.patch"
+OFFSCREEN_STREAMING_WAIT_PATCH = HERE / "engine/patches/dagor-offscreen-streaming-wait.patch"
+OFFSCREEN_RESOLVE_CAMERA_PATCH = HERE / "engine/patches/dagor-offscreen-resolve-camera.patch"
+HAZE_CONVERGENCE_PATCH = HERE / "engine/patches/dagor-haze-convergence-warmup.patch"
+HAZE_STABILITY_PATCH = HERE / "engine/patches/dagor-haze-frame-stability.patch"
+TANK_ARTICULATION_PATCH = HERE / "engine/patches/dagor-tank-articulation.patch"
+TANK_MAP_PATCH = HERE / "engine/patches/dagor-tank-map-bounds.patch"
+TANK_MAP_RENDER_PATCH = HERE / "engine/patches/dagor-tank-map-render.patch"
+CLIPMAP_TILE_PATCH = HERE / "engine/patches/dagor-clipmap-tile-readback.patch"
 PATCHES = (
-    HERE / "patches/dagor-phase0.patch",
-    HERE / "patches/dagor-editor-unused-parameters.patch",
-    HERE / "patches/dagor-clipmap-render-mask.patch",
-    HERE / "patches/dagor-screenshot-lighting.patch",
-    HERE / "patches/dagor-terrain-draw.patch",
+    HERE / "engine/patches/dagor-phase0.patch",
+    HERE / "engine/patches/dagor-editor-unused-parameters.patch",
+    HERE / "engine/patches/dagor-clipmap-render-mask.patch",
+    HERE / "engine/patches/dagor-screenshot-lighting.patch",
+    HERE / "engine/patches/dagor-terrain-draw.patch",
     RENDER_DEBUG_PATCH,
     DIRECT_DEPTH_PATCH,
-    HERE / "patches/dagor-clipmap-software-feedback.patch",
+    HERE / "engine/patches/dagor-clipmap-software-feedback.patch",
     CLIPMAP_TILE_PATCH,
-    HERE / "patches/dagor-deferred-terrain-view-rays.patch",
+    HERE / "engine/patches/dagor-deferred-terrain-view-rays.patch",
     INDIRECTION_PATCH,
     INDIRECTION_FIX_PATCH,
     INDIRECTION_CPU_PATCH,
-    HERE / "patches/dagor-terrain-bind-diagnostics.patch",
+    HERE / "engine/patches/dagor-terrain-bind-diagnostics.patch",
     RESOLVE_PASS_PATCH,
     RESOLVE_FLOAT_PATCH,
     DX11_TRACE_PATCH,
@@ -95,7 +100,7 @@ PATCHES = (
     OFFSCREEN_RESOLVE_CAMERA_PATCH,
 )
 OOZ_REV = "05038060aa68f9187ae9923b2388ca8db40e58d1"
-OOZ_PATCH = HERE / "patches/dagor-ooz.patch"
+OOZ_PATCH = HERE / "engine/patches/dagor-ooz.patch"
 OOZ_LIMIT = 256 * 1024 * 1024
 OOZ_STREAM_TYPES = {5: "LZNA", 6: "Kraken", 10: "Mermaid/Selkie", 11: "Bitknit", 12: "Leviathan"}
 BIN = Path("tools/dagor_cdk/windows-x86_64")
@@ -158,9 +163,9 @@ def shader_info(path):
     return {"signature": "VSPSdump", "version": "11.3"}
 
 
-def inspect(game, cdk):
+def inspect(game, cdk, level=LEVEL):
     required = {
-        game / LEVEL: level_info,
+        game / level: level_info,
         game / GRP: pack_info,
         cdk / "application.blk": None,
         cdk / "tools.ps50.shdump.bin": shader_info,
@@ -246,10 +251,10 @@ def numbers(values):
     return ", ".join(f"{value:.9g}" for value in values)
 
 
-def run_logged(command, log, cwd, timeout=None):
+def run_logged(command, log, cwd, timeout=None, env=None):
     print(f"[KE] {log.name}  {subprocess.list2cmdline(list(map(str, command)))}", flush=True)
     with log.open("wb") as stream:
-        run = subprocess.run(command, cwd=cwd, stdout=stream, stderr=subprocess.STDOUT, timeout=timeout)
+        run = subprocess.run(command, cwd=cwd, stdout=stream, stderr=subprocess.STDOUT, timeout=timeout, env=env)
     if run.returncode:
         raise ValueError(f"{Path(command[0]).name} exited with {run.returncode}. Logs: {log.parent}")
 
@@ -263,6 +268,48 @@ def editor_failure(out, detail):
                     f"Dagor was built with the Oodle stub. The War Thunder build requires Oodle "
                     f"to decode its compressed textures. See {log} and README.md."
                 )
+    if "3221226505" in detail or "0XC0000409" in detail.upper():
+        debug_logs = sorted((out / ".logs").glob("daEditor3x-dev.exe-*/debug"),
+                            key=lambda p: p.stat().st_mtime)
+        if debug_logs:
+            latest = debug_logs[-1]
+            tail = latest.read_bytes()[-80000:].decode("utf-8", errors="replace")
+            begin = "[KE] MAP_BEGIN" in tail or "[KE] MAP_TASK_BEGIN" in tail
+            stage = "during map processing" if begin else "before the first map task"
+            # A native fast-fail often leaves an incomplete final record like "97.85 [D]".
+            # Report the last *meaningful* record instead of that empty timestamp.
+            meaningful = [line.strip() for line in tail.splitlines()
+                          if line.strip() and not re.fullmatch(r"\d+(?:\.\d+)? \[\w\]", line.strip())]
+            last_line = meaningful[-1] if meaningful else "unknown"
+            command_lines = [line for line in meaningful if "CON: exec command" in line]
+            last_command = command_lines[-1] if command_lines else "not executed"
+            return (f"Windows native crash 0xC0000409 ({stage}), not a Python exception. "
+                    f"Last useful debug line: {last_line!r}. Last command: {last_command!r}. "
+                    f"See {latest}; check Windows Application Error event 1000 for the failing module.")
+    # Non-fastfail DaEditor assertions also produce native exit 1, e.g.
+    # DX11 invalid atlas slice. Report the actual native message and map index.
+    fatal_logs = sorted((out / ".logs").glob("daEditor3x-dev.exe-*/fatalerr"),
+                        key=lambda p: p.stat().st_mtime_ns)
+    for fatal in reversed(fatal_logs):
+        raw = fatal.read_text(encoding="utf-8", errors="replace")
+        if "FATAL ERROR:" not in raw and "assert failed" not in raw:
+            continue
+        dst = re.search(r"Invalid update_sub_region dst:[^\r\n]*", raw)
+        if dst:
+            description = dst.group(0)
+        else:
+            meaningful = [line.strip() for line in raw.splitlines()
+                          if line.strip() and not line.lstrip().startswith("Call stack")]
+            description = next((line for line in meaningful if "assert failed" in line),
+                               meaningful[0] if meaningful else "native assertion")
+        debug = fatal.parent / "debug"
+        stage = ""
+        if debug.is_file():
+            content = debug.read_bytes()[-250000:].decode("utf-8", errors="replace")
+            tasks = re.findall(r"CON: \[KE\] MAP_TASK_BEGIN index=\d+/\d+[^\r\n]*", content)
+            if tasks:
+                stage = f" Last map task: {tasks[-1]}."
+        return f"DaEditor native fatal assertion: {description}.{stage} Full stack: {fatal}"
     return f"{detail} See engine logs in {out / '.logs'}."
 
 
@@ -460,15 +507,36 @@ def prepare_ooz(ooz, logs):
     cl, lib = shutil.which("cl.exe"), shutil.which("lib.exe")
     if not cl or not lib or os.environ.get("VSCMD_ARG_TGT_ARCH") != "x64":
         raise ValueError("Run build --ooz from Developer PowerShell configured for x64")
-    work = logs / "ooz-local"
+    # Keep build-logs/ooz-local as an immutable pinned staging source. Only
+    # ooz-compiled contains the hardened, compiler-ready derived snapshot.
+    work = logs / "ooz-compiled"
     dagor_path(work)
     work.mkdir(exist_ok=True)
-    stage_ooz_sources(ooz, work)
-    run_logged([cl, "/nologo", "/c", "/O2", "/MT", "/Zl", "kraken.cpp", "lzna.cpp", "bitknit.cpp"],
+    if ooz is not None:
+        stage_ooz_sources(ooz, work)
+        # The selected commit must produce precisely the pinned decode-only sources.
+        # Keep the verified snapshot inside the project for all later builds.
+        install_vendor_ooz(work)
+    else:
+        verify_vendor_ooz()
+        for filename in ("stdafx.h", "targetver.h", "kraken.cpp", "lzna.cpp", "bitknit.cpp"):
+            shutil.copyfile(OOZ_VENDOR / filename, work / filename)
+    # Hardening applies ONLY to work/kraken.cpp, never to the SHA-256-pinned vendor snapshot.
+    hardened = guard_kraken_multi_array(work / "kraken.cpp")
+    print(f"[KE] OOZ_KRAKEN_GUARD_OK capacity=64 encoded_max=63 patched={int(hardened)}", flush=True)
+    traced = trace_kraken_failures(work / "kraken.cpp")
+    print(f"[KE] OOZ_DECODER_TRACE_OK patched={int(traced)}", flush=True)
+    # /Z7 embeds symbols and source line tables into the .obj so the daKernel PDB
+    # can identify exact decoder lines on any remaining Windows native crash.
+    run_logged([cl, "/nologo", "/c", "/O2", "/MT", "/Zl", "/Z7", "kraken.cpp", "lzna.cpp", "bitknit.cpp"],
                logs / "ooz-compile.log", work)
     library = work / "ke-ooz.lib"
     run_logged([lib, "/nologo", "/machine:x64", "/out:ke-ooz.lib", "kraken.obj", "lzna.obj", "bitknit.obj"],
                logs / "ooz-lib.log", work)
+    # A security product classified the optional ke-ooz-replay.exe as high-risk
+    # heuristic malware (VHO:Trojan.Win32.Agent.gen). Until independently
+    # reviewed, do NOT build or execute that optional diagnostic binary.
+    # The essential ke-ooz.lib is still compiled for the actual DaEditor.
     return require_file(library)
 
 
@@ -548,9 +616,72 @@ def is_upgraded_offscreen_capture(source: Path) -> bool:
     return True
 
 
+def has_last_clip_bounds(source: Path) -> bool:
+    """Recognize already installed last-clip metadata, even after successor patches.
+
+    git apply --reverse --check fails after the tank-map successor modifies the
+    surrounding metadata block. Check feature markers, never line-number context.
+    A partially inserted block is an error, not a reason to reapply an old patch.
+    """
+    contents = source.read_bytes()
+    markers = (
+        b'const auto cellOrigin = scene.lmeshMgr->getCellOrigin();',
+        b'const float lastClipX0 =',
+        b'const float lastClipZ1 =',
+        b'return fail("LAST_CLIP_BOUNDS", "Invalid fixed clip bounds");',
+        b'result.setPoint3("last_clip_min",',
+        b'result.setPoint3("last_clip_max",',
+    )
+    found = [marker in contents for marker in markers]
+    if any(found) and not all(found):
+        missing = [marker.decode("ascii") for marker, exists in zip(markers, found) if not exists]
+        raise ValueError(f"Partial last-clip bounds integration in {source}: missing {missing}")
+    return all(found)
+
+
+def ooz_patch_installed(dagor: Path) -> bool:
+    """Recognize the pinned OOZ patch even after a later native migration.
+
+    The first build patches oodleIoOoz.cpp and then injects failed-stream
+    capture into its error branch. That mutation invalidates git apply
+    --reverse --check for the original multi-file patch, despite the Oodle
+    integration being present. Never re-apply it or reset the Dagor checkout.
+    Refuse incomplete combinations rather than treating them as installed.
+    """
+    io = dagor / "prog/engine/ioSys"
+    jam = io / "jamfile"
+    cpp = io / "oodleIoOoz.cpp"
+    if not jam.is_file():
+        raise ValueError(f"Missing Dagor IO Jamfile: {jam}")
+    j = jam.read_bytes()
+    installed_jam = (
+        b"local ooz_enabled =" in j and
+        b"Sources += oodleIoOoz.cpp oodleIoFatal.cpp" in j and
+        b"Building daKernel with the decode-only ooz backend" in j
+    )
+    candidates = (b"local ooz_enabled =", b"UseOoz", b"OozLib",
+                  b"oodleIoOoz.cpp oodleIoFatal.cpp")
+    partial_jam = any(x in j for x in candidates)
+    if cpp.is_file():
+        data = cpp.read_bytes()
+        required = (b"Kraken_Decompress(", b"void OodleLoadCB::open(",
+                    b"inline int OodleLoadCB::decodeData(", b"size_t oodle_decompress(",
+                    b"bool OodleLoadCB::ceaseReading()")
+        if not installed_jam or not all(x in data for x in required):
+            raise ValueError("Partial or unexpected Dagor OOZ integration; "
+                             f"inspect {jam} and {cpp}, do not reset sources")
+        return True
+    if partial_jam:
+        raise ValueError(f"Dagor OOZ Jamfile is modified but decoder source is absent: {cpp}")
+    return False
+
+
 def apply_dagor_patches(dagor, *, with_ooz=False):
     apply = ["git", "apply", "--whitespace=error-all"]
     patches = (*PATCHES, OOZ_PATCH) if with_ooz else PATCHES
+    ooz_already_applied = ooz_patch_installed(dagor) if with_ooz else False
+    if ooz_already_applied:
+        print("[KE] OOZ_PATCH already_applied=1 (including post-patch diagnostics)", flush=True)
     direct_depth_diff = DIRECT_DEPTH_PATCH.read_bytes().replace(b"\r\n", b"\n")
     direct_depth_applied = subprocess.run([*apply, "--reverse", "--check"], input=direct_depth_diff, cwd=dagor,
                                           capture_output=True).returncode == 0
@@ -591,12 +722,14 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
         print("[KE] Removing the experimental clipmap tile exporter", flush=True)
         subprocess.run(apply, input=removal, cwd=dagor, check=True)
     water_filter_applied = subprocess.run([*apply, "--reverse", "--check"], input=WATER_FILTER_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
-    last_clip_bounds_applied = subprocess.run([*apply, "--reverse", "--check"], input=LAST_CLIP_BOUNDS_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    capture_cpp = dagor / "prog/tools/sceneTools/daEditorX/kolobanovEye.cpp"
+    last_clip_bounds_applied = has_last_clip_bounds(capture_cpp) or subprocess.run(
+        [*apply, "--reverse", "--check"], input=LAST_CLIP_BOUNDS_PATCH.read_bytes().replace(b"\r\n", b"\n"),
+        cwd=dagor, capture_output=True).returncode == 0
     scene_quality_applied = subprocess.run([*apply, "--reverse", "--check"],
         input=SCENE_QUALITY_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     offscreen_streaming_applied = subprocess.run([*apply, "--reverse", "--check"],
         input=OFFSCREEN_STREAMING_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
-    capture_cpp = dagor / "prog/tools/sceneTools/daEditorX/kolobanovEye.cpp"
     upgraded_capture = is_upgraded_offscreen_capture(capture_cpp)
     streaming_wait_applied = upgraded_capture or subprocess.run([*apply, "--reverse", "--check"],
         input=OFFSCREEN_STREAMING_WAIT_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
@@ -607,6 +740,10 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
     texture_pump_applied = offscreen_frame_clock_applied or subprocess.run([*apply, "--reverse", "--check"],
         input=TEXTURE_PUMP_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     for patch in patches:
+        if patch == OOZ_PATCH and ooz_already_applied:
+            continue
+        if last_clip_bounds_applied and patch == LAST_CLIP_BOUNDS_PATCH:
+            continue
         if upgraded_capture and patch == OFFSCREEN_STREAMING_WAIT_PATCH:
             continue
         if streaming_wait_applied and patch == OFFSCREEN_SERIAL_STREAMING_PATCH:
@@ -667,6 +804,366 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
         print(f"[KE] Applying {TANK_ARTICULATION_PATCH.name}", flush=True)
         subprocess.run([*apply, "--check"], input=diff, cwd=dagor, check=True)
         subprocess.run(apply, input=diff, cwd=dagor, check=True)
+    ensure_level_settings_accessor(dagor / "prog/tools/sceneTools/daEditorX/binSceneView/strmlevel.h")
+    diff = TANK_MAP_PATCH.read_bytes().replace(b"\r\n", b"\n")
+    if subprocess.run([*apply, "--reverse", "--check"], input=diff, cwd=dagor, capture_output=True).returncode:
+        print(f"[KE] Applying {TANK_MAP_PATCH.name}", flush=True)
+        subprocess.run([*apply, "--check"], input=diff, cwd=dagor, check=True)
+        subprocess.run(apply, input=diff, cwd=dagor, check=True)
+    map_cpp = dagor / "prog/tools/sceneTools/daEditorX/binSceneView/strmLevel.cpp"
+    upgrade_roi_unique_tex(map_cpp)
+    if b"ke-tank-map-output-dir" not in map_cpp.read_bytes():
+        diff = TANK_MAP_RENDER_PATCH.read_bytes().replace(b"\r\n", b"\n")
+        if subprocess.run([*apply, "--reverse", "--check"], input=diff, cwd=dagor, capture_output=True).returncode:
+            print(f"[KE] Applying {TANK_MAP_RENDER_PATCH.name}", flush=True)
+            subprocess.run([*apply, "--check"], input=diff, cwd=dagor, check=True)
+            subprocess.run(apply, input=diff, cwd=dagor, check=True)
+    enable_batch_tank_map_output(map_cpp)
+    reset_level_settings_on_reload(map_cpp)
+    preserve_landmesh_renderer_release_on_reload(map_cpp)
+    enable_single_editor_map_batch(dagor)
+    guard_impostor_shadow_atlas_slices(dagor)
+    if with_ooz:
+        enable_failed_ooz_stream_capture(dagor)
+
+
+
+def guard_impostor_shadow_atlas_slices(dagor: Path) -> bool:
+    """Prevent invalid palette slice writes in the pinned Dagor DX11 renderer.
+
+    Real 20-map batch failed at map 4 avg_alaska_town.bin, targeting subres=7
+    (slice 1) on the one-slice tree_fagus_hurtgen_pl_l_a_s shadow atlas.
+    The error originates in ImpostorTextureManager::update_shadow(), not
+    BcCompressor or validate_update_sub_region_params(). Never weaken driver
+    validation or remap to a different atlas slice.
+
+    For KolobanovEye only, skip that *preshadow update* and record a quality
+    warning; normal Dagor callers receive false. Base scene/mesh rendering
+    still occurs, but the affected palette-specific preshadow is unavailable.
+    """
+    source = dagor / "prog/gameLibs/rendInst/impostorTextureMgr.cpp"
+    raw = source.read_bytes()
+    crlf = b"\r\n" in raw
+    data = raw.replace(b"\r\n", b"\n")
+    anchor = (b"  TextureInfo texInfo;\n"
+              b"  arrayTex->getinfo(texInfo);\n"
+              b"  BaseTexture *targetTex = arrayTex;\n")
+    marker = b"  // [KE] IMPOSTOR_SHADOW_SLICE_GUARD_V1\n"
+    patch = (
+        b"  // [KE] IMPOSTOR_SHADOW_SLICE_GUARD_V1\n"
+        b"  // Some WT maps use a rotation palette with more entries than the\n"
+        b"  // baked shadow-atlas resource has array slices. Never write beyond it.\n"
+        b"  if (palette_id < 0 || palette_id >= texInfo.a)\n"
+        b"  {\n"
+        b"    const bool keCapture = dgs_get_argv(\"kolobanoveye-probe\") != nullptr;\n"
+        b"    logwarn(\"[KE] IMPOSTOR_SHADOW_SLICE_SKIPPED asset=%s palette_id=%d atlas_slices=%d mips=%d layer=%d ri=%d ke_capture=%d\",\n"
+        b"      arrayTex->getTexName(), palette_id, texInfo.a, texInfo.mipLevels, layer_id, ri_id, int(keCapture));\n"
+        b"    release_managed_tex(res->getImpostorTextures().shadowAtlas);\n"
+        b"    return keCapture; // Only the dataset probe accepts reduced preshadow quality.\n"
+        b"  }\n"
+    )
+    if data.count(marker) == 1:
+        if data.count(patch) != 1:
+            raise ValueError(f"Partial KolobanovEye impostor slice guard in {source}")
+        return False
+    if data.count(anchor) != 1 or marker in data:
+        raise ValueError(f"Cannot locate unique original impostor slice update in {source}")
+    data = data.replace(anchor, anchor.replace(b"  BaseTexture *targetTex = arrayTex;\n", b"") +
+                        patch + b"  BaseTexture *targetTex = arrayTex;\n", 1)
+    source.write_bytes(data.replace(b"\n", b"\r\n") if crlf else data)
+    print(f"[KE] IMPOSTOR_SHADOW_SLICE_GUARD enabled source={source}", flush=True)
+    return True
+
+
+def enable_failed_ooz_stream_capture(dagor: Path) -> bool:
+    """Save only the first rejected Oodle block for isolated decoder A/B tests.
+
+    Enabled only if Python passes KE_OOZ_FAILURE_DIR to the editor process.
+    This avoids collecting proprietary game data in the repository or logs.
+    Does not alter the original 5 pinned OOZ source files.
+    """
+    source = dagor / "prog/engine/ioSys/oodleIoOoz.cpp"
+    raw = source.read_bytes()
+    crlf = b"\r\n" in raw
+    data = raw.replace(b"\r\n", b"\n")
+    signature = b"if (result != static_cast<int>(unpacked_size))\n  {\n"
+    mark = b"    // [KE] OOZ_FAILED_STREAM_CAPTURE_V1\n"
+    if data.count(mark) == 1:
+        if b"KE_OOZ_FAILURE_DIR" not in data or b"failed-ooz.bin" not in data:
+            raise ValueError(f"Partial rejected Oodle stream capture in {source}")
+        return False
+    if data.count(signature) != 1 or mark in data:
+        raise ValueError(f"Cannot find exact OOZ decoder failure branch in {source}")
+    # Protect against unbounded dumps; on this level the rejected packed block
+    # has a length of 3,630,624 bytes, comfortably below the 16 MiB cap.
+    code = r'''    // [KE] OOZ_FAILED_STREAM_CAPTURE_V1
+    const char *keDumpDir = std::getenv("KE_OOZ_FAILURE_DIR");
+    if (keDumpDir && *keDumpDir && packed_size <= 16u * 1024u * 1024u)
+    {
+      static std::atomic_flag keCaptured = ATOMIC_FLAG_INIT;
+      if (!keCaptured.test_and_set())
+      {
+        char keDumpPath[2048];
+        char keMetaPath[2048];
+        const int keN = std::snprintf(keDumpPath, sizeof(keDumpPath), "%s/failed-ooz.bin", keDumpDir);
+        const int keM = std::snprintf(keMetaPath, sizeof(keMetaPath), "%s/failed-ooz.txt", keDumpDir);
+        if (keN > 0 && keN < int(sizeof(keDumpPath)) && keM > 0 && keM < int(sizeof(keMetaPath)))
+        {
+          if (FILE *keFile = std::fopen(keDumpPath, "wb"))
+          {
+            const size_t keWritten = std::fwrite(input, 1, packed_size, keFile);
+            std::fclose(keFile);
+            if (keWritten == packed_size)
+            {
+              if (FILE *keMeta = std::fopen(keMetaPath, "wb"))
+              {
+                std::fprintf(keMeta, "packed=%zu\nunpacked=%zu\ncodec=%d\nsource=%s\n",
+                  packed_size, unpacked_size, codec, name ? name : "<unknown>");
+                std::fclose(keMeta);
+              }
+              logerr("ooz: rejected compressed block saved for local replay: %s (packed=%u, expected=%u)",
+                keDumpPath, static_cast<unsigned>(packed_size), static_cast<unsigned>(unpacked_size));
+            }
+          }
+        }
+      }
+    }
+'''.encode("ascii")
+    data = data.replace(signature, signature + code, 1)
+    include_anchor = b"#include <cstdlib>\n"
+    if data.count(include_anchor) != 1:
+        raise ValueError(f"Cannot safely include atomic/stdio in {source}")
+    data = data.replace(include_anchor, include_anchor + b"#include <atomic>\n#include <cstdio>\n", 1)
+    source.write_bytes(data.replace(b"\n", b"\r\n") if crlf else data)
+    print("[KE] Enabled first-failed-Oodle-block capture for native decoder diagnosis", flush=True)
+    return True
+
+
+def upgrade_roi_unique_tex(source):
+    """Upgrade the already-installed ROI renderer from ResFactory to UniqueTex.
+
+    This is an in-place migration for Dagor checkouts where the OLD patch was
+    already applied before the new patch was committed. It changes one exact
+    declaration only and refuses ambiguous/partial renderer changes.
+    """
+    data = source.read_bytes()
+    before = b"auto target = dag::create_tex(nullptr, size, size,"
+    after = b"UniqueTex target = dag::create_tex(nullptr, size, size,"
+    old_count, new_count = data.count(before), data.count(after)
+    if old_count == 0 and new_count == 0:
+        return False  # fresh checkout; git apply installs the corrected patch
+    if b"render_last_clip_region_to_tex" not in data or old_count + new_count != 1:
+        raise ValueError("Ambiguous tank-map render target in strmLevel.cpp")
+    if new_count:
+        return False
+    source.write_bytes(data.replace(before, after, 1))
+    print("[KE] Upgraded existing tank map render target to UniqueTex", flush=True)
+    return True
+
+
+def enable_single_editor_map_batch(dagor: Path) -> bool:
+    """Install a single native batch command into an already-patched DaEditor.
+
+    A 60-map session previously inserted 121 strings into Dagor's ConBatch queue.
+    The native command keeps the queue constant-size: just wait, one C++ job,
+    and exit. The crash may have another cause; this is a robustness change,
+    not proof that queue size caused Windows STATUS_STACK_BUFFER_OVERRUN.
+    The migration is safe to repeat and preserves each file's line endings.
+    """
+    base = dagor / "prog/tools/sceneTools/daEditorX"
+    header = base / "de_appwnd.h"
+    commands = base / "de_appwndConCmd.cpp"
+    source = base / "kolobanovEye.cpp"
+
+    updates = []
+    raw = header.read_bytes()
+    eol = b"\r\n" if b"\r\n" in raw else b"\n"
+    normalized = raw.replace(b"\r\n", b"\n")
+    old = b"  bool runKolobanovEyeFrame(const char *config_path);"
+    addition = old + b"\n  bool runKolobanovEyeBatch(const char *config_path);"
+    if normalized.count(addition) == 1:
+        pass
+    elif normalized.count(old) == 1 and b"runKolobanovEyeBatch" not in normalized:
+        updates.append((header, normalized.replace(old, addition, 1), eol))
+    else:
+        raise ValueError(f"Cannot safely add native batch method to {header}")
+
+    raw = commands.read_bytes()
+    eol = b"\r\n" if b"\r\n" in raw else b"\n"
+    normalized = raw.replace(b"\r\n", b"\n")
+    old = (b'  CONSOLE_CHECK_NAME_EX("kolobanoveye", "frame", 2, 2,'
+           b' "Render one compatibility probe frame.", "<config.blk>")\n'
+           b'  {\n'
+           b'    CONSOLE_COMMAND_BATCH_MODE_RESULT(get_app().runKolobanovEyeFrame(params[0]));\n'
+           b'  }\n')
+    addition = (b'\n'
+                b'  CONSOLE_CHECK_NAME_EX("kolobanoveye", "batch", 2, 2,\n'
+                b'    "Generate all selected maps in this DaEditor process.", "<batch.blk>")\n'
+                b'  {\n'
+                b'    CONSOLE_COMMAND_BATCH_MODE_RESULT(get_app().runKolobanovEyeBatch(params[0]));\n'
+                b'  }\n')
+    if normalized.count(addition) == 1:
+        pass
+    elif normalized.count(old) == 1 and b'runKolobanovEyeBatch' not in normalized:
+        updates.append((commands, normalized.replace(old, old + addition, 1), eol))
+    else:
+        raise ValueError(f"Cannot safely register native batch command in {commands}")
+
+    raw = source.read_bytes()
+    eol = b"\r\n" if b"\r\n" in raw else b"\n"
+    normalized = raw.replace(b"\r\n", b"\n")
+    code = b'''// One command per dataset, all maps stay inside the same DaEditor instance.
+bool DagorEdAppWindow::runKolobanovEyeBatch(const char *config_path)
+{
+  DataBlock config;
+  if (!config.load(config_path))
+  {
+    console->addMessage(ILogWriter::ERROR, "[KE] FAIL BATCH_CONFIG: Cannot read map batch");
+    return false;
+  }
+  const int mapCount = config.getInt("map_count", 0);
+  if (mapCount < 1 || mapCount > 256)
+  {
+    console->addMessage(ILogWriter::ERROR, "[KE] FAIL BATCH_CONFIG: Expected 1..256 maps");
+    return false;
+  }
+  console->addMessage(ILogWriter::NOTE, "[KE] MAP_BATCH_BEGIN maps=%d", mapCount);
+  for (int index = 0; index < mapCount; ++index)
+  {
+    char name[32];
+    snprintf(name, sizeof(name), "map_%d", index);
+    const char *capture = config.getStr(name, "");
+    if (!*capture || !dd_file_exist(capture))
+    {
+      console->addMessage(ILogWriter::ERROR, "[KE] FAIL BATCH_CONFIG: Missing capture for map %d", index + 1);
+      return false;
+    }
+    console->addMessage(ILogWriter::NOTE, "[KE] MAP_TASK_BEGIN index=%d/%d capture=%s", index + 1, mapCount, capture);
+    if (!runKolobanovEyeFrame(capture))
+    {
+      console->addMessage(ILogWriter::ERROR, "[KE] FAIL MAP_TASK index=%d/%d", index + 1, mapCount);
+      return false;
+    }
+    console->addMessage(ILogWriter::NOTE, "[KE] MAP_TASK_OK index=%d/%d", index + 1, mapCount);
+  }
+  console->addMessage(ILogWriter::NOTE, "[KE] MAP_BATCH_OK maps=%d", mapCount);
+  return true;
+}
+'''
+    marker = b"bool DagorEdAppWindow::runKolobanovEyeBatch(const char *config_path)"
+    if normalized.count(marker) == 1:
+        if b"[KE] MAP_BATCH_OK" not in normalized:
+            raise ValueError(f"Partial native batch implementation in {source}")
+    elif normalized.count(marker) == 0 and b"bool DagorEdAppWindow::runKolobanovEyeFrame(" in normalized:
+        updates.append((source, normalized.rstrip() + b"\n\n" + code, eol))
+    else:
+        raise ValueError(f"Cannot safely add native batch implementation to {source}")
+
+    for path, data, eol in updates:
+        path.write_bytes(data.replace(b"\n", b"\r\n") if eol == b"\r\n" else data)
+    if updates:
+        print(f"[KE] Installed native single-editor map batch in {len(updates)} Dagor files", flush=True)
+    return bool(updates)
+
+
+def preserve_landmesh_renderer_release_on_reload(source: Path) -> bool:
+    """Do not orphan the previous map's LandMeshRenderer on scene reload.
+
+    Upstream loadLevel assigns lmeshRenderer = NULL before clear(), even though
+    clear() calls del_it(lmeshRenderer). For a single long-lived editor process,
+    that discards the pointer before it can be deleted. Let clear() own teardown.
+    """
+    contents = source.read_bytes()
+    old = b"  lmeshRenderer = NULL;\n  hasWater = false;"
+    new = b"  // clear() releases the previous map's lmeshRenderer during a batch reload.\n  hasWater = false;"
+    crlf = b"\r\n" in contents
+    normalized = contents.replace(b"\r\n", b"\n")
+    if normalized.count(new) == 1 and normalized.count(old) == 0:
+        return False
+    if normalized.count(old) != 1 or normalized.count(new):
+        raise ValueError("Ambiguous landmesh renderer reset in AcesScene::loadLevel")
+    normalized = normalized.replace(old, new, 1)
+    source.write_bytes(normalized.replace(b"\n", b"\r\n") if crlf else normalized)
+    print("[KE] Preserving landmesh renderer cleanup across maps", flush=True)
+    return True
+
+
+def reset_level_settings_on_reload(source: Path) -> bool:
+    """Avoid carrying the previous map's tankMapCoord0/1 into a later level.
+
+    AcesScene::loadLevel() invokes clear() and reloads levelSettingsBlk, but
+    clear() does not clear this DataBlock. An invalid/missing next level BLK must
+    not inherit valid tank bounds from the previous map.
+    """
+    data = source.read_bytes()
+    newer = b"  levelFileName = bindump;\n  clear();\n  levelSettingsBlk.clearData();"
+    older = b"  levelFileName = bindump;\n  clear();"
+    crlf = b"\r\n" in data
+    normalized = data.replace(b"\r\n", b"\n")
+    if normalized.count(newer) == 1:
+        return False
+    if normalized.count(older) != 1:
+        raise ValueError("Cannot identify unique AcesScene level reload in strmLevel.cpp")
+    updated = normalized.replace(older, newer, 1)
+    source.write_bytes(updated.replace(b"\n", b"\r\n") if crlf else updated)
+    print("[KE] AcesScene level-settings isolation enabled", flush=True)
+    return True
+
+
+def enable_batch_tank_map_output(source: Path) -> bool:
+    """Let one editor process save an independent overview for each loaded map.
+
+    The Dagor CLI argv is process-global; a single PNG destination would only
+    work for the first level. The new CLI flag names an output DIRECTORY and
+    AcesScene derives the output filename from its currently loaded BIN.
+    Safe on previously patched Windows checkouts (CRLF preserved).
+    """
+    data = source.read_bytes()
+    if b"ke-tank-map-output-dir" in data:
+        if data.count(b"ke-tank-map-output-dir") != 1 or b"keMapOutput.str()" not in data:
+            raise ValueError("Partial per-level tank-map output change")
+        return False
+    old = b'if (const char *output = dgs_get_argv("ke-tank-map-output"); output && *output && !dd_file_exist(output))'
+    old_save = b'const bool saved = pixels && save_png32(output, '
+    if data.count(old) != 1 or data.count(old_save) != 1:
+        raise ValueError("Cannot locate unique ROI output destination in strmLevel.cpp")
+    eol = b"\r\n" if b"\r\n" in data else b"\n"
+    lines = [
+        b'const char *keMapOutputDir = dgs_get_argv("ke-tank-map-output-dir");',
+        b'  const char *keMapOutputFile = dgs_get_argv("ke-tank-map-output");',
+        b'  const String keMapOutput(keMapOutputDir && *keMapOutputDir',
+        b'    ? String(0, "%s/%s-tank.png", keMapOutputDir, dd_get_fname(levelFileName))',
+        b'    : String(keMapOutputFile ? keMapOutputFile : ""));',
+        b'  if (*keMapOutput.str() && !dd_file_exist(keMapOutput.str()))',
+    ]
+    updated = data.replace(old, eol.join(lines), 1)
+    updated = updated.replace(old_save, b'const bool saved = pixels && save_png32(keMapOutput.str(), ', 1)
+    source.write_bytes(updated)
+    print("[KE] Enabled per-map overviews for single-editor batch", flush=True)
+    return True
+
+
+def ensure_level_settings_accessor(header):
+    """Add the small public accessor without depending on surrounding Dagor patch hunks.
+
+    Older patched Dagor checkouts can have a different strmlevel.h context near
+    isInited(); only the stable, unique lmeshMgr declaration is needed here.
+    Preserve original CRLF/LF and make repeated builds idempotent.
+    """
+    data = header.read_bytes()
+    getter = b"getKolobanovEyeLevelSettings"
+    if getter in data:
+        if data.count(getter) != 1:
+            raise ValueError("Multiple tank-map accessors in strmlevel.h")
+        return False
+    marker = b"  LandMeshManager *lmeshMgr;"
+    if data.count(marker) != 1 or b"  DataBlock levelSettingsBlk;" not in data:
+        raise ValueError("Cannot find unique AcesScene level-settings insertion point in strmlevel.h")
+    eol = b"\r\n" if b"\r\n" in data else b"\n"
+    insertion = b"  const DataBlock &getKolobanovEyeLevelSettings() const { return levelSettingsBlk; }" + eol + eol
+    header.write_bytes(data.replace(marker, insertion + marker, 1))
+    print(f"[KE] Inserted tank-map accessor in {header}", flush=True)
+    return True
 
 
 def build(dagor, ooz=None):
@@ -680,18 +1177,27 @@ def build(dagor, ooz=None):
     jam = shutil.which("jam")
     if not jam:
         raise ValueError("jam.exe missing from PATH. Run Dagor make_devtools.py first.")
-    apply_dagor_patches(dagor, with_ooz=bool(ooz))
+    # Freeze the decoder once, reusing an already compiled checked source snapshot.
+    # The source files are local/gitignored due to missing clear upstream license.
+    if ooz is None and not OOZ_VENDOR.is_dir():
+        cached = HERE / "build-logs" / "ooz-local"
+        if cached.is_dir():
+            install_vendor_ooz(cached)
+    use_ooz = ooz is not None or OOZ_VENDOR.is_dir()
+    if use_ooz and ooz is None:
+        verify_vendor_ooz()
+    apply_dagor_patches(dagor, with_ooz=use_ooz)
 
     logs = HERE / "build-logs"
     logs.mkdir(exist_ok=True)
     args = [jam, "-sRoot=../..", "-sPlatformArch=x86_64", "-sConfig=dev"]
-    if ooz:
+    if use_ooz:
         require_file(dagor / BIN / "dumpGrp-dev.exe")
         library = prepare_ooz(ooz, logs)
         args += ["-sUseOoz=yes", f"-sOozLib={dagor_path(library)}"]
-    editor_log = logs / ("editor-ooz.log" if ooz else "editor.log")
+    editor_log = logs / ("editor-ooz.log" if use_ooz else "editor.log")
     run_logged([*args, "-f", "sceneTools/daEditorX/jamfile-editor"], editor_log, dagor / "prog/tools")
-    if ooz:
+    if use_ooz:
         if b"Building daKernel with the decode-only ooz backend" not in editor_log.read_bytes():
             raise ValueError(f"Jam did not select the ooz backend. See {editor_log}")
         require_file(dagor / BIN / "daKernel-dev.dll")
@@ -798,6 +1304,11 @@ def read_articulation(metadata, expected):
 
 
 def frame(args, game, cdk):
+    map_id = args.level
+    if not isinstance(map_id, str) or MAP_ID.fullmatch(map_id) is None:
+        raise ValueError("--level must be levels/avg_<name>.bin")
+    level = Path(map_id)
+    level_file = game / level
     if os.name != "nt":
         raise ValueError("DX11 capture requires Windows x64")
     if not (64 <= args.width <= 4096 and 64 <= args.height <= 4096 and 15 <= args.fov <= 100):
@@ -810,6 +1321,8 @@ def frame(args, game, cdk):
         low, high = args.camera_height_range
         if not all(math.isfinite(x) for x in (low, high)) or not 0 <= low <= high <= 10000:
             raise ValueError("Camera height above ground range must be between 0 and 10000")
+    if not 256 <= args.tank_map_resolution <= 4096 or args.tank_map_resolution & (args.tank_map_resolution - 1):
+        raise ValueError("--tank-map-resolution must be a power of two from 256 to 4096")
     if not 8 <= args.min_warmup_renders <= 64:
         raise ValueError("--min-warmup-renders must be between 8 and 64")
     if not 1 <= args.frames_per_position <= 1000:
@@ -824,9 +1337,9 @@ def frame(args, game, cdk):
         raise ValueError("Minimum ground height must be finite and within ±100000")
     if not math.isfinite(args.max_height_range) or not 0 <= args.max_height_range <= 100:
         raise ValueError("Maximum terrain height range must be 0–100")
-    if args.placement_mode == "whole_map":
+    if args.placement_mode in ("whole_map", "tank_map"):
         if args.seed is None:
-            raise ValueError("Whole-map search requires --seed")
+            raise ValueError("Map search requires --seed")
         candidate_groups = plan_map_compositions(args.seed, args.map_margin_percent, args.placement_attempts, args.count, args.frames_per_position)
     else:
         candidate_groups = plan_compositions(args.seed, args.tank_xz, args.placement_radius,
@@ -843,7 +1356,7 @@ def frame(args, game, cdk):
         dagor_path(path)
     out.mkdir(parents=True, exist_ok=False)
 
-    report = inspect(game, cdk)
+    report = inspect(game, cdk, level)
     (out / "inventory.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     if report["errors"]:
         raise ValueError(f"Input check failed. See {out / 'inventory.json'}")
@@ -869,7 +1382,8 @@ def frame(args, game, cdk):
     png, meta = out / "frame.pending.png", out / "frame.pending.blk"
     config = out / "capture.blk"
     entries = [
-        f'level:t="{dagor_path(game / LEVEL)}"',
+        f'level:t="{dagor_path(level_file)}"',
+        f'map_id:t="{map_id}"',
         f'model:t="{model}"',
         f'expected_grp:t="{GRP.name}"',
         f'skeleton:t="{skeleton}"',
@@ -883,6 +1397,7 @@ def frame(args, game, cdk):
         f'minimum_ground_y:r={numbers([args.minimum_ground_y])}',
         f'candidate_count:i={len(candidate_groups[0])}',
         f'placement_whole_map:b={"yes" if args.placement_mode == "whole_map" else "no"}',
+        f'placement_tank_map:b={"yes" if args.placement_mode == "tank_map" else "no"}',
         f'frames_per_position:i={args.frames_per_position}',
         f'min_warmup_renders:i={args.min_warmup_renders}',
         f'wait_sky_convergence:b={"yes" if args.wait_sky_convergence else "no"}',
@@ -896,7 +1411,7 @@ def frame(args, game, cdk):
     for scene_index, candidates in enumerate(candidate_groups):
         for i, (x, z) in enumerate(candidates):
             entries.append(f'candidate_{scene_index}_{i}:p3={numbers((x, args.ground_offset, z))}')
-    if args.count > 1:
+    if args.seed is not None:
         images = out / "images"
         images.mkdir()
         flat_orbits = plan_camera_orbits(args.seed, args.count * args.camera_attempts, args.camera_distance_range, args.camera_elevation_range)
@@ -905,8 +1420,8 @@ def frame(args, game, cdk):
             for camera in flat_orbits:
                 camera["height_above_ground"] = round(hrng.uniform(*args.camera_height_range), 5)
         orbit_plan = [flat_orbits[i * args.camera_attempts:(i + 1) * args.camera_attempts] for i in range(args.count)]
-        (out / "plan.json").write_text(json.dumps({"schema_version": 3, "seed": args.seed,
-            "tank_yaw_deg": args.yaw, "placement_mode": args.placement_mode, "map_margin_percent": args.map_margin_percent if args.placement_mode == "whole_map" else None, "placement_candidate_coordinates": "normalized_landscape_bbox" if args.placement_mode == "whole_map" else "world_xz", "placement_candidates_xz": candidate_groups, "frames_per_position": args.frames_per_position, "max_height_range": args.max_height_range,
+        (out / "plan.json").write_text(json.dumps({"schema_version": 3, "seed": args.seed, "map_id": map_id,
+            "tank_yaw_deg": args.yaw, "placement_mode": args.placement_mode, "map_margin_percent": args.map_margin_percent if args.placement_mode in ("whole_map", "tank_map") else None, "placement_candidate_coordinates": "normalized_tank_map" if args.placement_mode == "tank_map" else "normalized_landscape_bbox" if args.placement_mode == "whole_map" else "world_xz", "placement_candidates_xz": candidate_groups, "frames_per_position": args.frames_per_position, "max_height_range": args.max_height_range,
             "camera_distance_range": args.camera_distance_range, "camera_elevation_range": args.camera_elevation_range,
             "camera_attempts": args.camera_attempts, "camera_height_range": args.camera_height_range, "cameras": orbit_plan,
             **({"tank_articulation_deg": poses} if poses else {})}, indent=2) + "\n", encoding="utf-8")
@@ -919,8 +1434,6 @@ def frame(args, game, cdk):
                 if "height_above_ground" in camera:
                     entries.append(f"camera_height_{i}_{j}:r={numbers([camera['height_above_ground']])}")
             entries.append(f'output_{i}:t="{dagor_path(images / f"{i:06d}.png")}"')
-    if args.scan_buildings:
-        entries.append(f'building_scan:t="{dagor_path(out / "scene-instances.tsv")}"')
     if args.eye:
         entries.append(f'eye:p3={numbers(args.eye)}')
     render_debug = args.render_debug or args.indirection == "cpu" or args.dx11_trace
@@ -950,10 +1463,19 @@ def frame(args, game, cdk):
                f"-rootdir:{dagor_path(out)}", f"-addpath:{dagor_path(game)}", f"-addpath:{dagor_path(cdk)}",
                "-enable:Scene view", "-disable:Landscape", r"-exclude_dll_re:heightmapLand-aces-dev\.dll$",
                f"-ws:{workspace_name}", project, batch]
+    tank_map_pending = out / "tank-map.pending.png" if args.capture_tank_map else None
+    if tank_map_pending is not None:
+        (out / "maps").mkdir(exist_ok=True)
+        command.insert(-2, f"-ke-tank-map-output:{dagor_path(tank_map_pending)}")
+        command.insert(-2, f"-ke-tank-map-size:{args.tank_map_resolution}")
     map_capture = None
     if args.capture_last_clip:
-        map_image = out / "maps" / f"{LEVEL.stem}.png"
-        map_cache = (out.parent / ".ke-map-cache" / map_image.name).resolve()
+        map_image = out / "maps" / f"{level.stem}.png"
+        stamp = level_file.stat()
+        cache_key = hashlib.sha256(
+            f"{level_file.resolve()}|{stamp.st_size}|{stamp.st_mtime_ns}".encode("utf-8")
+        ).hexdigest()[:16]
+        map_cache = (out.parent / ".ke-map-cache" / f"{level.stem}-{cache_key}.png").resolve()
         if map_cache.is_relative_to(game) or map_cache.is_relative_to(cdk):
             raise ValueError("Keep the maps cache outside War Thunder")
         map_image.parent.mkdir()
@@ -1029,16 +1551,33 @@ def frame(args, game, cdk):
         raise ValueError("Missing per-frame render diagnostics; rebuild Dagor and check the capture log")
     if "[KE] WATER_GROUND_FILTER " not in log:
         raise ValueError("Water ground filter missing: rebuild Dagor with current code")
-    if args.placement_mode == "whole_map" and "[KE] MAP_BOUNDS " not in log:
+    if args.placement_mode in ("whole_map", "tank_map") and "[KE] MAP_BOUNDS " not in log:
         raise ValueError("Whole-map mode requires the updated Dagor build; rebuild the editor")
+    bounds_report = parse_tank_bounds_log(log, map_id)
+    (out / "tank-map-bounds.json").write_text(
+        json.dumps(bounds_report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"[KE] TANK_MAP {bounds_report['status']}: {out / 'tank-map-bounds.json'}", flush=True)
+    if tank_map_pending is not None:
+        if bounds_report['status'] != "available":
+            raise ValueError("Cannot render tank overview without valid tankMapCoord0/1")
+        if not tank_map_pending.is_file():
+            raise ValueError("Dagor did not save the tank-square overview: check TANK_MAP_RENDER in .logs/debug")
+        verify_png(tank_map_pending, args.tank_map_resolution, args.tank_map_resolution)
+        overview = out / "maps" / f"{level.stem}-tank.png"
+        tank_map_pending.replace(overview)
+        (out / "maps" / f"{level.stem}-tank.json").write_text(
+            json.dumps({**bounds_report, "image": overview.name,
+                        "resolution": args.tank_map_resolution,
+                        "orientation": "verify_in_editor",
+                        "render_method": "Dagor.render_last_clip_region_to_tex"},
+                       indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        print(f"[KE] TANK_MAP_IMAGE {overview}", flush=True)
+    if args.placement_mode == "tank_map" and bounds_report["status"] != "available":
+        raise ValueError("Tank placement requires valid tankMapCoord0/1")
     for marker in ("MAP_OK", "MODEL_OK", "PLACEMENT_OK", "WATER_PROXY", "CAMERA_TERRAIN", "SUPPORT_HEIGHTS", "CAMERA_OK", "FRAME_OK"):
         if f"[KE] {marker}" not in log:
             raise ValueError(f"{marker} missing from probe.dcmd.log")
-    if args.scan_buildings:
-        from ke_urban import write_report
-        report = write_report(require_file(out / "scene-instances.tsv"), out / "urban-zones.json")
-        print(f"[KE] Urban candidates: {len(report['zones'])}; {out / 'urban-zones.json'}", flush=True)
-    if args.count > 1:
+    if args.seed is not None:
         if f"[KE] SEQUENCE_OK frames={args.count}" not in log or log.count("[KE] FRAME_OK ") != args.count or log.count("[KE] ORBIT_FRAME ") != args.count:
             raise ValueError("Sequence incomplete or old editor build: check SEQUENCE_OK and FRAME_OK in logs")
         if not journal.is_file():
@@ -1057,7 +1596,7 @@ def frame(args, game, cdk):
             expected_composition = i // args.frames_per_position
             if not composition_match or int(composition_match.group(1)) != expected_composition:
                 raise ValueError("Missing or invalid composition_index in Dagor metadata; rebuild the editor")
-            records.append({"seed": args.seed, "frame_index": i, "composition_index": expected_composition, "tank_yaw_deg": args.yaw,
+            records.append({"map_id": map_id, "seed": args.seed, "frame_index": i, "composition_index": expected_composition, "tank_yaw_deg": args.yaw,
                 "camera_azimuth_deg": camera["azimuth_deg"], "camera_horizontal_distance": camera["horizontal_distance"],
                 "planned_camera_elevation_deg": camera["elevation_deg"] if args.camera_height_range is None else None,
                 "planned_camera_offset": camera["offset"], "planned_height_above_ground": camera.get("height_above_ground"), "camera_attempt": camera_attempt,
@@ -1100,6 +1639,9 @@ def main():
         command.add_argument("--game", type=Path, default=Path(r"D:\Games\WarThunder"))
         command.add_argument("--cdk", type=Path, help="Default is <game>/WarThunderCDK")
     frame_cmd.add_argument("--out", type=Path, required=True, help="A new directory outside the game")
+    for map_parser in (inspect_cmd, frame_cmd):
+        map_parser.add_argument("--level", type=str, default=LEVEL.as_posix(),
+                                help="Installed ground map ID: levels/avg_*.bin")
     frame_cmd.add_argument("--model")
     frame_cmd.add_argument("--skeleton")
     frame_cmd.add_argument("--tank-xz", nargs=2, type=float, default=(0, 0))
@@ -1112,7 +1654,7 @@ def main():
     frame_cmd.add_argument("--frames-per-position", type=int, default=6, help="Number of camera views per selected tank position")
     frame_cmd.add_argument("--camera-height-range", nargs=2, type=float, metavar=("MIN", "MAX"), help="Actual camera height above local heightmap for sequences")
     frame_cmd.add_argument("--camera-attempts", type=int, default=8, help="Maximum camera candidates per frame")
-    frame_cmd.add_argument("--placement-mode", choices=("around_point", "whole_map"), default="around_point")
+    frame_cmd.add_argument("--placement-mode", choices=("around_point", "whole_map", "tank_map"), default="around_point")
     frame_cmd.add_argument("--map-margin-percent", type=float, default=15.0, help="Margin on each landscape edge in percent, 0 <= value < 50")
     frame_cmd.add_argument("--placement-radius", type=float, default=0, help="Search radius around tank X/Z; 0 keeps fixed position")
     frame_cmd.add_argument("--placement-attempts", type=int, default=24, help="Up to 64 heightmap candidates")
@@ -1126,8 +1668,9 @@ def main():
     frame_cmd.add_argument("--width", type=int, default=1280)
     frame_cmd.add_argument("--height", type=int, default=720)
     frame_cmd.add_argument("--renderdoc-cli", type=Path, help="renderdoccmd.exe; manual GPU capture requires --keep-open")
+    frame_cmd.add_argument("--capture-tank-map", action="store_true", help="Render the selected tank square into a separate PNG")
+    frame_cmd.add_argument("--tank-map-resolution", type=int, default=1024)
     frame_cmd.add_argument("--capture-last-clip", action="store_true", help="Save the overview in the run maps directory and reuse cached pixels")
-    frame_cmd.add_argument("--scan-buildings", action="store_true", help="Report candidate urban zones from loaded scene instances")
     frame_cmd.add_argument("--keep-open", action="store_true", help="Keep editor open until window is closed; no process timeout")
     frame_cmd.add_argument("--timeout", type=int, default=360)
     frame_cmd.add_argument("--dx11-trace", action="store_true", help="Log native DX11 draw state for terrain and clipmap updates")
@@ -1158,7 +1701,9 @@ def main():
             game = args.game.resolve()
             cdk = args.cdk.resolve() if args.cdk else (game / "WarThunderCDK").resolve()
             if args.command == "inspect":
-                report = inspect(game, cdk)
+                if MAP_ID.fullmatch(args.level) is None:
+                    raise ValueError("--level must be levels/avg_<name>.bin")
+                report = inspect(game, cdk, Path(args.level))
                 print(json.dumps(report, indent=2, ensure_ascii=False))
                 return int(bool(report["errors"]))
             frame(args, game, cdk)

@@ -1,0 +1,62 @@
+diff --git a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+--- a/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
++++ b/prog/tools/sceneTools/daEditorX/kolobanovEye.cpp
+@@ -143,4 +143,19 @@
+   if (!plugin->loadKolobanovEyeLevel(level))
+     return fail("MAP", "Binary dump did not produce a terrain renderer");
++  const DataBlock &levelBlk = scene.getKolobanovEyeLevelSettings();
++  const bool hasTankBounds = levelBlk.paramExists("tankMapCoord0") && levelBlk.paramExists("tankMapCoord1");
++  Point2 tankMin(0.f, 0.f), tankMax(0.f, 0.f);
++  if (hasTankBounds)
++  {
++    tankMin = levelBlk.getPoint2("tankMapCoord0", Point2(0.f, 0.f));
++    tankMax = levelBlk.getPoint2("tankMapCoord1", Point2(0.f, 0.f));
++  }
++  const bool validTankBounds = hasTankBounds && std::isfinite(tankMin.x) && std::isfinite(tankMin.y) &&
++    std::isfinite(tankMax.x) && std::isfinite(tankMax.y) && tankMin.x < tankMax.x && tankMin.y < tankMax.y;
++  if (validTankBounds)
++    console->addMessage(ILogWriter::NOTE, "[KE] TANK_BOUNDS min_x=%.3f max_x=%.3f min_z=%.3f max_z=%.3f",
++      tankMin.x, tankMax.x, tankMin.y, tankMax.y);
++  else
++    console->addMessage(ILogWriter::NOTE, "[KE] TANK_BOUNDS_UNAVAILABLE level_settings_missing_or_invalid");
+   float ground = 0.f;
+   Point3 groundNormal;
+@@ -175,6 +191,20 @@
+   const int framesPerPosition = config.getInt("frames_per_position", frameCount);
+   if (framesPerPosition < 1 || framesPerPosition > 1000)
+     return fail("CONFIG", "Invalid frames per position");
+-  const bool sampleWholeMap = config.getBool("placement_whole_map", false);
+-  const BBox3 mapBounds = scene.lmeshMgr->getBBox();
++  const bool sampleTankMap = config.getBool("placement_tank_map", false);
++  const bool sampleWholeMap = config.getBool("placement_whole_map", false) || sampleTankMap;
++  BBox3 mapBounds = scene.lmeshMgr->getBBox();
++  if (sampleTankMap)
++  {
++    if (!validTankBounds)
++      return fail("TANK_BOUNDS", "tankMapCoord0/1 missing or invalid in levelSettingsBlk");
++    // Center the maximum axis-aligned square that fits inside the configured tank rectangle.
++    const float side = fminf(tankMax.x - tankMin.x, tankMax.y - tankMin.y);
++    const float cx = 0.5f * (tankMin.x + tankMax.x);
++    const float cz = 0.5f * (tankMin.y + tankMax.y);
++    mapBounds[0].x = cx - 0.5f * side;
++    mapBounds[1].x = cx + 0.5f * side;
++    mapBounds[0].z = cz - 0.5f * side;
++    mapBounds[1].z = cz + 0.5f * side;
++  }
+   if (sampleWholeMap && (!finite_point(mapBounds[0]) || !finite_point(mapBounds[1]) ||
+@@ -538,8 +566,14 @@
+   result.setPoint3("last_clip_min", Point3(lastClipX0, 0.f, lastClipZ0));
+   result.setPoint3("last_clip_max", Point3(lastClipX1, 0.f, lastClipZ1));
++  result.setStr("map_id", config.getStr("map_id", ""));
++  if (validTankBounds)
++  {
++    result.setPoint3("tank_map_min", Point3(tankMin.x, 0.f, tankMin.y));
++    result.setPoint3("tank_map_max", Point3(tankMax.x, 0.f, tankMax.y));
++  }
+   result.setReal("terrain_y", ground);
+   result.setInt("composition_index", sceneIndex);
+-  result.setStr("placement_mode", sampleWholeMap ? "whole_map" : "around_point");
++  result.setStr("placement_mode", sampleTankMap ? "tank_map" : sampleWholeMap ? "whole_map" : "around_point");
+   if (sampleWholeMap)
+   {
+     result.setPoint3("map_bounds_min", mapBounds[0]);
