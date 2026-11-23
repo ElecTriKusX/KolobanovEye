@@ -17,6 +17,7 @@ from tools.ke_maps import scan_maps, available_whitelist, plan_equal_allocation,
 from tools.ke_coco import group_for, scene_metadata
 from tools.ke_png_fast import validate_rgb_png
 from tools.ke_annotation import parse_annotation
+from tools.ke_composition import plan_screen_positions
 from tools.ke_frame_journal import read_journal
 from kolobanoveye import (
     BIN, GRP, inspect, choose_resources, parse_resources, require_file,
@@ -64,6 +65,7 @@ def write_capture(cfg, map_id, count, seed, run, raw, index, model, skeleton, fi
         camera["height_above_ground"] = round(hrng.uniform(
             cfg["camera_height_min"], cfg["camera_height_max"]), 5)
     cameras = [orbits[i * cfg["camera_attempts"]:(i + 1) * cfg["camera_attempts"]] for i in range(count)]
+    screen_positions = plan_screen_positions(seed, count, cfg['screen_position_weights'])
     poses = plan_articulation(seed, count,
         (cfg["turret_yaw_min"], cfg["turret_yaw_max"]),
         (cfg["gun_pitch_min"], cfg["gun_pitch_max"]))
@@ -99,6 +101,8 @@ def write_capture(cfg, map_id, count, seed, run, raw, index, model, skeleton, fi
             lines.append(f"candidate_{scene_idx}_{idx}:p3={numbers((x, cfg['ground_offset'], z))}")
     for i, options in enumerate(cameras):
         lines.append(f'output_{i}:t="{dagor_path(outputs[i])}"')
+        lines.append(f'screen_offset_{i}:p2={numbers(screen_positions[i]["offset_uv"])}')
+        lines.append(f'screen_bin_{i}:t="{screen_positions[i]["bin"]}"')
         for j, cam in enumerate(options):
             lines.append(f"camera_offset_{i}_{j}:p3={numbers(cam['offset'])}")
             lines.append(f"camera_height_{i}_{j}:r={numbers([cam['height_above_ground']])}")
@@ -109,11 +113,13 @@ def write_capture(cfg, map_id, count, seed, run, raw, index, model, skeleton, fi
     capture.write_text("\n".join(lines) + "\n", encoding="ascii")
     write_json(run / "plans" / f"{index:03d}-{stem}.json", {
         "map_id": map_id, "seed": seed, "cameras": cameras,
+        "screen_positions": screen_positions,
         "placement_candidates_xz": candidates, "tank_articulation_deg": poses,
         "frames_per_position": frames_per, "placement_mode": cfg["placement_mode"],
     })
     return {"map_id": map_id, "count": count, "seed": seed, "index": index, "capture": capture,
-            "journal": journal, "outputs": outputs, "cameras": cameras, "poses": poses,
+            "journal": journal, "outputs": outputs, "cameras": cameras,
+            "screen_positions": screen_positions, "poses": poses,
             "stem": stem, "frames_per_position": frames_per}
 
 
@@ -320,6 +326,17 @@ def finalize(cfg, run, raw, tasks):
             if not re.search(rf"^composition_index:i={comp}\s*$", blk, re.MULTILINE):
                 raise ValueError("Неверный индекс расстановки техники")
             articulation = read_articulation(blk, task["poses"][idx]) if task["poses"] else {}
+            position = task["screen_positions"][idx]
+            screen_bin = re.search(r'^screen_bin_planned:t="([^"\\r\\n]+)"', blk, re.MULTILINE)
+            if not screen_bin or screen_bin.group(1) != position["bin"]:
+                raise ValueError("Native Dagor screen-composition metadata missing or mismatched")
+            match_uv = re.search(r'^screen_offset_uv:p2=([^\\r\\n]+)', blk, re.MULTILINE)
+            if not match_uv:
+                raise ValueError("Native Dagor did not report the camera screen offset")
+            actual_uv = [float(q.strip()) for q in match_uv.group(1).split(",")]
+            if len(actual_uv) != 2 or any(abs(a - b) > 1e-4 for a, b in
+                                          zip(actual_uv, position["offset_uv"])):
+                raise ValueError("Native Dagor camera offset differs from the capture plan")
             image_id = len(images) + 1
             scene_id = f'{run.name}:{task["stem"]}:{comp}'
             group = group_for(blk, 256)
@@ -329,7 +346,10 @@ def finalize(cfg, run, raw, tasks):
                 "frame_index": idx, "composition_index": comp, "seed": task["seed"],
                 "camera_attempt": attempt, "camera_azimuth_deg": camera["azimuth_deg"],
                 "camera_horizontal_distance": camera["horizontal_distance"],
-                "planned_camera_offset": camera["offset"], "annotation": annotation,
+                "planned_camera_offset": camera["offset"],
+                "screen_position_bin_planned": position["bin"],
+                "screen_position_target_uv": position["target_uv"],
+                "annotation": annotation,
                 "dagor_frame_metadata_blk": blk,
                 "sha256": hashlib.sha256(image_path.read_bytes()).hexdigest(), **articulation,
             }

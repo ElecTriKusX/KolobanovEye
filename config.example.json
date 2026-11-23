@@ -36,5 +36,11 @@
     "levels/avg_normandy.bin"
   ],
   "capture_tank_map": true,
-  "tank_map_resolution": 1024
+  "tank_map_resolution": 1024,
+  "screen_position_weights": {
+    "center": 15,
+    "offset": 65,
+    "edge": 15,
+    "near_clip": 5
+  }
 }
