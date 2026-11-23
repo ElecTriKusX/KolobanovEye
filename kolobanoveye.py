@@ -295,7 +295,13 @@ def editor_failure(out, detail):
         if "FATAL ERROR:" not in raw and "assert failed" not in raw:
             continue
         dst = re.search(r"Invalid update_sub_region dst:[^\r\n]*", raw)
-        if dst:
+        if "unitedVdata<rendInst> OOM" in raw:
+            description = ("RendInst united vertex/index buffer pool exhausted "
+                           "(unitedVdata<rendInst> OOM; not necessarily total GPU VRAM)")
+            context = re.search(r"---fatal context---\s*([^\r\n]+)", raw)
+            if context:
+                description += f"; resource context: {context.group(1).strip()}"
+        elif dst:
             description = dst.group(0)
         else:
             meaningful = [line.strip() for line in raw.splitlines()
@@ -305,10 +311,19 @@ def editor_failure(out, detail):
         debug = fatal.parent / "debug"
         stage = ""
         if debug.is_file():
-            content = debug.read_bytes()[-250000:].decode("utf-8", errors="replace")
-            tasks = re.findall(r"CON: \[KE\] MAP_TASK_BEGIN index=\d+/\d+[^\r\n]*", content)
-            if tasks:
-                stage = f" Last map task: {tasks[-1]}."
+            # An OOM can dump thousands of resource records AFTER the last map
+            # marker, so a fixed tail may miss the actual failing map.
+            last_task = None
+            completed_frames = 0
+            with debug.open(encoding="utf-8", errors="replace") as stream:
+                for line in stream:
+                    match = re.search(r"CON: \[KE\] MAP_TASK_BEGIN index=\d+/\d+[^\r\n]*", line)
+                    if match:
+                        last_task = match.group(0)
+                    if "CON: [KE] FRAME_OK " in line:
+                        completed_frames += 1
+            if last_task:
+                stage = f" Last map task: {last_task}. Completed RGB frames: {completed_frames}."
         return f"DaEditor native fatal assertion: {description}.{stage} Full stack: {fatal}"
     return f"{detail} See engine logs in {out / '.logs'}."
 
@@ -821,6 +836,8 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
     enable_batch_tank_map_output(map_cpp)
     reset_level_settings_on_reload(map_cpp)
     preserve_landmesh_renderer_release_on_reload(map_cpp)
+    from tools.ke_map_resource_gc import install_map_resource_gc
+    install_map_resource_gc(map_cpp)
     enable_single_editor_map_batch(dagor)
     from tools.ke_dagor_composition import install_screen_composition
     install_screen_composition(capture_cpp)
