@@ -39,14 +39,21 @@ SCENE_METHOD = """  bool captureKolobanovEyeMasks(const TMatrix &expectedCamera,
     amodalCount = visibleCount = missingCount = 0;
     if (!keMaskCameraValid || keMaskWidth != width || keMaskHeight != height ||
         !deferredTarget || !canRenderIsolated() || !*amodalPath || !*visiblePath)
+    {
+      debug("[KE] VISIBILITY_FAIL reason=screenshot_or_renderer_not_ready snapshot=%d actual=%dx%d expected=%dx%d isolated=%d",
+        int(keMaskCameraValid), keMaskWidth, keMaskHeight, width, height, int(canRenderIsolated()));
       return false;
+    }
     // Consume the snapshot exactly once; a later frame must capture its own.
     keMaskCameraValid = false;
     for (int col = 0; col < 4; ++col)
     {
       const float error = lengthSq(keMaskViewItm.getcol(col) - expectedCamera.getcol(col));
       if (!std::isfinite(error) || error > (col == 3 ? 0.01f : 1e-6f))
+      {
+        debug("[KE] VISIBILITY_FAIL reason=camera_mismatch column=%d squared_error=%g", col, error);
         return false;
+      }
     }
 
     // The main G-buffer still contains the final screenshot. Copy it BEFORE
@@ -134,7 +141,11 @@ SERVICE_METHOD = """  bool captureKolobanovEyeMasks(DynamicRenderableSceneInstan
     int &amodalCount, int &visibleCount, int &missingCount) override
   {
     if (!dynScene || !model || model->getCurrentLodNo() != lod)
+    {
+      debug("[KE] VISIBILITY_FAIL reason=lod_or_renderer_mismatch expected_lod=%d actual_lod=%d",
+        lod, model ? model->getCurrentLodNo() : -1);
       return false;
+    }
     d3d::GpuAutoLock gpuLock;
     bool zeroOffset = true;
     const bool captured = dynScene->captureKolobanovEyeMasks(camera, width, height, amodal, visible,

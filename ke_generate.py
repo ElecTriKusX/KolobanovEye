@@ -101,6 +101,8 @@ def validate_config(raw):
 
 def command(c):
     c = validate_config(c)
+    if c['capture_visibility_masks']:
+        raise ValueError('Маски видимости поддерживаются через ke_generate.py / ke_dataset.py, не через legacy frame')
     args = ([sys.executable, '-u', str(Path(__file__).resolve().with_name('kolobanoveye.py')), 'frame',
             '--dagor', c['dagor'], '--game', c['game'], '--level', c['map_id'], '--out', c['output'], '--tank-map-resolution', str(c['tank_map_resolution']),
             '--count', str(c['count']), '--seed', str(c['seed']), '--width', str(c['width']),
