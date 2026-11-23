@@ -1,7 +1,7 @@
 name: Python unit tests
 on:
   push:
-    branches: [feature/avg-map-catalog-whitelist]
+    branches: [feature/avg-map-catalog-whitelist, feature/visibility-quotas]
   pull_request:
   workflow_dispatch:
 permissions:
