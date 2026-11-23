@@ -822,6 +822,8 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
     reset_level_settings_on_reload(map_cpp)
     preserve_landmesh_renderer_release_on_reload(map_cpp)
     enable_single_editor_map_batch(dagor)
+    from tools.ke_dagor_composition import install_screen_composition
+    install_screen_composition(capture_cpp)
     guard_impostor_shadow_atlas_slices(dagor)
     if with_ooz:
         enable_failed_ooz_stream_capture(dagor)
