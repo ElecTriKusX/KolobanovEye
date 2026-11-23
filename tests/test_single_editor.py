@@ -52,7 +52,9 @@ def fake_editor(cmd):
                 write_rgb_png(image, width, height, bytes([10, 20, 30]) * (width * height))
                 blk = (f'level:t="{mid}"\nclass:t="tank"\nwidth:i={width}\nheight:i={height}\n'
                        f'tank_world:p3={100+idx},123,100\nbbox_amodal_aabb_xywh:p4=4,5,20,25\n'
-                       f'camera_attempt:i=0\ncomposition_index:i={idx // int(value("frames_per_position"))}\n'\n                       f'screen_bin_planned:t="{value(f"screen_bin_{idx}")}"\n'\n                       f'screen_offset_uv:p2={value(f"screen_offset_{idx}")}\n')
+                       f'camera_attempt:i=0\ncomposition_index:i={idx // int(value("frames_per_position"))}\n'
+                       f'screen_bin_planned:t="{value(f"screen_bin_{idx}")}"\n'
+                       f'screen_offset_uv:p2={value(f"screen_offset_{idx}")}\n')
                 payload = blk.encode("utf-8")
                 stream.write(f"KEFRAME {idx} {len(payload)}\n".encode("ascii") + payload)
                 log += ["[KE] FRAME_OK ", "[KE] FRAME_STABILITY_FINAL enabled=1 stable=1"]
