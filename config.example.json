@@ -43,5 +43,11 @@
     "edge": 15,
     "near_clip": 5
   },
-  "capture_visibility_masks": false
+  "capture_visibility_masks": false,
+  "enforce_visibility_quotas": false,
+  "visibility_candidate_multiplier": 5,
+  "refill_batch_per_map": 256,
+  "refill_stall_rounds": 3,
+  "refill_max_rounds": 10000,
+  "search_occlusion": false
 }

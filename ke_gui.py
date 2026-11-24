@@ -14,7 +14,7 @@ from tools.ke_maps import scan_maps, load_whitelist, save_whitelist, initial_whi
 
 FIELDS = [
  ('dagor', 'Папка Dagor Engine'), ('game', 'Папка War Thunder'), ('output', 'Родительская папка результатов'),
- ('count', 'Количество кадров (1–1000)'), ('frames_per_position', 'Кадров на позицию'), ('seed', 'Seed'),
+ ('count', 'Количество кадров (итог)'), ('frames_per_position', 'Кадров на позицию'), ('seed', 'Seed'),
  ('width', 'Ширина'), ('height', 'Высота'), ('fov', 'Горизонтальный FOV, °'),
  ('placement_mode', 'Где размещать танк'), ('map_margin_percent', 'Отступ от краёв карты, %'),
  ('tank_x', 'Центр поиска X'), ('tank_z', 'Центр поиска Z'), ('tank_yaw', 'Ориентация корпуса, °'),
@@ -26,7 +26,7 @@ FIELDS = [
  ('camera_height_min', 'Высота камеры над землёй: от'), ('camera_height_max', 'Высота камеры над землёй: до'),
  ('clipmap_feedback', 'Обратная связь clipmap'), ('timeout', 'Таймаут, с'),
  ('min_warmup_renders', 'Мин. проходов прогрева (8–64)'),
- ('visibility_candidate_multiplier', 'Запас кандидатов для квот, ×'),
+ ('visibility_candidate_multiplier', 'Общий лимит кандидатов, ×'),
 ]
 
 
@@ -66,7 +66,7 @@ class App:
         ttk.Label(map_bar, textvariable=self.map_summary).pack(side='left')
         ttk.Button(map_bar, text='Карты / белый список…', command=self.open_maps).pack(side='left', padx=10)
         ttk.Button(map_bar, text='Обновить', command=self.refresh_maps).pack(side='left')
-        ttk.Label(main, text='Выбранные карты последовательно обрабатываются в одном DaEditor. Кадры распределяются поровну.').pack(anchor='w')
+        ttk.Label(main, text='Кадры распределяются поровну по картам. Квоты: адаптивный добор раундами DaEditor.').pack(anchor='w')
         ttk.Label(main, text='Датасет: KolobanovEye/dataset/raw (обновляется после успешной генерации); технические файлы: dataset/runs.').pack(anchor='w', pady=(2, 8))
         form = ttk.Frame(main)
         form.pack(fill='x')
@@ -112,7 +112,7 @@ class App:
         menu.add_checkbutton(label='Ждать сходимости освещения неба', variable=self.wait_sky_convergence)
         menu.add_checkbutton(label='Диагностика рендера (MRT, глубина)', variable=self.render_debug)
         menu.add_checkbutton(label='Маски видимости (эксперимент)', variable=self.capture_visibility_masks)
-        menu.add_checkbutton(label='Строгие квоты видимости 40/25/25/10', variable=self.enforce_visibility_quotas,
+        menu.add_checkbutton(label='Строгие квоты видимости + добор (40/25/25/10)', variable=self.enforce_visibility_quotas,
                              command=lambda: self.capture_visibility_masks.set(True) if self.enforce_visibility_quotas.get() else None)
         menu.add_checkbutton(label='Поиск перекрытий по коллизиям (эксперимент)', variable=self.search_occlusion,
                              command=lambda: self.capture_visibility_masks.set(True) if self.search_occlusion.get() else None)

@@ -21,8 +21,8 @@ def validate_visibility_weights(weights):
 
 
 def visibility_targets(count, weights=DEFAULT_VISIBILITY_WEIGHTS):
-    if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 1000:
-        raise ValueError("visibility target count must be 1..1000")
+    if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 250000:
+        raise ValueError("visibility target count must be 1..250000")
     weights = validate_visibility_weights(weights)
     # Normalize first to avoid overflow in count * weight.
     scale = max(weights.values())

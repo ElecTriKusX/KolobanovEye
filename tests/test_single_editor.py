@@ -245,6 +245,71 @@ class SingleEditorTests(unittest.TestCase):
         self.assertEqual({m: sum(i["map_id"] == m for i in coco["images"])
                           for m in cfg["map_ids"]}, report["selected_by_map"])
 
+    def test_refill_accumulates_rounds_and_balances_final_maps(self):
+        calls = []
+        def execute(cmd):
+            calls.append(cmd)
+            return fake_editor(cmd)
+        cfg = {**self.config, "count": 4, "capture_visibility_masks": True,
+               "enforce_visibility_quotas": True, "visibility_candidate_multiplier": 4,
+               "refill_batch_per_map": 2,
+               "visibility_weights": {"open": 0, "light": 0, "moderate": 1, "heavy": 0}}
+        result = run_dataset(cfg, self.dataset, executor=execute)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(result["editor_processes"], 2)
+        self.assertEqual(result["images"], 4)
+        self.assertEqual(result["visibility_quotas"]["candidates"], 8)
+        self.assertEqual(result["visibility_quotas"]["selected_by_map"], dict.fromkeys(cfg["map_ids"], 2))
+        raw = self.dataset / "raw"
+        coco = json.loads((raw / "annotations/instances.json").read_text())
+        self.assertEqual({x["id"] for x in coco["images"]}, {1, 3, 5, 7})
+        self.assertEqual(len({x["scene_id"] for x in coco["images"]}), 4)
+        self.assertEqual(len(list((raw / "images").glob("*.png"))), 4)
+        run, = (self.dataset / "runs").iterdir()
+        plans = [json.loads(p.read_text()) for p in sorted(run.glob("rounds/*/plans/*.json"))]
+        for mid in cfg["map_ids"]:
+            self.assertEqual(len({p["seed"] for p in plans if p["map_id"] == mid}), 2)
+        self.assertEqual(len((run / "candidate-pool.jsonl").read_text().splitlines()), 8)
+        self.assertEqual(len(list((run / "maps").glob("*.png"))), 2)
+        self.assertFalse(list(run.glob("**/journals/*.jsonl")))
+
+    def test_refill_stall_preserves_pool_and_old_raw(self):
+        run_dataset(self.config, self.dataset, executor=fake_editor)
+        old = (self.dataset / "raw/manifest.json").read_bytes()
+        cfg = {**self.config, "count": 2, "map_ids": [self.config["map_ids"][0]],
+               "capture_visibility_masks": True, "enforce_visibility_quotas": True,
+               "visibility_candidate_multiplier": 20, "refill_batch_per_map": 2,
+               "refill_stall_rounds": 2,
+               "visibility_weights": {"open": 1, "light": 0, "moderate": 0, "heavy": 0}}
+        with self.assertRaisesRegex(ValueError, "stall"):
+            run_dataset(cfg, self.dataset, replace_raw=True, executor=fake_editor)
+        self.assertEqual((self.dataset / "raw/manifest.json").read_bytes(), old)
+        staging, = self.dataset.glob(".raw-staging-*")
+        self.assertEqual(len(list((staging / "images").glob("*.png"))), 4)
+        report, = (self.dataset / "runs").glob("*/visibility-quotas.json")
+        report = json.loads(report.read_text())
+        self.assertEqual(report["status"], "INCOMPLETE")
+        self.assertEqual(report["stop_reason"], "stall")
+        self.assertEqual(report["selected"], 0)
+
+    def test_refill_native_failure_is_not_a_quota_miss(self):
+        calls = []
+        def execute(cmd):
+            calls.append(cmd)
+            return fake_editor(cmd) if len(calls) == 1 else 9
+        cfg = {**self.config, "count": 4, "capture_visibility_masks": True,
+               "enforce_visibility_quotas": True, "visibility_candidate_multiplier": 4,
+               "refill_batch_per_map": 2,
+               "visibility_weights": {"open": 0, "light": 0, "moderate": 1, "heavy": 0}}
+        with self.assertRaisesRegex(RuntimeError, "кодом 9"):
+            run_dataset(cfg, self.dataset, executor=execute)
+        self.assertEqual(len(calls), 2)
+        self.assertFalse((self.dataset / "raw").exists())
+        staging, = self.dataset.glob(".raw-staging-*")
+        self.assertEqual(len(list((staging / "images").glob("*.png"))), 4)
+        run, = (self.dataset / "runs").iterdir()
+        self.assertEqual(json.loads((run / "manifest.json").read_text())["status"], "FAILED")
+
     def test_visibility_failure_includes_native_reason(self):
         run = self.root / "failed-visibility"
         run.mkdir()

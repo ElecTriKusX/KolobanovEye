@@ -10,6 +10,7 @@ import os
 import random
 import re
 import subprocess
+import shutil
 from pathlib import Path
 
 from ke_generate import validate_config
@@ -22,6 +23,7 @@ from tools.ke_visibility import read_capture_masks, mask_decoder_name, VISIBILIT
 from tools.ke_occlusion import plan_occlusion_targets, read_occlusion_proxy, summarize_search
 from tools.ke_visibility_quotas import candidate_allocation, visibility_targets, choose_candidates
 from tools.ke_frame_journal import read_journal
+from tools.ke_refill import plan_refill_round
 from kolobanoveye import (
     BIN, GRP, inspect, choose_resources, parse_resources, require_file,
     dagor_path, run_logged, numbers, plan_articulation, plan_camera_orbits,
@@ -45,7 +47,9 @@ def jobs_for(config, discovered):
 
 
 def write_json(path, obj):
-    path.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temp = path.with_name(path.name + ".tmp")
+    temp.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(temp, path)
 
 
 def write_capture(cfg, map_id, count, seed, run, raw, index, model, skeleton, first_image_id):
@@ -298,8 +302,8 @@ def extract_map_logs(log, tasks, *, stability=True):
     return result
 
 
-def finalize(cfg, run, raw, tasks):
-    """Validate all images and journals, create the one and only COCO file."""
+def collect_candidates(cfg, run, raw, tasks):
+    """Validate one native batch once; do not select or delete any files."""
     log, source = read_editor_log(run)
     if f'[KE] MAP_BATCH_OK maps={len(tasks)}' not in log:
         raise ValueError(explain_batch_failure(run, log, source))
@@ -359,7 +363,7 @@ def finalize(cfg, run, raw, tasks):
                           if cfg["capture_visibility_masks"] else None)
             occlusion = (read_occlusion_proxy(blk, task["occlusion_targets"][idx], cfg["camera_attempts"], visibility)
                          if cfg["search_occlusion"] else None)
-            image_id = len(images) + 1
+            image_id = int(image_path.stem)
             scene_id = f'{run.name}:{task["stem"]}:{comp}'
             group = group_for(blk, 256)
             record = {
@@ -398,29 +402,41 @@ def finalize(cfg, run, raw, tasks):
                 "scene_id": scene_id, "map_id": task["map_id"],
                 "scene_group_id": group, "image_ids": [],
             })["image_ids"].append(image_id)
-            print(f"[KE] FINALIZE_FRAME {image_id}/{expected} image={image_path.name}", flush=True)
+            print(f"[KE] FINALIZE_FRAME {len(images)}/{expected} image={image_path.name}", flush=True)
+    return records, images, annotations, scenes, maps
+
+
+def finalize(cfg, run, raw, tasks):
+    """Ordinary single batch: validate, then export."""
+    pool = collect_candidates(cfg, run, raw, tasks)
+    return export_candidates(cfg, run, raw, pool)
+
+
+def export_candidates(cfg, run, raw, pool, *, selection=None, editor_processes=1):
+    """Export once from the validated accumulated pool."""
+    records, images, annotations, scenes, maps = pool
     occlusion_report = summarize_search(records) if cfg["search_occlusion"] else None
     if occlusion_report is not None:
         write_json(run / "occlusion-search.json", occlusion_report)
         print("[KE] OCCLUSION_SEARCH " + json.dumps(occlusion_report), flush=True)
     quota_report = None
+    discarded = []
     if cfg["enforce_visibility_quotas"]:
-        targets = visibility_targets(cfg["count"], cfg["visibility_weights"])
-        map_targets = dict(plan_equal_allocation(cfg["count"], [t["map_id"] for t in tasks]))
-        selected, quota_report = choose_candidates(records, targets, map_targets)
+        if selection is None:
+            targets = visibility_targets(cfg["count"], cfg["visibility_weights"])
+            map_targets = dict(plan_equal_allocation(cfg["count"], [m["map_id"] for m in maps]))
+            selected, quota_report = choose_candidates(records, targets, map_targets)
+        else:
+            selected, quota_report = selection
         write_json(run / "visibility-quotas.json", quota_report)
         print("[KE] VISIBILITY_QUOTAS " + json.dumps(quota_report, ensure_ascii=False), flush=True)
         if not quota_report["complete"]:
             raise ValueError("Не набраны квоты видимости/карт: " + json.dumps(quota_report["deficit"]) +
                              "; дефицит карт: " + json.dumps(quota_report["deficit_by_map"]) +
                              f"; отчёт: {run / 'visibility-quotas.json'}")
-        # Keep stable candidate filenames and image IDs. COCO IDs need not be contiguous.
-        # Drop RGB and both masks only AFTER complete candidate validation and exact selection.
-        for record in records:
-            if record["image_id"] not in selected:
-                (raw / record["image"]).unlink()
-                for kind in ("amodal_mask", "visible_mask"):
-                    (raw / record["visibility_measurement"][kind]).unlink()
+        # Retain alternatives until the final metadata has been written.
+        # IDs are stable across rounds; COCO IDs need not be contiguous.
+        discarded = [r for r in records if r["image_id"] not in selected]
         records = [r for r in records if r["image_id"] in selected]
         images = [i for i in images if i["id"] in selected]
         annotations = [a for a in annotations if a["image_id"] in selected]
@@ -449,7 +465,7 @@ def finalize(cfg, run, raw, tasks):
     overview = {
         "schema_version": 2, "kind": "raw", "split": None,
         "run_id": run.name, "images": len(images), "annotations": len(annotations),
-        "scenes": len(scenes), "maps": len(maps), "editor_processes": 1,
+        "scenes": len(scenes), "maps": len(maps), "editor_processes": editor_processes,
         "visibility_diagnostic": cfg["capture_visibility_masks"],
         "visibility_quotas": quota_report, "occlusion_search": occlusion_report,
         "visibility_bins": ({name: sum(r["visibility_measurement"]["visibility_bin"] == name for r in records)
@@ -461,15 +477,17 @@ def finalize(cfg, run, raw, tasks):
         },
     }
     write_json(raw / "manifest.json", overview)
+    for record in discarded:
+        (raw / record["image"]).unlink()
+        for kind in ("amodal_mask", "visible_mask"):
+            (raw / record["visibility_measurement"][kind]).unlink()
     print(f"[KE] FINALIZE_OK frames={len(images)} annotations={len(annotations)}", flush=True)
     return overview
 
 
-def generate(config, run, raw, executor=None):
-    """Generate the raw dataset, invoking DaEditor exactly once.
-
-    executor is a low-level test hook: callable(args) -> integer exit status.
-    """
+def _generate_batch(config, run, raw, executor=None, *, planned_jobs=None,
+                    first_image_id=1, round_index=0, target_weights=None):
+    """One fixed native batch. A refill round only validates and returns its pool."""
     cfg = validate_config(config)
     game, dagor = Path(cfg["game"]).resolve(), Path(cfg["dagor"]).resolve()
     cdk = game / "WarThunderCDK"
@@ -478,17 +496,16 @@ def generate(config, run, raw, executor=None):
         if (run == forbidden or run.is_relative_to(forbidden) or
                 raw == forbidden or raw.is_relative_to(forbidden)):
             raise ValueError("Результат не может находиться внутри Dagor или War Thunder")
-    target_jobs = jobs_for(cfg, scan_maps(game))
-    quotas = (candidate_allocation(target_jobs, cfg["visibility_candidate_multiplier"])
-              if cfg["enforce_visibility_quotas"] else target_jobs)
-    if run.exists() or raw.exists():
+    target_jobs = jobs_for(cfg, scan_maps(game)) if planned_jobs is None else planned_jobs
+    quotas = target_jobs
+    if run.exists() or (raw.exists() and not round_index):
         raise ValueError("Рабочий каталог или исходный датасет уже существует")
     run.mkdir(parents=True)
-    raw.mkdir(parents=True)
-    (raw / "images").mkdir()
+    raw.mkdir(parents=True, exist_ok=bool(round_index))
+    (raw / "images").mkdir(exist_ok=bool(round_index))
     if cfg["capture_visibility_masks"]:
         for kind in ("amodal", "visible"):
-            (raw / "masks" / kind).mkdir(parents=True)
+            (raw / "masks" / kind).mkdir(parents=True, exist_ok=bool(round_index))
     for name in ("capture", "plans", "maps", "journals"):
         (run / name).mkdir()
     write_json(run / "generation-config.json", cfg)
@@ -518,9 +535,11 @@ def generate(config, run, raw, executor=None):
         (run / "environment" / "environment.plugin.blk").write_text(
             'enviName:t="day"\nweatherType:t="clear"\n', encoding="ascii")
         tasks = []
-        next_image_id = 1
+        next_image_id = first_image_id
         for index, (map_id, count) in enumerate(quotas, 1):
-            tasks.append(write_capture(cfg, map_id, count, map_seed(cfg["seed"], map_id),
+            seed = map_seed(cfg["seed"] if round_index <= 1 else f'{cfg["seed"]}:refill:{round_index}', map_id)
+            map_cfg = cfg if not target_weights else {**cfg, "visibility_weights": target_weights[map_id]}
+            tasks.append(write_capture(map_cfg, map_id, count, seed,
                 run, raw, index, model, skeleton, next_image_id))
             next_image_id += count
         cmd = make_command(cfg, run, tasks)
@@ -539,7 +558,8 @@ def generate(config, run, raw, executor=None):
             editor_env = {**os.environ, "KE_OOZ_FAILURE_DIR": str(failure_dir)}
             try:
                 run_logged(cmd, run / "host-stdout.log", run,
-                           None if cfg["keep_open"] else cfg["timeout"] * len(tasks),
+                           None if cfg["keep_open"] else cfg["timeout"] *
+                           (sum(n for _, n in quotas) if round_index else len(tasks)),
                            env=editor_env)
             except (ValueError, subprocess.TimeoutExpired) as exc:
                 raise ValueError(editor_failure(run, str(exc))) from exc
@@ -547,14 +567,15 @@ def generate(config, run, raw, executor=None):
         report["staging"] = str(raw)
         write_json(run / "manifest.json", report)
         print(f'[KE] RENDER_COMPLETE staging={raw}; validating RGB, metadata and masks', flush=True)
-        result = finalize(cfg, run, raw, tasks)
+        result = collect_candidates(cfg, run, raw, tasks) if round_index else finalize(cfg, run, raw, tasks)
         for item in report["maps"]:
-            actual = (result["visibility_quotas"]["selected_by_map"].get(item["map_id"], 0)
-                      if cfg["enforce_visibility_quotas"] else item["planned"])
-            item.update(actual=actual, status="verified")
+            item.update(actual=item["planned"], status="verified")
         report["complete"] = True
         write_json(run / "manifest.json", report)
-        print(f'[KE] SINGLE_EDITOR_OK frames={result["images"]} maps={result["maps"]} instances=1', flush=True)
+        if round_index:
+            print(f'[KE] REFILL_BATCH_OK round={round_index} candidates={len(result[0])}', flush=True)
+        else:
+            print(f'[KE] SINGLE_EDITOR_OK frames={result["images"]} maps={result["maps"]} instances=1', flush=True)
         return result
     except Exception as exc:
         report["error"] = str(exc)
@@ -564,3 +585,144 @@ def generate(config, run, raw, executor=None):
         write_json(run / "manifest.json", report)
         raise
 
+
+
+
+def generate(config, run, raw, executor=None):
+    """Dispatch ordinary runs unchanged; strict quotas use Python round feedback."""
+    cfg = validate_config(config)
+    if not cfg["enforce_visibility_quotas"]:
+        return _generate_batch(cfg, run, raw, executor)
+    run, raw = Path(run).resolve(), Path(raw).resolve()
+    for forbidden in (Path(cfg["game"]).resolve(), Path(cfg["dagor"]).resolve()):
+        if any(path == forbidden or path.is_relative_to(forbidden) for path in (run, raw)):
+            raise ValueError("Результат не может находиться внутри Dagor или War Thunder")
+    if run.exists() or raw.exists():
+        raise ValueError("Рабочий каталог или исходный датасет уже существует")
+    target_jobs = jobs_for(cfg, scan_maps(Path(cfg["game"])))
+    if len(target_jobs) > 256:
+        raise ValueError("Refill supports at most 256 selected maps")
+    targets = visibility_targets(cfg["count"], cfg["visibility_weights"])
+    map_targets = dict(target_jobs)
+    budget = cfg["count"] * cfg["visibility_candidate_multiplier"]
+    run.mkdir(parents=True)
+    (run / "rounds").mkdir()
+    (run / "maps").mkdir()
+    write_json(run / "generation-config.json", cfg)
+    records, images, annotations, scenes = [], [], [], {}
+    maps = {}
+    selected, quota = choose_candidates([], targets, map_targets)
+    attempts = dict.fromkeys(map_targets, 0)
+    report = {"schema_version": 2, "mode": "refill_v1", "status": "RUNNING",
+              "requested_frames": cfg["count"], "candidate_budget": budget,
+              "candidate_frames": 0, "validated_candidates": 0, "editor_processes": 0,
+              "complete": False, "preserve_staging": True, "staging": str(raw),
+              "rounds": [], "maps": [{"map_id": m, "planned": n, "actual": 0,
+                                       "status": "pending"} for m, n in target_jobs]}
+    write_json(run / "manifest.json", report)
+    stalled = 0
+    try:
+        for round_index in range(1, cfg["refill_max_rounds"] + 1):
+            remaining_budget = budget - report["candidate_frames"]
+            jobs, weights = plan_refill_round(quota, attempts, remaining_budget,
+                                               cfg["refill_batch_per_map"],
+                                               initial=round_index == 1,
+                                               initial_multiplier=min(2, cfg["visibility_candidate_multiplier"]))
+            if not jobs:
+                report["stop_reason"] = "candidate_budget"
+                break
+            before = len(selected)
+            planned = sum(n for _, n in jobs)
+            round_run = run / "rounds" / f"round-{round_index:05d}"
+            first_id = report["candidate_frames"] + 1
+            report["candidate_frames"] += planned
+            report["editor_processes"] += 1
+            item = {"round": round_index, "jobs": dict(jobs), "planned": planned,
+                    "status": "running"}
+            report["rounds"].append(item)
+            write_json(run / "manifest.json", report)
+            print(f'[KE] REFILL_ROUND_BEGIN round={round_index} accepted={before}/{cfg["count"]} '
+                  f'candidates={planned} budget_left={remaining_budget}', flush=True)
+            batch = _generate_batch(cfg, round_run, raw, executor, planned_jobs=jobs,
+                                    first_image_id=first_id, round_index=round_index,
+                                    target_weights=weights if round_index > 1 else None)
+            batch_records, batch_images, batch_annotations, batch_scenes, batch_maps = batch
+            # All native files were validated. Keep alternatives for residual
+            # reassignment, not just the subset provisionally selected last round.
+            records.extend(batch_records)
+            images.extend(batch_images)
+            annotations.extend(batch_annotations)
+            if scenes.keys() & batch_scenes.keys():
+                raise ValueError("Duplicate scene identity across refill rounds")
+            scenes.update(batch_scenes)
+            for mid, n in jobs:
+                attempts[mid] += n
+            for m in batch_maps:
+                mid = m["map_id"]
+                if mid not in maps:
+                    maps[mid] = m
+                    if m["overview"]:
+                        shutil.copy2(round_run / m["overview"], run / m["overview"])
+                else:
+                    old = maps[mid]
+                    if old["tank_bounds"] != m["tank_bounds"]:
+                        raise ValueError(f"Map bounds changed between refill rounds: {mid}")
+                    old["frames"] += m["frames"]
+                    old["impostor_shadow_skipped_updates"] += m["impostor_shadow_skipped_updates"]
+                    for key in ("render_quality_flags", "impostor_shadow_assets"):
+                        old[key] = sorted(set(old[key]) | set(m[key]))
+            # Journal validated candidates; raw remains untouched on incomplete.
+            with (run / "candidate-pool.jsonl").open("a", encoding="utf-8") as stream:
+                for row in batch_records:
+                    stream.write(json.dumps(row, ensure_ascii=False) + "\n")
+            selected, quota = choose_candidates(records, targets, map_targets)
+            report["validated_candidates"] = len(records)
+            report["render_complete"] = True
+            stalled = stalled + 1 if len(selected) == before else 0
+            item.update(status="validated", accepted=len(selected), gain=len(selected)-before,
+                        deficit=quota["deficit"], deficit_by_map=quota["deficit_by_map"])
+            for m in report["maps"]:
+                m["actual"] = quota["selected_by_map"][m["map_id"]]
+            quota.update(rounds=round_index, candidate_budget=budget,
+                         attempts_by_map=dict(attempts), stalled_rounds=stalled)
+            write_json(run / "visibility-quotas.json", quota)
+            write_json(run / "manifest.json", report)
+            print(f'[KE] REFILL_ROUND_END round={round_index} accepted={len(selected)}/{cfg["count"]} '
+                  f'gain={len(selected)-before} candidates_total={len(records)} '
+                  f'deficit={json.dumps(quota["deficit"])} '
+                  f'map_deficit={json.dumps(quota["deficit_by_map"])}', flush=True)
+            if quota["complete"]:
+                report["stop_reason"] = "exact_target"
+                break
+            if report["candidate_frames"] >= budget:
+                report["stop_reason"] = "candidate_budget"
+                break
+            if stalled >= cfg["refill_stall_rounds"]:
+                report["stop_reason"] = "stall"
+                break
+        else:
+            report["stop_reason"] = "round_limit"
+        if not quota["complete"]:
+            report["status"] = "INCOMPLETE"
+            quota.update(status="INCOMPLETE", stop_reason=report["stop_reason"])
+            write_json(run / "visibility-quotas.json", quota)
+            raise ValueError("Не набраны квоты видимости/карт: " + json.dumps(quota["deficit"]) +
+                             "; дефицит карт: " + json.dumps(quota["deficit_by_map"]) +
+                             f'; причина: {report["stop_reason"]}; отчёт: {run / "visibility-quotas.json"}')
+        quota.update(status="COMPLETE", stop_reason="exact_target")
+        result = export_candidates(cfg, run, raw,
+                                   (records, images, annotations, scenes, list(maps.values())),
+                                   selection=(selected, quota), editor_processes=report["editor_processes"])
+        report.update(status="COMPLETE", complete=True)
+        for m in report["maps"]:
+            m["status"] = "verified"
+        write_json(run / "manifest.json", report)
+        print(f'[KE] REFILL_OK frames={result["images"]} maps={result["maps"]} '
+              f'rounds={report["editor_processes"]}', flush=True)
+        return result
+    except Exception as exc:
+        if report["status"] != "INCOMPLETE":
+            report["status"] = "FAILED"
+        report["error"] = str(exc)
+        write_json(run / "manifest.json", report)
+        raise

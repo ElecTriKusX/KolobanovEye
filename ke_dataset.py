@@ -39,7 +39,8 @@ def run_dataset(config, dataset_root=DATASET, *, replace_raw=False, executor=Non
         rendered = False
         if manifest.is_file():
             try:
-                rendered = bool(json.loads(manifest.read_text(encoding="utf-8")).get("render_complete"))
+                state = json.loads(manifest.read_text(encoding="utf-8"))
+                rendered = bool(state.get("render_complete") or state.get("preserve_staging"))
             except (OSError, ValueError):
                 pass
         if staging.exists():
@@ -64,9 +65,9 @@ def run_dataset(config, dataset_root=DATASET, *, replace_raw=False, executor=Non
     if moved_old:
         shutil.rmtree(backup)
     # Only after raw is safely published are the native journals redundant.
-    for journal in (work / "journals").glob("*.jsonl"):
+    for journal in work.glob("**/journals/*.jsonl"):
         journal.unlink()
-    print(f'[KE] DATASET_RAW_OK frames={result["images"]} maps={result["maps"]} instances=1 output={raw}', flush=True)
+    print(f'[KE] DATASET_RAW_OK frames={result["images"]} maps={result["maps"]} instances={result["editor_processes"]} output={raw}', flush=True)
     return result
 
 

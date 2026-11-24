@@ -25,9 +25,10 @@ DEFAULTS = {
     'screen_position_weights': DEFAULT_WEIGHTS.copy(), 'capture_visibility_masks': False,
     'enforce_visibility_quotas': False, 'visibility_weights': DEFAULT_VISIBILITY_WEIGHTS.copy(),
     'visibility_candidate_multiplier': 5, 'search_occlusion': False,
+    'refill_batch_per_map': 256, 'refill_stall_rounds': 3, 'refill_max_rounds': 10000,
     'keep_open': False, 'render_debug': False, 'capture_last_clip': False, 'clipmap_feedback': 'software', 'timeout': 360,
 }
-INTS = {'count', 'seed', 'width', 'height', 'timeout', 'placement_attempts', 'camera_attempts', 'frames_per_position', 'min_warmup_renders', 'tank_map_resolution', 'visibility_candidate_multiplier'}
+INTS = {'count', 'seed', 'width', 'height', 'timeout', 'placement_attempts', 'camera_attempts', 'frames_per_position', 'min_warmup_renders', 'tank_map_resolution', 'visibility_candidate_multiplier', 'refill_batch_per_map', 'refill_stall_rounds', 'refill_max_rounds'}
 FLOATS = {'turret_yaw_min', 'turret_yaw_max', 'gun_pitch_min', 'gun_pitch_max', 'fov', 'tank_x', 'tank_z', 'tank_yaw', 'ground_offset', 'camera_clearance',
           'minimum_ground_y', 'distance_min', 'distance_max', 'elevation_min', 'elevation_max', 'placement_radius', 'max_height_range', 'camera_height_min', 'camera_height_max', 'map_margin_percent'}
 
@@ -79,6 +80,11 @@ def validate_config(raw):
             raise ValueError(f'{key}: требуется целое число')
     if not 1 <= c['visibility_candidate_multiplier'] <= 20:
         raise ValueError('visibility_candidate_multiplier: 1–20')
+    for key, limit in (('refill_batch_per_map', 1000), ('refill_stall_rounds', 100), ('refill_max_rounds', 10000)):
+        if not 1 <= c[key] <= limit:
+            raise ValueError(f'{key}: 1–{limit}')
+    if c['enforce_visibility_quotas'] and c['keep_open']:
+        raise ValueError('Для многораундового добора отключите «Оставить редактор открытым»')
     for key in FLOATS:
         if isinstance(c[key], bool) or not isinstance(c[key], (int, float)) or not math.isfinite(c[key]):
             raise ValueError(f'{key}: требуется конечное число')
@@ -86,8 +92,9 @@ def validate_config(raw):
         raise ValueError('min_warmup_renders: требуется целое число 8–64')
     if not 1 <= c['frames_per_position'] <= 1000:
         raise ValueError('Кадров на позицию: 1–1000')
-    if not 1 <= c['count'] <= 1000 or not 64 <= c['width'] <= 4096 or not 64 <= c['height'] <= 4096:
-        raise ValueError('Количество кадров: 1–1000; стороны изображения: 64–4096')
+    count_limit = 250000 if c['enforce_visibility_quotas'] else 1000
+    if not 1 <= c['count'] <= count_limit or not 64 <= c['width'] <= 4096 or not 64 <= c['height'] <= 4096:
+        raise ValueError(f'Количество кадров: 1–{count_limit}; стороны изображения: 64–4096')
     if not 15 <= c['fov'] <= 100 or not 0 <= c['camera_clearance'] <= 100 or c['timeout'] <= 0:
         raise ValueError('FOV: 15–100; высота камеры: 0–100; таймаут положительный')
     if any(abs(c[k]) > 100000 for k in ('tank_x', 'tank_z', 'tank_yaw', 'ground_offset', 'minimum_ground_y')):
