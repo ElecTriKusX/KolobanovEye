@@ -223,7 +223,8 @@ def explain_batch_failure(run: Path, log: str, source: Path) -> str:
         line.strip() for line in native_errors if (
             "ooz: decode failed" in line.lower() or
             "Oodle read error" in line or
-            "Land dump load error" in line
+            "Land dump load error" in line or
+            "[KE] VISIBILITY_FAIL" in line
         )
     ]
     unique = list(dict.fromkeys(errors))
@@ -405,11 +406,13 @@ def finalize(cfg, run, raw, tasks):
     quota_report = None
     if cfg["enforce_visibility_quotas"]:
         targets = visibility_targets(cfg["count"], cfg["visibility_weights"])
-        selected, quota_report = choose_candidates(records, targets)
+        map_targets = dict(plan_equal_allocation(cfg["count"], [t["map_id"] for t in tasks]))
+        selected, quota_report = choose_candidates(records, targets, map_targets)
         write_json(run / "visibility-quotas.json", quota_report)
         print("[KE] VISIBILITY_QUOTAS " + json.dumps(quota_report, ensure_ascii=False), flush=True)
         if not quota_report["complete"]:
-            raise ValueError("Не набраны квоты видимости: " + json.dumps(quota_report["deficit"]) +
+            raise ValueError("Не набраны квоты видимости/карт: " + json.dumps(quota_report["deficit"]) +
+                             "; дефицит карт: " + json.dumps(quota_report["deficit_by_map"]) +
                              f"; отчёт: {run / 'visibility-quotas.json'}")
         # Keep stable candidate filenames and image IDs. COCO IDs need not be contiguous.
         # Drop RGB and both masks only AFTER complete candidate validation and exact selection.

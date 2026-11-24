@@ -231,6 +231,28 @@ class SingleEditorTests(unittest.TestCase):
         report, = (self.dataset / "runs").glob("*/visibility-quotas.json")
         self.assertEqual(json.loads(report.read_text())["deficit"]["open"], 2)
 
+    def test_quota_selection_balances_maps_in_integrated_export(self):
+        cfg = {**self.config, "count": 4,
+               "capture_visibility_masks": True, "enforce_visibility_quotas": True,
+               "visibility_candidate_multiplier": 2,
+               "visibility_weights": {"open": 0, "light": 0, "moderate": 1, "heavy": 0}}
+        result = run_dataset(cfg, self.dataset, executor=fake_editor)
+        report = result["visibility_quotas"]
+        self.assertEqual(report["selected_by_map"], {m: 2 for m in cfg["map_ids"]})
+        self.assertEqual(report["deficit_by_map"], {m: 0 for m in cfg["map_ids"]})
+        coco = json.loads((self.dataset / "raw/annotations/instances.json").read_text())
+        self.assertEqual(len(coco["images"]), 4)
+        self.assertEqual({m: sum(i["map_id"] == m for i in coco["images"])
+                          for m in cfg["map_ids"]}, report["selected_by_map"])
+
+    def test_visibility_failure_includes_native_reason(self):
+        run = self.root / "failed-visibility"
+        run.mkdir()
+        debug = run / "debug"
+        debug.write_text("[KE] VISIBILITY_FAIL reason=depth_pass_mismatch missing=90 amodal=200\n", encoding="utf-8")
+        error = explain_batch_failure(run, "[KE] FAIL VISIBILITY: Same-camera mask capture failed", debug)
+        self.assertIn("reason=depth_pass_mismatch", error)
+
     def test_replace_preserves_old_raw_when_batch_fails(self):
         run_dataset(self.config, self.dataset, executor=fake_editor)
         old_manifest = (self.dataset / "raw" / "manifest.json").read_bytes()
