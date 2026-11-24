@@ -118,3 +118,37 @@ class ObjectInventoryTests(unittest.TestCase):
                 check_scan_completion(run,0,1)
             with self.assertRaisesRegex(ValueError,"exit=13"):
                 check_scan_completion(run,13,1)
+
+
+    def test_offline_recovery_checks_native_counts_and_preserves_manifest(self):
+        from tools.ke_objects import recover_run
+        from tools.ke_review import write_rgb_png
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            run=Path(tmp)
+            for name in ("capture","maps","avg_finland"):
+                (run/name).mkdir()
+            (run/"capture"/"000.blk").write_text('map_id:t="levels/avg_finland.bin"\n',encoding="ascii")
+            (run/"avg_finland"/"objects-native.tsv").write_text(
+                "KEOBJECTS\t1\t0\t128\t0\t128\t1\n"+
+                row("ri_tm",1,(10,0,10),(8,0,8),(12,2,12),"house")+
+                "T\t0\t0\t1\t1\nEND\t1\t1\t0\n",encoding="ascii")
+            write_rgb_png(run/"maps"/"avg_finland.bin-tank.png",256,256,bytes([20,30,40])*256*256)
+            (run/"manifest.json").write_text('{"status":"FAILED"}',encoding="ascii")
+            native=run/".logs"/"daEditor3x-dev.exe-test"/"debug"
+            native.parent.mkdir(parents=True)
+            msg=("1.0 [D] CON: [KE] MAP_BEGIN D:/game/levels/avg_finland.bin\n"
+                 "1.1 [D] CON: [KE] OBJECT_SCAN_OK tiles=1 objects=1 invalid=0\n"
+                 "1.2 [D] CON: [KE] MAP_BATCH_OK maps=1\n"
+                 "1.3 [F] C0000005\n")
+            native.write_text(msg.replace("objects=1","objects=2"),encoding="ascii")
+            with self.assertRaisesRegex(ValueError,"count mismatch"):
+                recover_run(run,256)
+            self.assertFalse((run/"recovery-manifest.json").exists())
+            native.write_text(msg,encoding="ascii")
+            recover_run(run,256)
+            self.assertEqual(json.loads((run/"manifest.json").read_text())["status"],"FAILED")
+            report=json.loads((run/"recovery-manifest.json").read_text())
+            self.assertEqual(report["status"],"RECOVERED_OFFLINE")
+            self.assertEqual(report["editor_processes_started"],0)
+            self.assertTrue((run/"avg_finland"/"groups-map.png").is_file())

@@ -33,3 +33,18 @@ groups-map.png, spatial-index.json, objects-report.json. Оригинальны�
 До Windows-проверки не подключать к выбору позиций. Следующие шаги 2.7:
 доказать покрытие RI и дополнить статическую сцену, проверять объём танка,
 подбирать позиции около объектов и затем оценивать видимость.
+
+## Windows test 20261124T214621Z-7c0565d4
+
+Все четыре OBJECT_SCAN_OK и MAP_BATCH_OK maps=4: Factory 40 619, Town
+55 244, Falklands 45 951, Finland 24 618; всего 166 432, invalid=0.
+Все четыре TANK_MAP_RENDER saved=1. В 42.74 с после exit no и clearing
+bin_scene_view — C0000005 в riGenJobs: LandRayTracerSoA4::heightQuery,
+AcesScene::custom_get_height, RendInstGenData::generateCell. Pinned
+AcesScene::clear удаляет lmeshMgr до clearRIGen, а деструктор обнуляет
+self до clear. Добавлено ожидание isRIGenPrepareFinished до удаления
+ландшафта и перенос обнуления self после clear; реальная Windows-проверка
+ещё нужна. Не меняем алгоритм сканирования и не игнорируем native crash.
+Офлайн: python -m tools.ke_objects --recover-run <run-directory> (сверяет
+native markers, END, число объектов/тайлов и PNG, сохраняет отдельный
+recovery-manifest.json; исходный FAILED manifest остаётся).

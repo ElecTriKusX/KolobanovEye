@@ -319,17 +319,75 @@ def run_scan(dagor,game,output,selected,resolution=1024,timeout=1800,executor=No
     return out
 
 
+def recover_run(run, resolution=1024):
+    """Build reports from completed native scans without starting the editor.
+
+    Explicit offline recovery only: an editor exit failure remains a failure.
+    Require one completed scan per capture, matching map order, tile/object
+    counts and complete native TSV footers. Never label teardown as successful.
+    """
+    run = Path(run).resolve()
+    captures = sorted((run / "capture").glob("*.blk"))
+    mids = []
+    for capture in captures:
+        match = re.search(r'^map_id:t="(levels/avg_[a-zA-Z0-9_-]+\.bin)"$', capture.read_text(encoding="ascii"), re.M)
+        if not match:
+            raise ValueError(f"Invalid capture map id: {capture}")
+        mids.append(match.group(1))
+    if not mids or len(set(mids)) != len(mids):
+        raise ValueError("Missing or duplicate recovery maps")
+    log, source = read_scan_log(run)
+    lines = log.splitlines()
+    begins = [i for i,line in enumerate(lines) if line.startswith("[KE] MAP_BEGIN ")]
+    if (len(begins) != len(mids) or
+            [line for line in lines if line.startswith("[KE] MAP_BATCH_OK ")] != [f"[KE] MAP_BATCH_OK maps={len(mids)}"] or
+            any("[KE] FAIL " in line for line in lines)):
+        raise ValueError("Recovery requires a completed native map batch")
+    for i,mid in enumerate(mids):
+        block = lines[begins[i]:begins[i+1] if i+1<len(begins) else len(lines)]
+        if not block[0].replace("\\","/").endswith("/"+mid):
+            raise ValueError("Recovery map order mismatch")
+        matches = [re.fullmatch(r"\[KE\] OBJECT_SCAN_OK tiles=(\d+) objects=(\d+) invalid=(\d+)", line) for line in block]
+        matches = [match for match in matches if match]
+        if len(matches)!=1:
+            raise ValueError(f"Missing or duplicate scan success: {mid}")
+        folder = run/Path(mid).stem
+        _, objects, tiles, invalid = read_inventory(folder/"objects-native.tsv")
+        if tuple(map(int,matches[0].groups())) != (len(tiles),len(objects),invalid):
+            raise ValueError(f"Inventory/log count mismatch: {mid}")
+        overview = run/"maps"/(Path(mid).name+"-tank.png")
+        if load_png(overview)[:2] != (resolution,resolution):
+            raise ValueError(f"Recovery overview resolution mismatch: {mid}")
+    reports = {}
+    for mid in mids:
+        reports[mid] = analyze_map(run/Path(mid).stem,run/"maps"/(Path(mid).name+"-tank.png"),resolution)
+    report = {"mode":"objects_only","status":"RECOVERED_OFFLINE","native_shutdown":"not_certified",
+              "source_debug":str(source),"maps":reports,"editor_processes_started":0}
+    # Keep the original failed manifest and raw inventory for investigation.
+    write_json(run/"recovery-manifest.json",report)
+    print(f"[KE] OBJECT_ANALYSIS_RECOVERED {run}",flush=True)
+    return run
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dagor",required=True)
-    parser.add_argument("--game",required=True)
-    parser.add_argument("--output",required=True)
-    parser.add_argument("--map",dest="maps",action="append",required=True)
+    parser.add_argument("--recover-run",type=Path)
+    parser.add_argument("--dagor")
+    parser.add_argument("--game")
+    parser.add_argument("--output")
+    parser.add_argument("--map",dest="maps",action="append")
     parser.add_argument("--resolution",type=int,default=1024)
     parser.add_argument("--timeout",type=int,default=1800)
     args=parser.parse_args()
     try:
-        run_scan(args.dagor,args.game,args.output,args.maps,args.resolution,args.timeout)
+        if args.recover_run:
+            if any((args.dagor,args.game,args.output,args.maps)):
+                parser.error("--recover-run must be used without native scan arguments")
+            recover_run(args.recover_run,args.resolution)
+        else:
+            if not all((args.dagor,args.game,args.output,args.maps)):
+                parser.error("Native scan requires --dagor, --game, --output and --map")
+            run_scan(args.dagor,args.game,args.output,args.maps,args.resolution,args.timeout)
     except (OSError,ValueError,subprocess.SubprocessError) as exc:
         parser.exit(1,f"[KE] ERROR OBJECT_ANALYSIS: {exc}\n")
 
