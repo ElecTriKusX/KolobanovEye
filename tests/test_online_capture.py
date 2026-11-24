@@ -12,12 +12,13 @@ from tests import test_single_editor
 
 
 class FakeOnlineEditor:
-    def __init__(self, cmd, oracle, corrupt=False, reject_indices=(), placement_slots=()):
+    def __init__(self, cmd, oracle, corrupt=False, reject_indices=(), placement_slots=(), stability_slots=()):
         self.run = Path(next(s.split(":", 1)[1] for s in cmd if str(s).startswith("-rootdir:")))
         self.oracle = oracle
         self.corrupt = corrupt
         self.reject_indices = set(reject_indices)
         self.placement_slots = set(placement_slots)
+        self.stability_slots = set(stability_slots)
         self.slots = 0
         self.frames = 0
         self.tasks = 0
@@ -97,6 +98,21 @@ class FakeOnlineEditor:
                     break
                 slot = self.slots
                 self.slots += 1
+                if slot in self.stability_slots:
+                    blk = (f'level:t="{mid}"\nmap_id:t="{mid}"\n'
+                           'stability_rejection:t="frame_stability_timeout"\n'
+                           f'composition_index:i={idx // int(value("frames_per_position"))}\n'
+                           'warmup_passes:i=721\nwarmup_elapsed_ms:i=20005\nstable_checks:i=0\n'
+                           'stability_mean_delta:r=0.9236\nstability_max_delta:r=30\n'
+                           'pending_textures:i=0\nresources_ready:b=yes\n')
+                    payload = blk.encode("utf-8")
+                    stream.write(f"KEFRAME {idx} {len(payload)}\n".encode("ascii") + payload)
+                    stream.flush()
+                    log += ["[KE] FRAME_STABILITY_FINAL enabled=1 stable=0",
+                            f"[KE] FRAME_REJECT index={idx} reason=frame_stability_timeout"]
+                    rendered += 1
+                    (feedback / f"ready_{idx}.txt").write_bytes(b"ok\n")
+                    continue
                 if slot in self.placement_slots:
                     blk = (f'level:t="{mid}"\nmap_id:t="{mid}"\n'
                            'placement_rejection:t="heightmap_candidates_exhausted"\n'
@@ -284,4 +300,35 @@ class OnlineCaptureTests(unittest.TestCase):
             run_dataset(self.config_for(count=2, visibility_candidate_multiplier=2), self.dataset, executor=execute)
         self.assertEqual(processes[0].frames, 0)
         self.assertEqual(processes[0].slots, 4)
+        self.assertFalse((self.dataset / "raw").exists())
+
+
+    def test_stability_timeout_refills_without_rgb_or_mask(self):
+        processes = []
+        def execute(cmd):
+            p = FakeOnlineEditor(cmd, lambda mid, target, i: ("open", "light", "moderate", "heavy")[target],
+                                 stability_slots={1})
+            processes.append(p)
+            return p
+        result = run_dataset(self.config_for(wait_frame_stability=True), self.dataset, executor=execute)
+        self.assertEqual(len(processes), 1)
+        self.assertEqual(processes[0].slots, 5)
+        self.assertEqual(result["images"], 4)
+        self.assertEqual(result["visibility_quotas"]["stability_rejections"], 1)
+        self.assertEqual(result["visibility_quotas"]["attempted_candidates"], 5)
+        self.assertEqual(len(list((self.dataset / "raw/images").glob("*.png"))), 4)
+        run, = (self.dataset / "runs").iterdir()
+        rejection = json.loads((run / "rejected-frames.jsonl").read_text())
+        self.assertEqual(rejection["reason"], "frame_stability_timeout")
+        self.assertEqual(rejection["warmup_passes"], 721)
+
+    def test_systematic_stability_failure_aborts(self):
+        processes = []
+        def execute(cmd):
+            p = FakeOnlineEditor(cmd, lambda *args: "open", stability_slots=range(100))
+            processes.append(p)
+            return p
+        with self.assertRaisesRegex(ValueError, "systematic frame instability"):
+            run_dataset(self.config_for(wait_frame_stability=True), self.dataset, executor=execute)
+        self.assertEqual(processes[0].slots, 3)
         self.assertFalse((self.dataset / "raw").exists())

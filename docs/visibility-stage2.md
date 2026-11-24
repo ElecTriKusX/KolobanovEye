@@ -187,3 +187,17 @@ slots in the failed composition, no RGB/masks, normal feedback and early
 stop. Count each skipped slot toward bounded scheduler attempts, separately
 from expensive renders and depth rejection rate. Terrain thresholds and
 other fatal errors unchanged. Real Windows test remains required.
+
+### Windows test 25.11.2026 — temporal stability timeout
+
+Run run-20261124T195352Z-e2abde45: 146 provisional selections, 246 RGB
+renders, 242 measured masks, 4 depth rejects, 8 placement slots rejected,
+10 map tasks / 1 process. Finland task 10 index 37: 721 warm-up passes,
+20.005 s, pending=worker_busy=map_loading=0, sky/lighting ready, zero stable
+checks. Online-only explicit frame_stability_timeout rejects an isolated
+fully loaded unstable shot without RGB/masks; unchanged streaming timeout
+for incomplete resources. Three consecutive instability failures or >10%
+after >=30 warmups abort. Thresholds unchanged. Native Windows test pending.
+Measured bin pool: open 155, light 27, moderate 22, heavy 17, too occluded 21.
+Falklands 19 validated masks (17 open, 1 light, 1 too occluded). Stage 2.7
+position search is important for efficiency; no change to strict quotas.

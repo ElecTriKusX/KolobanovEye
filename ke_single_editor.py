@@ -5,6 +5,7 @@ The technical run contains a single editor workspace, capture scripts, plans,
 logs and map overviews, but never duplicate RGB frames or COCO files.
 """
 import hashlib
+import math
 import json
 import os
 import random
@@ -293,14 +294,18 @@ def extract_map_logs(log, tasks, *, stability=True):
             raise ValueError(f'Нет SEQUENCE_OK для {task["map_id"]}')
         rejected = task.get("rejected_indices", set())
         placement = task.get("placement_rejected_indices", set())
+        unstable = task.get("stability_rejected_indices", set())
+        native_unstable = [int(n) for n in re.findall(r"\[KE\] FRAME_REJECT index=(\d+) reason=frame_stability_timeout", section)]
         native_rejected = [int(n) for n in re.findall(r"\[KE\] FRAME_REJECT index=(\d+) reason=depth_pass_mismatch", section)]
         native_placement = [int(n) for n in re.findall(r"\[KE\] FRAME_REJECT index=(\d+) reason=heightmap_candidates_exhausted", section)]
         if (len(native_rejected) != len(rejected) or set(native_rejected) != rejected or
                 len(native_placement) != len(placement) or set(native_placement) != placement or
-                rejected & placement or
-                section.count("[KE] FRAME_OK ") != task["count"] - len(rejected) - len(placement)):
+                len(native_unstable) != len(unstable) or set(native_unstable) != unstable or
+                rejected & placement or rejected & unstable or placement & unstable or
+                section.count("[KE] FRAME_OK ") != task["count"] - len(rejected) - len(placement) - len(unstable)):
             raise ValueError(f'Не получены все кадры карты {task["map_id"]}')
-        if stability and section.count("[KE] FRAME_STABILITY_FINAL enabled=1 stable=1") != task["count"] - len(placement):
+        if stability and (section.count("[KE] FRAME_STABILITY_FINAL enabled=1 stable=1") != task["count"] - len(placement) - len(unstable) or
+                          section.count("[KE] FRAME_STABILITY_FINAL enabled=1 stable=0") != len(unstable)):
             raise ValueError(f'Нет подтверждения стабильности {task["map_id"]}')
         markers = ("MODEL_OK", "WATER_GROUND_FILTER")
         if task["count"] > len(placement):
@@ -310,6 +315,43 @@ def extract_map_logs(log, tasks, *, stability=True):
                 raise ValueError(f'Отсутствует {marker}: {task["map_id"]}')
         result.append(section)
     return result
+
+
+def read_stability_rejection(cfg, raw, task, idx, blk):
+    if not re.search(r"^stability_rejection:", blk, re.M):
+        return None
+    if not cfg["enforce_visibility_quotas"] or cfg["visibility_quota_mode"] != "online" or not cfg["wait_frame_stability"]:
+        raise ValueError("Unexpected stability rejection outside online stability mode")
+    def field(name, kind, pattern):
+        hits = re.findall(rf"^{name}:{kind}=({pattern})\s*$", blk, re.M)
+        if len(hits) != 1:
+            raise ValueError(f"Invalid stability rejection field: {name}")
+        return hits[0]
+    if field("stability_rejection", "t", '"[^"\r\n]+"') != '"frame_stability_timeout"':
+        raise ValueError("Unknown stability rejection")
+    if field("map_id", "t", '"[^"\r\n]+"') != f'"{task["map_id"]}"':
+        raise ValueError("Stability rejection map mismatch")
+    if int(field("composition_index", "i", r"\d+")) != idx // task["frames_per_position"]:
+        raise ValueError("Stability rejection composition mismatch")
+    passes = int(field("warmup_passes", "i", r"\d+"))
+    elapsed = int(field("warmup_elapsed_ms", "i", r"\d+"))
+    checks = int(field("stable_checks", "i", r"\d+"))
+    mean = float(field("stability_mean_delta", "r", r"[0-9.eE+-]+"))
+    maximum = float(field("stability_max_delta", "r", r"[0-9.eE+-]+"))
+    if (passes < cfg["min_warmup_renders"] or elapsed < 20000 or not 0 <= checks < 3 or
+            not math.isfinite(mean) or not math.isfinite(maximum) or not 0 <= mean <= maximum <= 255 or
+            field("pending_textures", "i", r"\d+") != "0" or
+            field("resources_ready", "b", "yes|true") not in ("yes", "true")):
+        raise ValueError("Stability rejection without settled resources and verified timeout")
+    if re.search(r"^(placement_rejection|visibility_method|visibility_rejection):", blk, re.M):
+        raise ValueError("Stability rejection contains conflicting metadata")
+    image = task["outputs"][idx]
+    if image.exists() or any((raw / "masks" / kind / image.name).exists() for kind in ("amodal", "visible")):
+        raise ValueError("Stability rejection unexpectedly has published frame files")
+    return {"image_id": int(image.stem), "map_id": task["map_id"], "frame_index": idx,
+            "reason": "frame_stability_timeout", "warmup_passes": passes, "elapsed_ms": elapsed,
+            "stable_checks": checks, "mean_delta": mean, "max_delta": maximum,
+            "dagor_frame_metadata_blk": blk}
 
 
 def read_placement_rejection(cfg, raw, task, idx, blk):
@@ -437,7 +479,7 @@ def collect_frame(cfg, run, raw, task, idx, blk):
     return record, image, coco_annotation
 
 
-def collect_candidates(cfg, run, raw, tasks, *, prevalidated=None, rejected=None, placement_rejected=None):
+def collect_candidates(cfg, run, raw, tasks, *, prevalidated=None, rejected=None, placement_rejected=None, stability_rejected=None):
     """Validate one native batch once; do not select or delete any files."""
     log, source = read_editor_log(run)
     if f'[KE] MAP_BATCH_OK maps={len(tasks)}' not in log:
@@ -460,7 +502,7 @@ def collect_candidates(cfg, run, raw, tasks, *, prevalidated=None, rejected=None
             if bounds["status"] != "available":
                 raise ValueError(f'Нет координат танкового поля: {task["map_id"]}')
             verify_png(overview, cfg["tank_map_resolution"], cfg["tank_map_resolution"])
-        maps.append({"map_id": task["map_id"], "frames": task["count"] - len(task.get("rejected_indices", ())) - len(task.get("placement_rejected_indices", ())), "tank_bounds": bounds,
+        maps.append({"map_id": task["map_id"], "frames": task["count"] - len(task.get("rejected_indices", ())) - len(task.get("placement_rejected_indices", ())) - len(task.get("stability_rejected_indices", ())), "tank_bounds": bounds,
                      "overview": f"maps/{overview_name}" if cfg["capture_tank_map"] else None,
                      "render_quality_flags": (["impostor_preshadow_incomplete"]
                                               if quality["skipped_updates"] else []),
@@ -471,6 +513,10 @@ def collect_candidates(cfg, run, raw, tasks, *, prevalidated=None, rejected=None
                   f'impostor_shadow_skipped={quality["skipped_updates"]} '
                   f'assets={len(quality["assets"])}; visual review required', flush=True)
         for idx, image_path in enumerate(task["outputs"]):
+            if idx in task.get("stability_rejected_indices", ()):
+                if stability_rejected is None or int(image_path.stem) not in stability_rejected or stability_rejected[int(image_path.stem)] != read_stability_rejection(cfg, raw, task, idx, journal[idx]):
+                    raise ValueError("Stability rejection journal changed after online validation")
+                continue
             if idx in task.get("placement_rejected_indices", ()):
                 if placement_rejected is None or int(image_path.stem) not in placement_rejected or placement_rejected[int(image_path.stem)] != read_placement_rejection(cfg, raw, task, idx, journal[idx]):
                     raise ValueError("Placement rejection journal changed after online validation")
