@@ -292,10 +292,16 @@ def editor_failure(out, detail):
                         key=lambda p: p.stat().st_mtime_ns)
     for fatal in reversed(fatal_logs):
         raw = fatal.read_text(encoding="utf-8", errors="replace")
-        if "FATAL ERROR:" not in raw and "assert failed" not in raw:
+        access_violation = "C0000005" in raw.upper()
+        if not access_violation and "FATAL ERROR:" not in raw and "assert failed" not in raw:
             continue
         dst = re.search(r"Invalid update_sub_region dst:[^\r\n]*", raw)
-        if "unitedVdata<rendInst> OOM" in raw:
+        if access_violation:
+            reason = re.search(r"Exception details:[^\r\n]*", raw)
+            description = reason.group(0) if reason else "Windows access violation 0xC0000005"
+            if "TraverseRayCell" in raw and "traceRayRendInstsNormalized" in raw:
+                description += "; RendInst collision ray traversal (occlusion proxy)"
+        elif "unitedVdata<rendInst> OOM" in raw:
             description = ("RendInst united vertex/index buffer pool exhausted "
                            "(unitedVdata<rendInst> OOM; not necessarily total GPU VRAM)")
             context = re.search(r"---fatal context---\s*([^\r\n]+)", raw)
@@ -324,7 +330,8 @@ def editor_failure(out, detail):
                         completed_frames += 1
             if last_task:
                 stage = f" Last map task: {last_task}. Completed RGB frames: {completed_frames}."
-        return f"DaEditor native fatal assertion: {description}.{stage} Full stack: {fatal}"
+        kind = "access violation" if access_violation else "fatal assertion"
+        return f"DaEditor native {kind}: {description}.{stage} Full stack: {fatal}"
     return f"{detail} See engine logs in {out / '.logs'}."
 
 
@@ -881,6 +888,8 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
     install_visibility_capture(dagor)
     from tools.ke_dagor_online import install_online_feedback
     install_online_feedback(capture_cpp)
+    from tools.ke_ri_trace_props import install_ri_trace_props
+    install_ri_trace_props(dagor / "prog/gameLibs/rendInst/rendInstGenCollision.cpp")
     guard_impostor_shadow_atlas_slices(dagor)
     if with_ooz:
         enable_failed_ooz_stream_capture(dagor)

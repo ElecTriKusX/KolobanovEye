@@ -1,5 +1,13 @@
 # KolobanovEye 2.0. Состояние по полному ТЗ
 
+## 24.11.2026 — первый Windows-тест 2.6.b
+
+Один кадр прошёл RGB/маски/online feedback. Второй кадр аварийно завершил
+DaEditor с C0000005 в RendInst ray traversal, строка 966. Добавлен кандидат
+исправления отсутствующих collision properties в tools build и улучшена
+диагностика native access violation. Приёмка 2.6.b остаётся открытой.
+Подробности: [visibility-stage2.md](visibility-stage2.md).
+
 ## Этап 2.6.b — online feedback
 
 Добавлен экспериментальный однопроцессный протокол: задачи и решения по
