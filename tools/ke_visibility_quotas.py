@@ -127,6 +127,29 @@ def choose_candidates(records, targets, map_targets=None):
             residual[v][u] += amount
             v = u
 
+    # A new unit of capacity on bin -> map increases the maximum flow iff
+    # its tail is reachable from source and its head can reach sink in the
+    # current residual graph. This includes exchanges across already filled
+    # maps/bins, not only the cells with two nonzero marginal deficits.
+    def reachable(start, reverse=False):
+        seen_nodes = {start}
+        todo = deque([start])
+        while todo:
+            u = todo.popleft()
+            for v in residual[u]:
+                cap = residual[v][u] if reverse else residual[u][v]
+                if cap > 0 and v not in seen_nodes:
+                    seen_nodes.add(v)
+                    todo.append(v)
+        return seen_nodes
+
+    from_source = reachable(source)
+    to_sink = reachable(sink, reverse=True)
+    useful = {mid: [name for name in VISIBILITY_BINS
+                    if ("bin", name) in from_source and ("map", mid) in to_sink
+                    and len(by_bin[name][mid]) < min(targets[name], map_targets[mid])]
+              for mid in maps}
+
     selected = set()
     actual = Counter()
     per_map = Counter()
@@ -159,5 +182,6 @@ def choose_candidates(records, targets, map_targets=None):
         "deficit_by_map": map_deficits,
         "available_by_map_and_bin": capacity,
         "selected_by_map_and_bin": matrix,
+        "useful_next_bins_by_map": useful,
     }
     return selected, report
