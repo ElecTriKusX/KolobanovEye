@@ -16,6 +16,7 @@ FIELDS = [
  ('dagor', 'Папка Dagor Engine'), ('game', 'Папка War Thunder'), ('output', 'Родительская папка результатов'),
  ('count', 'Количество кадров (итог)'), ('frames_per_position', 'Кадров на позицию'), ('seed', 'Seed'),
  ('width', 'Ширина'), ('height', 'Высота'), ('fov', 'Горизонтальный FOV, °'),
+ ('smart_placement_cache', 'Кэш умной расстановки (2.7)'),
  ('placement_mode', 'Где размещать танк'), ('map_margin_percent', 'Отступ от краёв карты, %'),
  ('tank_x', 'Центр поиска X'), ('tank_z', 'Центр поиска Z'), ('tank_yaw', 'Ориентация корпуса, °'),
  ('turret_yaw_min', 'Башня: от'), ('turret_yaw_max', 'Башня: до'),
@@ -75,7 +76,7 @@ class App:
         groups = [
             ('Пути', [('dagor',), ('game',)]),
             ('Кадры', [('count',), ('frames_per_position',), ('seed',), ('width','height','Размер, пиксели: ширина / высота'), ('fov',)]),
-            ('Танк и место', [('placement_mode',), ('map_margin_percent',), ('tank_x','tank_z','Центр поиска: X / Z'), ('tank_yaw',), ('turret_yaw_min','turret_yaw_max','Башня относительно корпуса, °'), ('gun_pitch_min','gun_pitch_max','Наклон орудия, °'), ('placement_radius',), ('minimum_ground_y',), ('max_height_range',), ('ground_offset',)]),
+            ('Танк и место', [('placement_mode',), ('smart_placement_cache',), ('map_margin_percent',), ('tank_x','tank_z','Центр поиска: X / Z'), ('tank_yaw',), ('turret_yaw_min','turret_yaw_max','Башня относительно корпуса, °'), ('gun_pitch_min','gun_pitch_max','Наклон орудия, °'), ('placement_radius',), ('minimum_ground_y',), ('max_height_range',), ('ground_offset',)]),
             ('Камера', [('distance_min','distance_max','Дистанция по горизонтали: от / до'),
                         ('camera_height_min','camera_height_max','Высота над рельефом: от / до'), ('camera_clearance',)]),
             ('Служебные параметры', [('camera_attempts',), ('placement_attempts',), ('clipmap_feedback',), ('timeout',), ('min_warmup_renders',), ('visibility_candidate_multiplier',)])]
@@ -89,7 +90,7 @@ class App:
                 widget = ttk.Entry(parent, textvariable=self.values[key], width=12)
             widget.pack(side='left', fill='x', expand=True)
             self.widgets[key] = widget
-            if key in ('dagor', 'game', 'output'):
+            if key in ('dagor', 'game', 'output', 'smart_placement_cache'):
                 ttk.Button(parent, text='…', width=3, command=lambda k=key: self.choose_directory(k)).pack(side='left')
         for idx, (title, rows) in enumerate(groups):
             box = ttk.LabelFrame(form, text=title, padding=8)

@@ -14,6 +14,7 @@ from tools.ke_adaptive_quotas import AdaptiveQuotaPlanner
 from tools.ke_visibility import VISIBILITY_BINS
 from tools.ke_visibility_quotas import choose_candidates, visibility_targets
 from tools.ke_frame_journal import read_journal
+from tools.ke_smart_positions import load_pool, CandidateSampler, frame_block, verify_frame
 
 
 def publish(path, content):
@@ -60,6 +61,12 @@ def generate_online(cfg, run, raw, *, executor=None):
     targets = visibility_targets(cfg["count"], cfg["visibility_weights"])
     budget = {m: n * cfg["visibility_candidate_multiplier"] for m, n in target_jobs}
     planner = AdaptiveQuotaPlanner(targets, map_targets, budget)
+    samplers, bank_info = {}, {}
+    if cfg["smart_placement_cache"]:
+        for mid in map_targets:
+            bank = load_pool(cfg["smart_placement_cache"],mid)
+            samplers[mid] = CandidateSampler(bank,map_seed(cfg["seed"],mid),cfg["map_margin_percent"])
+            bank_info[mid] = {k:v for k,v in bank.items() if k!="pools"}
     run.mkdir(parents=True)
     raw.mkdir(parents=True)
     for name in ("images", "masks/amodal", "masks/visible"):
@@ -73,6 +80,9 @@ def generate_online(cfg, run, raw, *, executor=None):
               "staging": str(raw), "candidate_frames": 0, "validated_candidates": 0,
               "maps": [{"map_id": m, "planned": n, "actual": 0, "status": "pending"}
                        for m, n in target_jobs], "tasks": 0}
+    if samplers:
+        report["smart_placement"] = {"banks":bank_info,"validated_sources":{}}
+        write_json(run/"smart-placement-banks.json",bank_info)
     write_json(run / "generation-config.json", cfg)
     write_json(run / "manifest.json", report)
     tasks, validated, rejected, placement_rejected, stability_rejected = [], {}, {}, {}, {}
@@ -136,6 +146,22 @@ def generate_online(cfg, run, raw, *, executor=None):
             feedback.mkdir()
             with task["capture"].open("a", encoding="ascii") as stream:
                 stream.write(f'online_feedback_dir:t="{dagor_path(feedback)}"\n')
+            sampler = samplers.get(mid)
+            if sampler:
+                xmin,xmax,zmin,zmax=sampler.bounds
+                with task["capture"].open("a",encoding="ascii") as stream:
+                    stream.write(f'smart_placement:b=yes\nsmart_bounds_min:p2={xmin:.9f},{zmin:.9f}\n'
+                                 f'smart_bounds_max:p2={xmax:.9f},{zmax:.9f}\n')
+                task["smart_points"] = {}
+                def publish_points(frame_index, requested):
+                    points = sampler.choose(requested,cfg["placement_attempts"])
+                    task["smart_points"][frame_index] = points
+                    publish(feedback/f"smart_{frame_index}.blk",
+                            frame_block(frame_index,requested,points,cfg["ground_offset"]))
+                    with (run/"smart-placement-plans.jsonl").open("a",encoding="utf-8") as stream:
+                        stream.write(json.dumps({"task":number,"index":frame_index,"map_id":mid,
+                            "target":requested,"points":points})+"\n")
+                publish_points(0,target)
             publish(feedback / "decision_0.txt", f"{VISIBILITY_BINS.index(target)}\n")
             publish(mailbox / f"task_{number}.blk", f'capture:t="{dagor_path(task["capture"])}"\n')
             tasks.append(task)
@@ -192,6 +218,12 @@ def generate_online(cfg, run, raw, *, executor=None):
                 else:
                     candidate = collect_frame(cfg, run, raw, task, idx, blk)
                     record = candidate[0]
+                    if sampler:
+                        smart = verify_frame(blk,target,task["smart_points"][idx],sampler.bounds)
+                        record["smart_placement"] = smart
+                        candidate[1]["ke_smart_placement"] = smart
+                        sources = report["smart_placement"]["validated_sources"]
+                        sources[smart["source"]] = sources.get(smart["source"],0)+1
                     validated[record["image_id"]] = candidate
                     records.append(record)
                     planner.finish(record)
@@ -214,6 +246,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                     stream.write(json.dumps({"task": number, "index": idx, "image_id": record["image_id"],
                         "requested_bin": target, "measured_bin": measured,
                         "map_id": mid, "selected": after, "deficit": planner.report["deficit"],
+                        "smart_placement":record.get("smart_placement"),
                         "deficit_by_map": planner.report["deficit_by_map"]}) + "\n")
                 write_json(run / "manifest.json", report)
                 print(f'[KE] ONLINE_FRAME task={number} index={idx} map={mid} '
@@ -236,6 +269,8 @@ def generate_online(cfg, run, raw, *, executor=None):
                         stop_reason = "candidate_budget"
                 same = request is not None and request[0] == mid and idx + 1 < cap
                 if idx + 1 < cap:
+                    if same and sampler:
+                        publish_points(idx+1,request[1])
                     publish(feedback / f"decision_{idx+1}.txt",
                             f"{VISIBILITY_BINS.index(request[1]) if same else -1}\n")
                 if not same:

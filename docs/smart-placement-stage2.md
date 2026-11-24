@@ -92,3 +92,29 @@ placement-candidates-map.png. Точки не проверены по высот
 для исследования; явный uniform fallback при исчерпании банка.
 Офлайн на всех четырёх старых выгрузках: 443841 точек сетки, 234641
 потенциальных; Factory 48997, Town 131380, Falklands 29609, Finland 24655.
+
+## V4: experimental live placement / online
+
+Опциональный smart_placement_cache (GUI: «Кэш умной расстановки (2.7)»)
+указывает на конкретную папку object-analysis/<run>, где для каждой карты
+есть placement-candidates.json и исходный TSV. Включить online, strict,
+search_occlusion, tank_map, frames_per_position=1; нейтральная поза башни
+и орудия обязательна пока не проверена артикулированная геометрия.
+До публикации каждого online decision атомарно записывается smart_<idx>.blk;
+native читает текущую категорию ДО выбора точки, сверяет границы cache,
+проверяет 9 точек опоры, прежний водный/высотный порог, ждёт RendInst.
+Проверка объёма: повернутый нейтральный render envelope (допуск 0.1 м
+снизу) -> world AABB, пересечение с collision resource AABB RendInst и
+Extra, затем до 54 двунаправленных лучей (3 оси x 3x3) в RI и статике.
+Это консервативный broad phase + дискретные лучи, не точная mesh/mesh
+коллизия; возможны ложные отказы и пропуски, coverage RI не доказано,
+статическая геометрия не выгружена, фактическая вода всё ещё height proxy.
+Python сверяет фактические координаты, источник, target и индекс попытки
+с опубликованным планом; отсутствие новых метаданных — ошибка, а не
+тихий переход к старому редактору. Строгие квоты только по GPU-маскам.
+Старый режим без cache не меняется. При исчерпании точек сохраняется
+существующий online протокол heightmap_candidates_exhausted (теперь также
+может включать SMART_PLACEMENT_REJECT; подробные причины в debug).
+Файлы smart-placement-banks.json, smart-placement-plans.jsonl, online-progress,
+metadata/images.jsonl. Windows compile/run, сравнение с 590 попытками,
+проверка физического контакта и производительности остаются открытыми.

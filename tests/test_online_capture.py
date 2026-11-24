@@ -156,6 +156,14 @@ class FakeOnlineEditor:
                     target = ("open", "light", "moderate", "heavy")[decision]
                     blk += (f'occlusion_target_bin:t="{target}"\n'
                             'occlusion_proxy_fraction:r=0.5\nocclusion_proxy_candidates:i=2\n')
+                if 'smart_placement:b=yes' in data:
+                    smart=(feedback/f"smart_{idx}.blk").read_text(encoding="ascii")
+                    assert int(re.search(r'^target:i=(\d+)$',smart,re.M).group(1)) == decision
+                    u,_,v=map(float,re.search(rf'^candidate_{idx}_0:p3=(.*)$',smart,re.M).group(1).split(','))
+                    src=re.search(r'^source_0:t="([^"]+)"$',smart,re.M).group(1)
+                    blk=re.sub(r'^tank_world:p3=.*$',f'tank_world:p3={128*u},123,{128*v}',blk,flags=re.M)
+                    blk+=(f'placement_candidate:i=0\nsmart_placement_target:i={decision}\n'
+                          f'smart_placement_source:t="{src}"\nsmart_placement_check:t="ri_collision_bounds_static_rays_v1"\n')
                 payload = blk.encode("utf-8")
                 stream.write(f"KEFRAME {idx} {len(payload)}\n".encode("ascii") + payload)
                 stream.flush()
@@ -204,6 +212,27 @@ class OnlineCaptureTests(unittest.TestCase):
         self.assertEqual({x["requested_bin"] for x in progress}, {"open", "moderate"})
         self.assertTrue(any(p.read_text().strip() == "-1" for p in run.glob("online/feedback_*/decision_*.txt")))
         self.assertEqual(len(list((run / "maps").glob("*.png"))), 2)
+
+    def test_smart_positions_follow_online_target(self):
+        from tools.ke_smart_positions import build_pool, digest
+        cache=self.dataset.parent/"object-cache"
+        for mid in self.config["map_ids"]:
+            folder=cache/Path(mid).stem
+            folder.mkdir(parents=True)
+            source=folder/"objects-native.tsv";source.write_bytes(b"fixture")
+            bank=build_pool((0,128,0,128),[])
+            bank.update(map_id=mid,source_sha256=digest(source))
+            (folder/"placement-candidates.json").write_text(json.dumps(bank))
+        cfg=self.config_for(smart_placement_cache=str(cache),frames_per_position=1)
+        result=run_dataset(cfg,self.dataset,executor=lambda cmd: FakeOnlineEditor(
+            cmd,lambda mid,target,i: ("open","light","moderate","heavy")[target]))
+        self.assertEqual(result["images"],4)
+        run,=(self.dataset/"runs").iterdir()
+        plans=[json.loads(line) for line in (run/"smart-placement-plans.jsonl").read_text().splitlines()]
+        self.assertEqual(len(plans),4)
+        self.assertEqual({p["target"] for p in plans},{"open","moderate"})
+        records=[json.loads(line) for line in (self.dataset/"raw/metadata/images.jsonl").read_text().splitlines()]
+        self.assertTrue(all(r["smart_placement"]["check"]=="ri_collision_bounds_static_rays_v1" for r in records))
 
     def test_budget_incomplete_does_not_publish(self):
         cfg = self.config_for(count=2, visibility_candidate_multiplier=2,

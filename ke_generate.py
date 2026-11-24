@@ -26,7 +26,7 @@ DEFAULTS = {
     'enforce_visibility_quotas': False, 'visibility_weights': DEFAULT_VISIBILITY_WEIGHTS.copy(),
     'visibility_candidate_multiplier': 5, 'search_occlusion': False,
     'refill_batch_per_map': 256, 'refill_stall_rounds': 3, 'refill_max_rounds': 10000,
-    'visibility_quota_mode': 'refill',
+    'visibility_quota_mode': 'refill', 'smart_placement_cache': '',
     'keep_open': False, 'render_debug': False, 'capture_last_clip': False, 'clipmap_feedback': 'software', 'timeout': 360,
 }
 INTS = {'count', 'seed', 'width', 'height', 'timeout', 'placement_attempts', 'camera_attempts', 'frames_per_position', 'min_warmup_renders', 'tank_map_resolution', 'visibility_candidate_multiplier', 'refill_batch_per_map', 'refill_stall_rounds', 'refill_max_rounds'}
@@ -60,6 +60,15 @@ def validate_config(raw):
         raise ValueError('visibility_quota_mode: refill или online')
     if not isinstance(c['search_occlusion'], bool):
         raise ValueError('search_occlusion: требуется true или false')
+    if not isinstance(c['smart_placement_cache'], str):
+        raise ValueError('smart_placement_cache: требуется путь или пустая строка')
+    c['smart_placement_cache'] = c['smart_placement_cache'].strip()
+    if c['smart_placement_cache']:
+        if not (c['enforce_visibility_quotas'] and c['visibility_quota_mode']=='online' and c['search_occlusion']
+                and c['placement_mode']=='tank_map' and c['frames_per_position']==1):
+            raise ValueError('Умная расстановка требует online-квот, поиска перекрытий, танкового поля и 1 кадра на позицию')
+        if any(c[k]!=0 for k in ('turret_yaw_min','turret_yaw_max','gun_pitch_min','gun_pitch_max')):
+            raise ValueError('Первый режим объёмной проверки поддерживает только нейтральную позу башни и орудия (0°)')
     if c['search_occlusion'] and not c['capture_visibility_masks']:
         raise ValueError('Поиск перекрытий требует включённых масок')
     if c['enforce_visibility_quotas'] and not c['capture_visibility_masks']:
