@@ -102,6 +102,38 @@ class FrameStabilityTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Partial offscreen-capture upgrade'):
                 ke.is_upgraded_offscreen_capture(source)
 
+    def test_warmup_rebuild_after_streaming_grace(self):
+        from tools.ke_streaming_grace import EDITS, install_streaming_grace
+
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / 'kolobanovEye.cpp'
+            previous = ke.OFFSCREEN_STREAMING_WAIT_PATCH.read_bytes().replace(b'\r\n', b'\n')
+            hunks = re.findall(rb'(?ms)^@@ [^\n]*\n(.*?)(?=^@@ |\Z)', previous)
+            fragments = [b''.join(line[1:] for line in hunk.splitlines(keepends=True)
+                                  if line.startswith((b' ', b'+'))) for hunk in hunks]
+            for eol in (b'\n', b'\r\n'):
+                with self.subTest(eol=eol):
+                    source.write_bytes(b'\n'.join(fragments).replace(b'\n', eol))
+                    ke.apply_haze_capture_pipeline(source, ke.HAZE_CONVERGENCE_PATCH, ke.HAZE_STABILITY_PATCH)
+                    # Fixture contains patch contexts, not the full native loop.
+                    # Supply the remaining exact streaming-grace anchors.
+                    data = source.read_bytes().replace(b'\r\n', b'\n')
+                    for old, _ in EDITS:
+                        if old.encode() not in data:
+                            data += b'\n' + old.encode() + b'\n'
+                    source.write_bytes(data.replace(b'\n', eol))
+                    self.assertTrue(install_streaming_grace(source))
+                    upgraded = source.read_bytes()
+                    ke.apply_haze_capture_pipeline(source, ke.HAZE_CONVERGENCE_PATCH, ke.HAZE_STABILITY_PATCH)
+                    self.assertEqual(source.read_bytes(), upgraded)
+                    self.assertFalse(install_streaming_grace(source))
+                    for damaged in (upgraded.replace(b'keMeanDelta <= 0.45f', b'keMeanDelta <= 1.45f'),
+                                    upgraded.replace(b'keHardDeadline =', b'brokenDeadline =')):
+                        source.write_bytes(damaged)
+                        with self.assertRaises(ValueError):
+                            ke.apply_haze_capture_pipeline(source, ke.HAZE_CONVERGENCE_PATCH, ke.HAZE_STABILITY_PATCH)
+                        self.assertEqual(source.read_bytes(), damaged)
+
     def test_sequence_protocol_requires_stability_and_exports_normal_annotations(self):
         for stable in (True, False):
             with self.subTest(stable=stable), temporary_directory_with_windows_cleanup_retry() as temp:

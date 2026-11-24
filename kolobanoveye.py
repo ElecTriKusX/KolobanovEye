@@ -605,6 +605,32 @@ def apply_haze_capture_pipeline(source: Path, convergence_patch: Path, stability
         print("[KE] HAZE_CONVERGENCE_PATCH superseded_by=HAZE_STABILITY_PATCH", flush=True)
     else:
         apply_warmup_patch(source, convergence_patch, label="HAZE_CONVERGENCE_PATCH")
+    # Streaming grace inserts state inside stability hunk 1 and changes loop
+    # deadlines. Validate the complete known successor on an in-memory copy;
+    # never roll back or rewrite the user's Dagor checkout.
+    from tools.ke_streaming_grace import MARKER, EDITS
+    data = source.read_bytes().replace(b"\r\n", b"\n")
+    if MARKER.encode() in data:
+        for old, new in reversed(EDITS):
+            old, new = old.encode(), new.encode()
+            if data.count(new) != 1:
+                raise ValueError(f"Partial streaming grace installation in {source}")
+            data = data.replace(new, old, 1)
+        diff = stability_patch.read_bytes().replace(b"\r\n", b"\n")
+        hunks = re.findall(rb"(?ms)^@@ [^\n]*\n(.*?)(?=^@@ |\Z)", diff)
+        if len(hunks) != 3:
+            raise ValueError("Invalid offscreen warm-up patch: expected 3 hunks")
+        for index, hunk in enumerate(hunks, 1):
+            lines = hunk.splitlines(keepends=True)
+            if any(not line or line[:1] not in (b" ", b"-", b"+") for line in lines):
+                raise ValueError(f"Malformed offscreen warm-up patch hunk {index}")
+            old = b"".join(line[1:] for line in lines if line.startswith((b" ", b"-")))
+            new = b"".join(line[1:] for line in lines if line.startswith((b" ", b"+")))
+            if data.count(old) != 0 or data.count(new) != 1:
+                raise ValueError(f"Incomplete stability predecessor under streaming grace: hunk {index}; "
+                                 "do not reset Dagor, inspect the offscreen capture source")
+        print("[KE] HAZE_STABILITY_PATCH superseded_by=STREAMING_GRACE_V1", flush=True)
+        return
     apply_warmup_patch(source, stability_patch, label="HAZE_STABILITY_PATCH")
 
 
