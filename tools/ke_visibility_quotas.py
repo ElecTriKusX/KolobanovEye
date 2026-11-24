@@ -85,6 +85,22 @@ def choose_candidates(records, targets, map_targets=None):
         if name in VISIBILITY_BINS and measurement["training_eligible"]:
             by_bin[name][mid].append(image_id)
 
+    capacity = {mid: {b: len(by_bin[b][mid]) for b in VISIBILITY_BINS} for mid in maps}
+    report = solve_capacity(targets, map_targets, capacity, available, len(records))
+    selected = {image_id for mid in maps for name in VISIBILITY_BINS
+                for image_id in list(by_bin[name][mid])[:report["selected_by_map_and_bin"][mid][name]]}
+    return selected, report
+
+
+def solve_capacity(targets, map_targets, capacity, available, candidate_count):
+    """Solve on four bins and map counts only, independent of pool size.
+
+    Internal callers supply checked targets and nonnegative integer capacities.
+    No individual image IDs are needed until the final selection is materialized.
+    """
+    bins = (*VISIBILITY_BINS, "reject_too_occluded")
+    total = sum(targets.values())
+    maps = sorted(map_targets)
     # Source -> visibility bins -> maps -> sink. At most four bin nodes
     # and one node per map; capacities are counts, not individual images.
     source, sink = ("source",), ("sink",)
@@ -94,13 +110,13 @@ def choose_candidates(records, targets, map_targets=None):
         residual[v][u] = 0
 
     order = sorted(VISIBILITY_BINS, key=lambda k: (
-        sum(len(q) for q in by_bin[k].values()) / targets[k] if targets[k] else math.inf,
+        sum(capacity[mid][k] for mid in maps) / targets[k] if targets[k] else math.inf,
         VISIBILITY_BINS.index(k)))
     for name in order:
         b = ("bin", name)
         edge(source, b, targets[name])
         for mid in maps:
-            edge(b, ("map", mid), len(by_bin[name][mid]))
+            edge(b, ("map", mid), capacity[mid][name])
     for mid in maps:
         edge(("map", mid), sink, map_targets[mid])
     while True:
@@ -147,36 +163,31 @@ def choose_candidates(records, targets, map_targets=None):
     to_sink = reachable(sink, reverse=True)
     useful = {mid: [name for name in VISIBILITY_BINS
                     if ("bin", name) in from_source and ("map", mid) in to_sink
-                    and len(by_bin[name][mid]) < min(targets[name], map_targets[mid])]
+                    and capacity[mid][name] < min(targets[name], map_targets[mid])]
               for mid in maps}
 
-    selected = set()
     actual = Counter()
     per_map = Counter()
     matrix = {}
-    capacity = {}
     for mid in maps:
         matrix[mid] = {}
-        capacity[mid] = {}
         for name in VISIBILITY_BINS:
             n = residual[("map", mid)][("bin", name)]
             matrix[mid][name] = n
-            capacity[mid][name] = len(by_bin[name][mid])
             actual[name] += n
             per_map[mid] += n
-            selected.update(list(by_bin[name][mid])[:n])
     deficits = {k: targets[k] - actual[k] for k in VISIBILITY_BINS}
     map_deficits = {m: map_targets[m] - per_map[m] for m in maps}
     report = {
         "method": "bounded_candidate_pool_balanced_flow_v2",
         "target": dict(targets),
-        "available": {k: available[k] for k in bins},
+        "available": {k: available.get(k, 0) for k in bins},
         "accepted": {k: actual[k] for k in VISIBILITY_BINS},
         "deficit": deficits,
         "complete": not any(deficits.values()) and not any(map_deficits.values()),
-        "candidates": len(records),
-        "selected": len(selected),
-        "rejected": len(records) - len(selected),
+        "candidates": candidate_count,
+        "selected": sum(actual.values()),
+        "rejected": candidate_count - sum(actual.values()),
         "selected_by_map": {m: per_map[m] for m in maps},
         "target_by_map": dict(map_targets),
         "deficit_by_map": map_deficits,
@@ -184,4 +195,4 @@ def choose_candidates(records, targets, map_targets=None):
         "selected_by_map_and_bin": matrix,
         "useful_next_bins_by_map": useful,
     }
-    return selected, report
+    return report

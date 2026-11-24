@@ -146,5 +146,6 @@ loaded within a task; a scheduler can change maps or stop midway. Native
 feedback timeout 300 s; Python timeout per response uses config timeout.
 Per-map attempt budget = map target × multiplier; no-gain stop after several
 bounded windows; no silent fallback. Technical errors fail closed. Existing
-refill mode remains available. Online uses in-memory selection per candidate;
-large-scale performance and actual native Windows build/run are unverified.
+refill mode remains available. Online solves the residual flow on compact map/bin capacities; candidate IDs
+are materialized only for explicit selection/export. Large-scale memory/disk
+performance and actual native Windows build/run are unverified.

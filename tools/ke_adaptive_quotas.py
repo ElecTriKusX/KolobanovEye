@@ -8,7 +8,7 @@ may exchange previous candidates, so retain the useful alternative cells.
 from collections import Counter
 
 from tools.ke_visibility import VISIBILITY_BINS
-from tools.ke_visibility_quotas import choose_candidates
+from tools.ke_visibility_quotas import choose_candidates, solve_capacity
 
 
 class AdaptiveQuotaPlanner:
@@ -23,11 +23,20 @@ class AdaptiveQuotaPlanner:
             raise ValueError("Attempt budgets must be nonnegative integers for all planned maps")
         self.attempts = Counter()
         self.outcomes = Counter()
-        self.candidates = []
+        self.cells = {m: {b: [] for b in VISIBILITY_BINS} for m in self.map_targets}
+        self.capacity = {m: dict.fromkeys(VISIBILITY_BINS, 0) for m in self.map_targets}
+        self.available = Counter()
+        self.retained = 0
         self.ids = set()
         self.pending = None
         self.last_map = None
-        self.selected, self.report = choose_candidates([], self.targets, self.map_targets)
+        _, self.report = choose_candidates([], self.targets, self.map_targets)
+
+    @property
+    def selected(self):
+        # Materialize IDs only when requested, not on every feedback event.
+        return {image_id for mid, bins in self.report["selected_by_map_and_bin"].items()
+                for b, count in bins.items() for image_id in self.cells[mid][b][:count]}
 
     def _probability(self, mid, requested, helpful):
         # Smoothed empirical confusion matrix. A requested category starts
@@ -113,13 +122,14 @@ class AdaptiveQuotaPlanner:
                 observed = b
                 capacity = self.report["available_by_map_and_bin"][mid][b]
                 if capacity < min(self.targets[b], self.map_targets[mid]):
-                    self.candidates.append({
-                        "image_id": image_id, "map_id": mid,
-                        "visibility_measurement": {"visibility_bin": b, "training_eligible": True},
-                    })
+                    self.cells[mid][b].append(image_id)
+                    self.capacity[mid][b] += 1
+                    self.available[b] += 1
+                    self.retained += 1
+                    self.report = solve_capacity(self.targets, self.map_targets,
+                                                 self.capacity, self.available, self.retained)
             self.ids.add(image_id)
         self.outcomes[mid, requested, observed] += 1
-        self.selected, self.report = choose_candidates(self.candidates, self.targets, self.map_targets)
         self.last_map = mid
         self.pending = None
 

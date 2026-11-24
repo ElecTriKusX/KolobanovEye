@@ -76,3 +76,27 @@ class AdaptiveQuotaTests(unittest.TestCase):
         self.assertFalse(report["useful_next_bins_by_map"]["a"])
         self.assertTrue(choose_candidates(records + [row(3, "b", "open")],
                                          targets, {"a": 1, "b": 1})[1]["complete"])
+
+    def test_compact_feedback_matches_full_pool_selection(self):
+        import random
+        rng = random.Random(42)
+        targets = visibility_targets(400)
+        maps = dict.fromkeys("abcd", 100)
+        p = AdaptiveQuotaPlanner(targets, maps, dict.fromkeys(maps, 500))
+        rows = []
+        for i in range(2000):
+            request = p.next_request()
+            if request is None:
+                break
+            mid, _ = request
+            r = row(i, mid, rng.choice(("open", "open", "light", "moderate", "heavy",
+                                         "reject_too_occluded")))
+            rows.append(r)
+            p.finish(r)
+            if i % 37 == 0:
+                _, full = choose_candidates(rows, targets, maps)
+                self.assertEqual(p.report["selected"], full["selected"])
+                self.assertEqual(len(p.selected), full["selected"])
+        _, full = choose_candidates(rows, targets, maps)
+        self.assertEqual(p.report["selected"], full["selected"])
+        self.assertEqual(p.report["complete"], full["complete"])

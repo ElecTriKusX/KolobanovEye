@@ -52,12 +52,15 @@ bool keOnlineDone(const char *dir, const char *prefix, int index)
   char path[4096];
   if (!keOnlinePath(path, sizeof(path), dir, prefix, index, ".txt"))
     return false;
-  FILE *file = fopen(path, "wb");
+  char temporary[4096];
+  if (!keOnlinePath(temporary, sizeof(temporary), dir, prefix, index, ".tmp"))
+    return false;
+  FILE *file = fopen(temporary, "wb");
   if (!file)
     return false;
   const bool written = fputs("ok\n", file) >= 0;
   const bool closed = fclose(file) == 0;
-  return written && closed;
+  return written && closed && rename(temporary, path) == 0;
 }
 }
 
