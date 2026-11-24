@@ -8,13 +8,14 @@ from datetime import datetime, timezone
 import json
 import math
 import os
+import re
 from pathlib import Path
 import subprocess
 import uuid
 
 from ke_generate import DEFAULTS
 from ke_single_editor import make_command, read_editor_log, explain_batch_failure
-from kolobanoveye import dagor_path
+from kolobanoveye import dagor_path, editor_failure
 from tools.ke_maps import scan_maps, available_whitelist
 from tools.ke_pixel_debug import load_png
 from tools.ke_review import write_rgb_png
@@ -217,6 +218,50 @@ def analyze_map(out, overview, resolution=1024):
     return report
 
 
+def read_scan_log(run):
+    """Prefer the actual per-process native debug to the legacy batch log.
+
+    A new run directory belongs to exactly one editor process. An empty or
+    incomplete legacy log must not hide native progress or fatal assertions.
+    Unlike the normal capture reader, preserve an empty native marker stream
+    so that the error handler can still report a pre-command crash.
+    """
+    debug = list((run / ".logs").glob("daEditor3x-dev.exe-*/debug"))
+    if debug:
+        source = max(debug, key=lambda p: p.stat().st_mtime_ns)
+        messages = []
+        with source.open(encoding="utf-8", errors="replace") as stream:
+            for line in stream:
+                match = re.search(r"\bCON: (\[KE\] .*)$", line.rstrip("\r\n"))
+                if match:
+                    messages.append(match.group(1))
+        return "\n".join(messages), source
+    legacy = run / "probe.dcmd.log"
+    if legacy.is_file():
+        return read_editor_log(run)
+    return "", run / ".logs"
+
+
+def check_scan_completion(run, code, expected):
+    log, source = read_scan_log(run)
+    lines = log.splitlines()
+    scans = [line for line in lines if line.startswith("[KE] OBJECT_SCAN_OK ")]
+    batches = [line for line in lines if line.startswith("[KE] MAP_BATCH_OK ")]
+    failure = next((line for line in lines if "[KE] FAIL " in line), None)
+    if code == 0 and not failure and batches == [f"[KE] MAP_BATCH_OK maps={expected}"] and len(scans) == expected:
+        return log
+    detail = (f"DaEditor exit={code} (0x{code & 0xffffffff:08X}); "
+              f"object scans={len(scans)}/{expected}; "
+              f"batch markers={batches}; last KE={lines[-1] if lines else 'none'}")
+    if not any("OBJECT_SCAN_BEGIN" in line for line in lines) and any("MODEL_BEGIN" in line or "FRAME_OK" in line for line in lines):
+        detail += "; object diagnostic not entered: check that the rebuilt DaEditor supports object_inventory"
+    if failure:
+        detail += "; " + explain_batch_failure(run, log, source)
+    else:
+        detail += f"; debug: {source}"
+    raise ValueError(editor_failure(run, detail))
+
+
 def run_scan(dagor,game,output,selected,resolution=1024,timeout=1800,executor=None):
     if resolution not in (256,512,1024,2048,4096) or timeout <= 0:
         raise ValueError("Invalid resolution or timeout")
@@ -244,20 +289,32 @@ def run_scan(dagor,game,output,selected,resolution=1024,timeout=1800,executor=No
         tasks.append({"capture":capture})
     print(f"[KE] OBJECT_ANALYSIS_START {out} maps={len(mids)}",flush=True)
     cmd=make_command(cfg,out,tasks)
-    if executor is None:
-        with (out/"host-stdout.log").open("wb") as host:
-            code=subprocess.run(cmd,cwd=out,stdout=host,stderr=subprocess.STDOUT,timeout=timeout,
-                                env={**os.environ,"KE_OOZ_FAILURE_DIR":str(out/"ooz-failures")}).returncode
-    else:
-        code=executor(cmd)
-    log,source=read_editor_log(out)
-    if code or f"[KE] MAP_BATCH_OK maps={len(mids)}" not in log or log.count("[KE] OBJECT_SCAN_OK ")!=len(mids):
-        raise ValueError(explain_batch_failure(out,log,source))
-    reports={}
-    for mid in mids:
-        folder=out/Path(mid).stem
-        reports[mid]=analyze_map(folder,out/"maps"/(Path(mid).name+"-tank.png"),resolution)
-    write_json(out/"manifest.json",{"mode":"objects_only","maps":reports,"editor_processes":1})
+    report = {"mode":"objects_only","status":"RUNNING","selected_maps":mids,
+              "editor_processes":1,"maps":{},"command":[str(arg) for arg in cmd]}
+    write_json(out/"manifest.json", report)
+    try:
+        if executor is None:
+            with (out/"host-stdout.log").open("wb") as host:
+                code=subprocess.run(cmd,cwd=out,stdout=host,stderr=subprocess.STDOUT,timeout=timeout,
+                                    env={**os.environ,"KE_OOZ_FAILURE_DIR":str(out/"ooz-failures")}).returncode
+        else:
+            code=executor(cmd)
+        report["editor_exit_code"] = code
+        check_scan_completion(out, code, len(mids))
+        for mid in mids:
+            folder=out/Path(mid).stem
+            report["maps"][mid]=analyze_map(folder,out/"maps"/(Path(mid).name+"-tank.png"),resolution)
+        report["status"] = "COMPLETE"
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        report["status"] = "FAILED"
+        report["error"] = str(exc)
+        log, source = read_scan_log(out)
+        report["debug_log"] = str(source)
+        report["last_native_messages"] = log.splitlines()[-20:]
+        write_json(out/"manifest.json", report)
+        print(f"[KE] OBJECT_ANALYSIS_FAILED preserved={out}",flush=True)
+        raise
+    write_json(out/"manifest.json",report)
     print(f"[KE] OBJECT_ANALYSIS_OK {out}",flush=True)
     return out
 

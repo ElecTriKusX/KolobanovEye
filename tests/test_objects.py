@@ -83,3 +83,38 @@ class ObjectInventoryTests(unittest.TestCase):
         self.assertEqual(set(manifest["maps"]),set(mids))
         self.assertEqual((sentinel/"keep.txt").read_text(),"untouched")
         self.assertEqual(manifest["maps"][mids[0]]["background"],"dagor_tank_square")
+
+
+    def test_native_debug_wins_over_empty_legacy(self):
+        from tools.ke_objects import check_scan_completion
+        with tempfile.TemporaryDirectory() as tmp:
+            run=Path(tmp)
+            (run/"probe.dcmd.log").write_text("",encoding="ascii")
+            native=run/".logs"/"daEditor3x-dev.exe-test"/"debug"
+            native.parent.mkdir(parents=True)
+            native.write_text("1.0 [D] CON: [KE] OBJECT_SCAN_OK tiles=1 objects=2 invalid=0\n"
+                              "1.1 [D] CON: [KE] MAP_BATCH_OK maps=1\n",encoding="ascii")
+            self.assertIn("OBJECT_SCAN_OK",check_scan_completion(run,0,1))
+
+    def test_native_failure_not_hidden_by_legacy_success(self):
+        from tools.ke_objects import check_scan_completion
+        with tempfile.TemporaryDirectory() as tmp:
+            run=Path(tmp)
+            (run/"probe.dcmd.log").write_text("[KE] OBJECT_SCAN_OK tiles=1 objects=2 invalid=0\n"
+                                             "[KE] MAP_BATCH_OK maps=1\n",encoding="ascii")
+            native=run/".logs"/"daEditor3x-dev.exe-test"/"debug"
+            native.parent.mkdir(parents=True)
+            native.write_text("1.0 [D] CON: [KE] OBJECT_SCAN_BEGIN tiles=1 side=128.0\n"
+                              "1.1 [E] CON: [KE] FAIL OBJECT_SCAN: RendInst tile preparation timed out\n",encoding="ascii")
+            with self.assertRaisesRegex(ValueError,"RendInst tile preparation timed out"):
+                check_scan_completion(run,1,1)
+
+    def test_missing_native_scan_marker_reports_exit(self):
+        from tools.ke_objects import check_scan_completion
+        with tempfile.TemporaryDirectory() as tmp:
+            run=Path(tmp)
+            (run/"probe.dcmd.log").write_text("[KE] MAP_BATCH_OK maps=1\n",encoding="ascii")
+            with self.assertRaisesRegex(ValueError,"object scans=0/1"):
+                check_scan_completion(run,0,1)
+            with self.assertRaisesRegex(ValueError,"exit=13"):
+                check_scan_completion(run,13,1)
