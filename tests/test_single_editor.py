@@ -69,6 +69,10 @@ def fake_editor(cmd):
                     blk += ('visibility_method:t="reverse_z_opaque_depth_compare_v1"\n'
                             f'amodal_pixels:i=4\nvisible_pixels:i={actual}\n'
                             f'unmatched_depth_pixels:i=0\nvisible_fraction:r={actual / 4}\n')
+                if value("search_occlusion") == "yes":
+                    target = ("open", "light", "moderate", "heavy")[int(value(f"occlusion_target_{idx}"))]
+                    blk += (f'occlusion_target_bin:t="{target}"\n'
+                            'occlusion_proxy_fraction:r=0.5\nocclusion_proxy_candidates:i=2\n')
                 payload = blk.encode("utf-8")
                 stream.write(f"KEFRAME {idx} {len(payload)}\n".encode("ascii") + payload)
                 log += ["[KE] FRAME_OK ", "[KE] FRAME_STABILITY_FINAL enabled=1 stable=1"]
@@ -183,6 +187,16 @@ class SingleEditorTests(unittest.TestCase):
         self.assertEqual(ann["bbox"], [2, 2, 1, 2])
         self.assertEqual(ann["ke_visibility"]["visible_fraction"], .5)
         self.assertTrue((raw / ann["ke_visibility"]["amodal_mask"]).is_file())
+
+    def test_occlusion_search_reports_proxy_against_measured_masks(self):
+        cfg = {**self.config, "count": 2, "map_ids": ["levels/avg_normandy.bin"],
+               "capture_visibility_masks": True, "search_occlusion": True,
+               "visibility_weights": {"open": 0, "light": 0, "moderate": 1, "heavy": 0}}
+        result = run_dataset(cfg, self.dataset, executor=fake_editor)
+        report = result["occlusion_search"]
+        self.assertEqual(report["by_target"]["moderate"], {"attempted": 2, "matched": 1})
+        self.assertEqual(report["mean_absolute_error"], .25)
+        self.assertEqual(result["visibility_bins"]["reject_too_occluded"], 1)
 
     def test_quota_selection_publishes_only_validated_accepted_frames(self):
         cfg = {**self.config, "count": 2, "map_ids": ["levels/avg_normandy.bin"],

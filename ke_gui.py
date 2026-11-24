@@ -49,6 +49,7 @@ class App:
         self.screen_position_weights = DEFAULTS['screen_position_weights'].copy()
         self.enforce_visibility_quotas = tk.BooleanVar(value=DEFAULTS['enforce_visibility_quotas'])
         self.visibility_weights = DEFAULTS['visibility_weights'].copy()
+        self.search_occlusion = tk.BooleanVar(value=DEFAULTS['search_occlusion'])
         self.wait_frame_stability = tk.BooleanVar(value=DEFAULTS['wait_frame_stability'])
         self.wait_sky_convergence = tk.BooleanVar(value=DEFAULTS['wait_sky_convergence'])
         self.values['output'].set(str(DATASET_DIR))
@@ -113,6 +114,8 @@ class App:
         menu.add_checkbutton(label='Маски видимости (эксперимент)', variable=self.capture_visibility_masks)
         menu.add_checkbutton(label='Строгие квоты видимости 40/25/25/10', variable=self.enforce_visibility_quotas,
                              command=lambda: self.capture_visibility_masks.set(True) if self.enforce_visibility_quotas.get() else None)
+        menu.add_checkbutton(label='Поиск перекрытий по коллизиям (эксперимент)', variable=self.search_occlusion,
+                             command=lambda: self.capture_visibility_masks.set(True) if self.search_occlusion.get() else None)
         menu.add_separator()
         menu.add_command(label='Открыть настройки…', command=self.open_config)
         menu.add_command(label='Сохранить настройки…', command=self.save_config)
@@ -262,6 +265,7 @@ class App:
         data['screen_position_weights'] = self.screen_position_weights.copy()
         data['enforce_visibility_quotas'] = self.enforce_visibility_quotas.get()
         data['visibility_weights'] = self.visibility_weights.copy()
+        data['search_occlusion'] = self.search_occlusion.get()
         data['wait_frame_stability'] = self.wait_frame_stability.get()
         data['wait_sky_convergence'] = self.wait_sky_convergence.get()
         data['map_ids'] = available_whitelist(self.detected_maps, self.selected_maps or [])
@@ -281,6 +285,7 @@ class App:
             self.screen_position_weights = data['screen_position_weights'].copy()
             self.enforce_visibility_quotas.set(data['enforce_visibility_quotas'])
             self.visibility_weights = data['visibility_weights'].copy()
+            self.search_occlusion.set(data['search_occlusion'])
             self.wait_frame_stability.set(data['wait_frame_stability'])
             self.wait_sky_convergence.set(data['wait_sky_convergence'])
             for k, v in data.items():

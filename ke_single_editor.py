@@ -18,7 +18,8 @@ from tools.ke_coco import group_for, scene_metadata
 from tools.ke_png_fast import validate_rgb_png
 from tools.ke_annotation import parse_annotation
 from tools.ke_composition import plan_screen_positions
-from tools.ke_visibility import read_capture_masks, mask_decoder_name
+from tools.ke_visibility import read_capture_masks, mask_decoder_name, VISIBILITY_BINS
+from tools.ke_occlusion import plan_occlusion_targets, read_occlusion_proxy, summarize_search
 from tools.ke_visibility_quotas import candidate_allocation, visibility_targets, choose_candidates
 from tools.ke_frame_journal import read_journal
 from kolobanoveye import (
@@ -68,6 +69,8 @@ def write_capture(cfg, map_id, count, seed, run, raw, index, model, skeleton, fi
             cfg["camera_height_min"], cfg["camera_height_max"]), 5)
     cameras = [orbits[i * cfg["camera_attempts"]:(i + 1) * cfg["camera_attempts"]] for i in range(count)]
     screen_positions = plan_screen_positions(seed, count, cfg['screen_position_weights'])
+    occlusion_targets = (plan_occlusion_targets(seed, count, cfg['visibility_weights'])
+                         if cfg['search_occlusion'] else [])
     poses = plan_articulation(seed, count,
         (cfg["turret_yaw_min"], cfg["turret_yaw_max"]),
         (cfg["gun_pitch_min"], cfg["gun_pitch_max"]))
@@ -95,6 +98,7 @@ def write_capture(cfg, map_id, count, seed, run, raw, index, model, skeleton, fi
         f"frame_count:i={count}", f'camera_attempts:i={cfg["camera_attempts"]}',
         f'metadata_journal:t="{dagor_path(journal)}"',
         f'capture_visibility_masks:b={"yes" if cfg["capture_visibility_masks"] else "no"}',
+        f'search_occlusion:b={"yes" if cfg["search_occlusion"] else "no"}',
     ]
     if poses:
         lines.append("articulate_tank:b=yes")
@@ -110,6 +114,8 @@ def write_capture(cfg, map_id, count, seed, run, raw, index, model, skeleton, fi
                 lines.append(f'mask_{kind}_{i}:t="{dagor_path(mask_path)}"')
         lines.append(f'screen_offset_{i}:p2={numbers(screen_positions[i]["offset_uv"])}')
         lines.append(f'screen_bin_{i}:t="{screen_positions[i]["bin"]}"')
+        if occlusion_targets:
+            lines.append(f"occlusion_target_{i}:i={VISIBILITY_BINS.index(occlusion_targets[i])}")
         for j, cam in enumerate(options):
             lines.append(f"camera_offset_{i}_{j}:p3={numbers(cam['offset'])}")
             lines.append(f"camera_height_{i}_{j}:r={numbers([cam['height_above_ground']])}")
@@ -120,13 +126,13 @@ def write_capture(cfg, map_id, count, seed, run, raw, index, model, skeleton, fi
     capture.write_text("\n".join(lines) + "\n", encoding="ascii")
     write_json(run / "plans" / f"{index:03d}-{stem}.json", {
         "map_id": map_id, "seed": seed, "cameras": cameras,
-        "screen_positions": screen_positions,
+        "screen_positions": screen_positions, "occlusion_targets": occlusion_targets,
         "placement_candidates_xz": candidates, "tank_articulation_deg": poses,
         "frames_per_position": frames_per, "placement_mode": cfg["placement_mode"],
     })
     return {"map_id": map_id, "count": count, "seed": seed, "index": index, "capture": capture,
             "journal": journal, "outputs": outputs, "cameras": cameras,
-            "screen_positions": screen_positions, "poses": poses,
+            "screen_positions": screen_positions, "poses": poses, "occlusion_targets": occlusion_targets,
             "stem": stem, "frames_per_position": frames_per}
 
 
@@ -350,6 +356,8 @@ def finalize(cfg, run, raw, tasks):
                 raise ValueError("Native Dagor camera offset differs from the capture plan")
             visibility = (read_capture_masks(raw, image_path.name, blk, cfg["width"], cfg["height"])
                           if cfg["capture_visibility_masks"] else None)
+            occlusion = (read_occlusion_proxy(blk, task["occlusion_targets"][idx], cfg["camera_attempts"], visibility)
+                         if cfg["search_occlusion"] else None)
             image_id = len(images) + 1
             scene_id = f'{run.name}:{task["stem"]}:{comp}'
             group = group_for(blk, 256)
@@ -363,6 +371,7 @@ def finalize(cfg, run, raw, tasks):
                 "screen_position_bin_planned": position["bin"],
                 "screen_position_target_uv": position["target_uv"],
                 "annotation": annotation, "visibility_measurement": visibility,
+                "occlusion_search": occlusion,
                 "dagor_frame_metadata_blk": blk,
                 "sha256": hashlib.sha256(image_path.read_bytes()).hexdigest(), **articulation,
             }
@@ -389,6 +398,10 @@ def finalize(cfg, run, raw, tasks):
                 "scene_group_id": group, "image_ids": [],
             })["image_ids"].append(image_id)
             print(f"[KE] FINALIZE_FRAME {image_id}/{expected} image={image_path.name}", flush=True)
+    occlusion_report = summarize_search(records) if cfg["search_occlusion"] else None
+    if occlusion_report is not None:
+        write_json(run / "occlusion-search.json", occlusion_report)
+        print("[KE] OCCLUSION_SEARCH " + json.dumps(occlusion_report), flush=True)
     quota_report = None
     if cfg["enforce_visibility_quotas"]:
         targets = visibility_targets(cfg["count"], cfg["visibility_weights"])
@@ -435,7 +448,7 @@ def finalize(cfg, run, raw, tasks):
         "run_id": run.name, "images": len(images), "annotations": len(annotations),
         "scenes": len(scenes), "maps": len(maps), "editor_processes": 1,
         "visibility_diagnostic": cfg["capture_visibility_masks"],
-        "visibility_quotas": quota_report,
+        "visibility_quotas": quota_report, "occlusion_search": occlusion_report,
         "visibility_bins": ({name: sum(r["visibility_measurement"]["visibility_bin"] == name for r in records)
                              for name in ("open", "light", "moderate", "heavy", "reject_too_occluded")}
                             if cfg["capture_visibility_masks"] else None),

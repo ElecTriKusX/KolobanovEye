@@ -849,6 +849,8 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
     enable_single_editor_map_batch(dagor)
     from tools.ke_dagor_composition import install_screen_composition
     install_screen_composition(capture_cpp)
+    from tools.ke_dagor_occlusion import install_occlusion_search
+    install_occlusion_search(capture_cpp)
     from tools.ke_dagor_visibility import install_visibility_capture
     install_visibility_capture(dagor)
     guard_impostor_shadow_atlas_slices(dagor)

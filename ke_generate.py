@@ -24,7 +24,7 @@ DEFAULTS = {
     'min_warmup_renders': 8, 'wait_sky_convergence': False, 'wait_frame_stability': True,
     'screen_position_weights': DEFAULT_WEIGHTS.copy(), 'capture_visibility_masks': False,
     'enforce_visibility_quotas': False, 'visibility_weights': DEFAULT_VISIBILITY_WEIGHTS.copy(),
-    'visibility_candidate_multiplier': 5,
+    'visibility_candidate_multiplier': 5, 'search_occlusion': False,
     'keep_open': False, 'render_debug': False, 'capture_last_clip': False, 'clipmap_feedback': 'software', 'timeout': 360,
 }
 INTS = {'count', 'seed', 'width', 'height', 'timeout', 'placement_attempts', 'camera_attempts', 'frames_per_position', 'min_warmup_renders', 'tank_map_resolution', 'visibility_candidate_multiplier'}
@@ -54,6 +54,10 @@ def validate_config(raw):
     if not isinstance(c['enforce_visibility_quotas'], bool):
         raise ValueError('enforce_visibility_quotas: требуется true или false')
     c['visibility_weights'] = validate_visibility_weights(c['visibility_weights'])
+    if not isinstance(c['search_occlusion'], bool):
+        raise ValueError('search_occlusion: требуется true или false')
+    if c['search_occlusion'] and not c['capture_visibility_masks']:
+        raise ValueError('Поиск перекрытий требует включённых масок')
     if c['enforce_visibility_quotas'] and not c['capture_visibility_masks']:
         raise ValueError('Квоты видимости требуют включённых масок')
     if not isinstance(c['map_ids'], list) or len(c['map_ids']) != len(set(str(x).casefold() for x in c['map_ids'])):
