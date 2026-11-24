@@ -8,7 +8,7 @@ from tools.ke_smart_positions import build_pool, CandidateSampler, BINS, frame_b
 
 class SmartPositionsTests(unittest.TestCase):
     def test_raw_bounds_exclusion_and_proximity(self):
-        rows=[{"bbox_min":[56,0,56],"bbox_max":[64,8,64],"has_collision_resource":True,
+        rows=[{"bbox_min":[52,0,52],"bbox_max":[62,8,62],"has_collision_resource":True,
                "analysis_layer":"building","duplicate_of":None}]
         bank=build_pool((0,128,0,128),rows)
         self.assertEqual(sum(bank["counts"].values())+bank["edge_excluded"]+bank["aabb_excluded"],bank["grid_points"])
@@ -16,7 +16,7 @@ class SmartPositionsTests(unittest.TestCase):
         self.assertGreater(bank["counts"]["open"],0)
         for points in bank["pools"].values():
             for x,z in points:
-                self.assertFalse(50.5<=x<=69.5 and 50.5<=z<=69.5)
+                self.assertFalse(46.5<=x<=67.5 and 46.5<=z<=67.5)
         # A duplicate does not change the result.
         self.assertEqual(bank,build_pool((0,128,0,128),rows+[dict(rows[0],duplicate_of=1)]))
 
@@ -53,3 +53,21 @@ class SmartPositionsTests(unittest.TestCase):
             source.write_bytes(b"changed")
             with self.assertRaisesRegex(ValueError,"Stale"):
                 load_pool(tmp,bank["map_id"])
+
+    def test_empty_near_band_is_not_a_failure(self):
+        row={"bbox_min":[56,0,56],"bbox_max":[64,8,64],"has_collision_resource":True,
+             "analysis_layer":"building"}
+        bank=build_pool((0,128,0,128),[row])
+        self.assertEqual(bank["counts"]["heavy"],0)
+        self.assertEqual(len(CandidateSampler(bank,1).choose("heavy",24)),24)
+
+    def test_smart_mode_validation(self):
+        from ke_generate import validate_config
+        with self.assertRaisesRegex(ValueError,"Умная расстановка"):
+            validate_config({"smart_placement_cache":"cache"})
+        cfg={"smart_placement_cache":"cache","capture_visibility_masks":True,
+             "enforce_visibility_quotas":True,"search_occlusion":True,
+             "visibility_quota_mode":"online","frames_per_position":1}
+        self.assertEqual(validate_config(cfg)["smart_placement_cache"],"cache")
+        with self.assertRaisesRegex(ValueError,"нейтральную"):
+            validate_config(dict(cfg,turret_yaw_max=45))

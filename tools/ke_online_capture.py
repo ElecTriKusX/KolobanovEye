@@ -47,6 +47,7 @@ def generate_online(cfg, run, raw, *, executor=None):
     from kolobanoveye import (inspect, require_file, run_logged, parse_resources,
         choose_resources, dagor_path, editor_failure, BIN, GRP)
 
+    started = time.monotonic()
     run, raw = Path(run).resolve(), Path(raw).resolve()
     game, dagor = Path(cfg["game"]).resolve(), Path(cfg["dagor"]).resolve()
     for forbidden in (game, dagor):
@@ -125,6 +126,7 @@ def generate_online(cfg, run, raw, *, executor=None):
         (run / "map-batch.blk").write_text(f'online_dir:t="{dagor_path(mailbox)}"\n', encoding="ascii")
         request = planner.next_request()
         next_id = 1
+        native_started = time.monotonic()
         if executor is None:
             host = (run / "host-stdout.log").open("wb")
             env = {**os.environ, "KE_OOZ_FAILURE_DIR": str(run / "ooz-failures")}
@@ -163,6 +165,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                             "target":requested,"points":points})+"\n")
                 publish_points(0,target)
             publish(feedback / "decision_0.txt", f"{VISIBILITY_BINS.index(target)}\n")
+            attempt_started = time.monotonic()
             publish(mailbox / f"task_{number}.blk", f'capture:t="{dagor_path(task["capture"])}"\n')
             tasks.append(task)
             report["tasks"] = number
@@ -247,6 +250,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                         "requested_bin": target, "measured_bin": measured,
                         "map_id": mid, "selected": after, "deficit": planner.report["deficit"],
                         "smart_placement":record.get("smart_placement"),
+                        "attempt_wall_seconds":round(time.monotonic()-attempt_started,4),
                         "deficit_by_map": planner.report["deficit_by_map"]}) + "\n")
                 write_json(run / "manifest.json", report)
                 print(f'[KE] ONLINE_FRAME task={number} index={idx} map={mid} '
@@ -268,6 +272,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                     if request is None:
                         stop_reason = "candidate_budget"
                 same = request is not None and request[0] == mid and idx + 1 < cap
+                attempt_started = time.monotonic()
                 if idx + 1 < cap:
                     if same and sampler:
                         publish_points(idx+1,request[1])
@@ -291,6 +296,7 @@ def generate_online(cfg, run, raw, *, executor=None):
         if exit_code:
             raise RuntimeError(f"DaEditor exited with {exit_code}")
         report["render_complete"] = True
+        report["native_wall_seconds"] = round(time.monotonic()-native_started,3)
         # Verify native task sequence/stability/overview even though each
         # RGB/mask/BLK was already validated before the next decision.
         pool = collect_candidates(cfg, run, raw, tasks, prevalidated=validated, rejected=rejected,
@@ -328,7 +334,9 @@ def generate_online(cfg, run, raw, *, executor=None):
         # Rejected RGB is kept in staging on failure, never in published raw.
         for item in rejected.values():
             (raw / item["image"]).unlink()
-        report.update(status="COMPLETE", complete=True)
+        report.update(status="COMPLETE", complete=True,
+                      total_wall_seconds=round(time.monotonic()-started,3),
+                      native_seconds_per_selected_frame=round(report["native_wall_seconds"]/max(1,result["images"]),4))
         for item in report["maps"]:
             item["status"] = "verified"
         write_json(run / "manifest.json", report)
@@ -345,6 +353,7 @@ def generate_online(cfg, run, raw, *, executor=None):
         if report["status"] != "INCOMPLETE":
             report["status"] = "FAILED"
         report["error"] = str(exc)
+        report["total_wall_seconds"] = round(time.monotonic()-started,3)
         write_json(run / "manifest.json", report)
         if isinstance(exc, (RuntimeError, TimeoutError, subprocess.TimeoutExpired)):
             from ke_single_editor import read_editor_log, explain_batch_failure

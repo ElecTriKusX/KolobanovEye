@@ -118,3 +118,11 @@ Python сверяет фактические координаты, источн�
 Файлы smart-placement-banks.json, smart-placement-plans.jsonl, online-progress,
 metadata/images.jsonl. Windows compile/run, сравнение с 590 попытками,
 проверка физического контакта и производительности остаются открытыми.
+
+Для сравнения режимов online manifest содержит native_wall_seconds,
+total_wall_seconds и native_seconds_per_selected_frame, online-progress —
+attempt_wall_seconds (первый кадр задачи включает загрузку карты).
+Базовый результат 2.6.b: 200/590 попыток, 571 RGB, 53 задачи; сравнивать
+с той же конфигурацией и seed, отдельно измерять отказы/время, а не только
+число кадров. SHA256 проверяет исходный TSV, а не версию всех ресурсов WT;
+после обновления игры следует пересканировать карты.
