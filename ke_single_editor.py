@@ -292,17 +292,47 @@ def extract_map_logs(log, tasks, *, stability=True):
         if f'[KE] SEQUENCE_OK frames={task["count"]}' not in section:
             raise ValueError(f'Нет SEQUENCE_OK для {task["map_id"]}')
         rejected = task.get("rejected_indices", set())
+        placement = task.get("placement_rejected_indices", set())
         native_rejected = [int(n) for n in re.findall(r"\[KE\] FRAME_REJECT index=(\d+) reason=depth_pass_mismatch", section)]
+        native_placement = [int(n) for n in re.findall(r"\[KE\] FRAME_REJECT index=(\d+) reason=heightmap_candidates_exhausted", section)]
         if (len(native_rejected) != len(rejected) or set(native_rejected) != rejected or
-                section.count("[KE] FRAME_OK ") != task["count"] - len(rejected)):
+                len(native_placement) != len(placement) or set(native_placement) != placement or
+                rejected & placement or
+                section.count("[KE] FRAME_OK ") != task["count"] - len(rejected) - len(placement)):
             raise ValueError(f'Не получены все кадры карты {task["map_id"]}')
-        if stability and section.count("[KE] FRAME_STABILITY_FINAL enabled=1 stable=1") != task["count"]:
+        if stability and section.count("[KE] FRAME_STABILITY_FINAL enabled=1 stable=1") != task["count"] - len(placement):
             raise ValueError(f'Нет подтверждения стабильности {task["map_id"]}')
-        for marker in ("MAP_OK", "MODEL_OK", "PLACEMENT_OK", "WATER_GROUND_FILTER"):
+        markers = ("MODEL_OK", "WATER_GROUND_FILTER")
+        if task["count"] > len(placement):
+            markers += ("MAP_OK", "PLACEMENT_OK")
+        for marker in markers:
             if f"[KE] {marker} " not in section:
                 raise ValueError(f'Отсутствует {marker}: {task["map_id"]}')
         result.append(section)
     return result
+
+
+def read_placement_rejection(cfg, raw, task, idx, blk):
+    if not re.search(r"^placement_rejection:", blk, re.M):
+        return None
+    if not cfg["enforce_visibility_quotas"] or cfg["visibility_quota_mode"] != "online":
+        raise ValueError("Placement rejection outside online mode")
+    if re.findall(r'^placement_rejection:t="([^"\r\n]+)"\s*$', blk, re.M) != ["heightmap_candidates_exhausted"]:
+        raise ValueError("Unknown placement rejection")
+    if re.findall(r'^map_id:t="([^"\r\n]+)"\s*$', blk, re.M) != [task["map_id"]]:
+        raise ValueError("Placement rejection map mismatch")
+    if re.findall(r"^placement_attempts:i=(\d+)\s*$", blk, re.M) != [str(cfg["placement_attempts"])]:
+        raise ValueError("Placement rejection attempt count mismatch")
+    if re.findall(r"^composition_index:i=(\d+)\s*$", blk, re.M) != [str(idx // task["frames_per_position"])]:
+        raise ValueError("Placement rejection composition mismatch")
+    if re.search(r"^(visibility_method|visibility_rejection):", blk, re.M):
+        raise ValueError("Placement rejection unexpectedly contains mask metadata")
+    image = task["outputs"][idx]
+    if image.exists() or any((raw / "masks" / kind / image.name).exists() for kind in ("amodal", "visible")):
+        raise ValueError("Placement rejection unexpectedly has rendered files")
+    return {"image_id": int(image.stem), "map_id": task["map_id"], "frame_index": idx,
+            "reason": "heightmap_candidates_exhausted", "placement_attempts": cfg["placement_attempts"],
+            "dagor_frame_metadata_blk": blk}
 
 
 def read_depth_rejection(cfg, raw, task, idx, blk):
@@ -407,7 +437,7 @@ def collect_frame(cfg, run, raw, task, idx, blk):
     return record, image, coco_annotation
 
 
-def collect_candidates(cfg, run, raw, tasks, *, prevalidated=None, rejected=None):
+def collect_candidates(cfg, run, raw, tasks, *, prevalidated=None, rejected=None, placement_rejected=None):
     """Validate one native batch once; do not select or delete any files."""
     log, source = read_editor_log(run)
     if f'[KE] MAP_BATCH_OK maps={len(tasks)}' not in log:
@@ -430,7 +460,7 @@ def collect_candidates(cfg, run, raw, tasks, *, prevalidated=None, rejected=None
             if bounds["status"] != "available":
                 raise ValueError(f'Нет координат танкового поля: {task["map_id"]}')
             verify_png(overview, cfg["tank_map_resolution"], cfg["tank_map_resolution"])
-        maps.append({"map_id": task["map_id"], "frames": task["count"] - len(task.get("rejected_indices", ())), "tank_bounds": bounds,
+        maps.append({"map_id": task["map_id"], "frames": task["count"] - len(task.get("rejected_indices", ())) - len(task.get("placement_rejected_indices", ())), "tank_bounds": bounds,
                      "overview": f"maps/{overview_name}" if cfg["capture_tank_map"] else None,
                      "render_quality_flags": (["impostor_preshadow_incomplete"]
                                               if quality["skipped_updates"] else []),
@@ -441,6 +471,10 @@ def collect_candidates(cfg, run, raw, tasks, *, prevalidated=None, rejected=None
                   f'impostor_shadow_skipped={quality["skipped_updates"]} '
                   f'assets={len(quality["assets"])}; visual review required', flush=True)
         for idx, image_path in enumerate(task["outputs"]):
+            if idx in task.get("placement_rejected_indices", ()):
+                if placement_rejected is None or int(image_path.stem) not in placement_rejected or placement_rejected[int(image_path.stem)] != read_placement_rejection(cfg, raw, task, idx, journal[idx]):
+                    raise ValueError("Placement rejection journal changed after online validation")
+                continue
             if idx in task.get("rejected_indices", ()):
                 if rejected is None or int(image_path.stem) not in rejected or rejected[int(image_path.stem)] != read_depth_rejection(cfg, raw, task, idx, journal[idx]):
                     raise ValueError("Rejected-frame journal changed after online validation")

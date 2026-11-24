@@ -890,6 +890,8 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
     install_online_feedback(capture_cpp)
     from tools.ke_visibility_reject import install_visibility_reject
     install_visibility_reject(dagor)
+    from tools.ke_placement_reject import install_placement_reject
+    install_placement_reject(capture_cpp)
     from tools.ke_ri_trace_props import install_ri_trace_props
     install_ri_trace_props(dagor / "prog/gameLibs/rendInst/rendInstGenCollision.cpp")
     guard_impostor_shadow_atlas_slices(dagor)

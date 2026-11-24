@@ -175,3 +175,15 @@ or publishes its RGB. Budget counts rejections; five consecutive or >20%
 after >=30 attempts abort as systematic failure. Other technical failures
 abort as before. VISIBILITY_MISMATCH separates clear vs farther pixels and
 mismatch rectangle. Rejected BLKs: rejected-frames.jsonl. Windows test required.
+
+### Windows test 25.11.2026 — exhausted terrain placement
+
+Run run-20261124T193024Z-e87a6177: 61 provisionally selected / 66 rendered,
+3 depth rejections, first map 50/50 and second map 11/50; one process.
+On abandoned_town the 7th composition exhausted 24 terrain candidates,
+all four support samples available, range 0.623..8.569 m above 0.5 m limit.
+Online only: explicit heightmap_candidates_exhausted outcomes for planned
+slots in the failed composition, no RGB/masks, normal feedback and early
+stop. Count each skipped slot toward bounded scheduler attempts, separately
+from expensive renders and depth rejection rate. Terrain thresholds and
+other fatal errors unchanged. Real Windows test remains required.

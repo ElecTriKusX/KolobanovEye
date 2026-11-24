@@ -12,11 +12,13 @@ from tests import test_single_editor
 
 
 class FakeOnlineEditor:
-    def __init__(self, cmd, oracle, corrupt=False, reject_indices=()):
+    def __init__(self, cmd, oracle, corrupt=False, reject_indices=(), placement_slots=()):
         self.run = Path(next(s.split(":", 1)[1] for s in cmd if str(s).startswith("-rootdir:")))
         self.oracle = oracle
         self.corrupt = corrupt
         self.reject_indices = set(reject_indices)
+        self.placement_slots = set(placement_slots)
+        self.slots = 0
         self.frames = 0
         self.tasks = 0
         self.code = None
@@ -93,6 +95,20 @@ class FakeOnlineEditor:
                 decision = int(self.read(feedback / f"decision_{idx}.txt"))
                 if decision < 0:
                     break
+                slot = self.slots
+                self.slots += 1
+                if slot in self.placement_slots:
+                    blk = (f'level:t="{mid}"\nmap_id:t="{mid}"\n'
+                           'placement_rejection:t="heightmap_candidates_exhausted"\n'
+                           f'placement_attempts:i={value("candidate_count")}\n'
+                           f'composition_index:i={idx // int(value("frames_per_position"))}\n')
+                    payload = blk.encode("utf-8")
+                    stream.write(f"KEFRAME {idx} {len(payload)}\n".encode("ascii") + payload)
+                    stream.flush()
+                    log.append(f"[KE] FRAME_REJECT index={idx} reason=heightmap_candidates_exhausted")
+                    rendered += 1
+                    (feedback / f"ready_{idx}.txt").write_bytes(b"ok\n")
+                    continue
                 image = Path(value(f"output_{idx}"))
                 width, height = int(value("width")), int(value("height"))
                 write_rgb_png(image, width, height, bytes([10, 20, 30]) * (width * height))
@@ -237,3 +253,35 @@ class OnlineCaptureTests(unittest.TestCase):
         self.assertFalse((self.dataset / "raw").exists())
         run, = (self.dataset / "runs").iterdir()
         self.assertEqual(json.loads((run / "manifest.json").read_text())["status"], "FAILED")
+
+
+    def test_placement_exhaustion_refills_without_render(self):
+        processes = []
+        def execute(cmd):
+            p = FakeOnlineEditor(cmd, lambda mid, target, i: ("open", "light", "moderate", "heavy")[target],
+                                 placement_slots={0, 1})
+            processes.append(p)
+            return p
+        result = run_dataset(self.config_for(), self.dataset, executor=execute)
+        self.assertEqual(len(processes), 1)
+        self.assertEqual(processes[0].frames, 4)
+        self.assertEqual(processes[0].slots, 6)
+        self.assertEqual(result["images"], 4)
+        quota = result["visibility_quotas"]
+        self.assertEqual(quota["placement_rejections"], 2)
+        self.assertEqual(quota["depth_mismatch_rejections"], 0)
+        self.assertEqual(quota["rendered_candidates"], 4)
+        self.assertEqual(quota["attempted_candidates"], 6)
+        self.assertEqual(len(list((self.dataset / "raw/images").glob("*.png"))), 4)
+
+    def test_all_placements_exhausted_stops_at_budget(self):
+        processes = []
+        def execute(cmd):
+            p = FakeOnlineEditor(cmd, lambda *args: "open", placement_slots=range(100))
+            processes.append(p)
+            return p
+        with self.assertRaisesRegex(ValueError, "candidate_budget"):
+            run_dataset(self.config_for(count=2, visibility_candidate_multiplier=2), self.dataset, executor=execute)
+        self.assertEqual(processes[0].frames, 0)
+        self.assertEqual(processes[0].slots, 4)
+        self.assertFalse((self.dataset / "raw").exists())
