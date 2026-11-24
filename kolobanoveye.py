@@ -818,6 +818,8 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
             subprocess.run(apply, input=diff, cwd=dagor, check=True)
 
     apply_haze_capture_pipeline(capture_cpp, HAZE_CONVERGENCE_PATCH, HAZE_STABILITY_PATCH)
+    from tools.ke_streaming_grace import install_streaming_grace
+    install_streaming_grace(capture_cpp)
     diff = TANK_ARTICULATION_PATCH.read_bytes().replace(b"\r\n", b"\n")
     if (not predecessor_additions_present(dagor, TANK_ARTICULATION_PATCH) and
             subprocess.run([*apply, "--reverse", "--check"], input=diff, cwd=dagor, capture_output=True).returncode):
