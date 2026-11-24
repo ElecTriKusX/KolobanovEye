@@ -291,7 +291,10 @@ def extract_map_logs(log, tasks, *, stability=True):
             raise ValueError(f"Неверный порядок загрузки карты: {first}")
         if f'[KE] SEQUENCE_OK frames={task["count"]}' not in section:
             raise ValueError(f'Нет SEQUENCE_OK для {task["map_id"]}')
-        if section.count("[KE] FRAME_OK ") != task["count"]:
+        rejected = task.get("rejected_indices", set())
+        native_rejected = [int(n) for n in re.findall(r"\[KE\] FRAME_REJECT index=(\d+) reason=depth_pass_mismatch", section)]
+        if (len(native_rejected) != len(rejected) or set(native_rejected) != rejected or
+                section.count("[KE] FRAME_OK ") != task["count"] - len(rejected)):
             raise ValueError(f'Не получены все кадры карты {task["map_id"]}')
         if stability and section.count("[KE] FRAME_STABILITY_FINAL enabled=1 stable=1") != task["count"]:
             raise ValueError(f'Нет подтверждения стабильности {task["map_id"]}')
@@ -300,6 +303,41 @@ def extract_map_logs(log, tasks, *, stability=True):
                 raise ValueError(f'Отсутствует {marker}: {task["map_id"]}')
         result.append(section)
     return result
+
+
+def read_depth_rejection(cfg, raw, task, idx, blk):
+    """Recognize only the explicit native mismatch, never a missing/invalid PNG."""
+    if not re.search(r"^visibility_rejection:", blk, re.M):
+        return None
+    if not cfg["capture_visibility_masks"] or not cfg["enforce_visibility_quotas"] or cfg["visibility_quota_mode"] != "online":
+        raise ValueError("Unexpected depth rejection outside online mode")
+    if re.findall(r'^visibility_rejection:t="([^"\r\n]+)"\s*$', blk, re.M) != ["depth_pass_mismatch"]:
+        raise ValueError("Unknown native visibility rejection")
+    def integer(name):
+        hits = re.findall(rf"^{name}:i=(\d+)\s*$", blk, re.M)
+        if len(hits) != 1:
+            raise ValueError(f"Invalid rejected-frame field: {name}")
+        return int(hits[0])
+    amodal = integer("rejected_amodal_pixels")
+    visible = integer("rejected_visible_pixels")
+    missing = integer("rejected_unmatched_pixels")
+    if not (0 < amodal <= cfg["width"] * cfg["height"] and
+            max(4, amodal // 20) < missing <= amodal - visible):
+        raise ValueError("Invalid rejected-frame depth counts")
+    if re.search(r"^visibility_method:", blk, re.M):
+        raise ValueError("Rejected frame also claims a valid mask")
+    image_path = task["outputs"][idx]
+    verify_png(image_path, cfg["width"], cfg["height"])
+    validate_rgb_png(image_path, cfg["width"], cfg["height"])
+    level = re.findall(r'^level:t="([^"\r\n]+)"', blk, re.M)
+    if len(level) != 1 or Path(level[0]).name.casefold() != Path(task["map_id"]).name.casefold():
+        raise ValueError("Rejected-frame map mismatch")
+    if any((raw / "masks" / kind / image_path.name).exists() for kind in ("amodal", "visible")):
+        raise ValueError("Rejected frame unexpectedly has mask files")
+    return {"image_id": int(image_path.stem), "image": f"images/{image_path.name}",
+            "map_id": task["map_id"], "frame_index": idx, "reason": "depth_pass_mismatch",
+            "amodal_pixels": amodal, "visible_pixels": visible, "unmatched_pixels": missing,
+            "dagor_frame_metadata_blk": blk}
 
 
 def collect_frame(cfg, run, raw, task, idx, blk):
@@ -369,7 +407,7 @@ def collect_frame(cfg, run, raw, task, idx, blk):
     return record, image, coco_annotation
 
 
-def collect_candidates(cfg, run, raw, tasks, *, prevalidated=None):
+def collect_candidates(cfg, run, raw, tasks, *, prevalidated=None, rejected=None):
     """Validate one native batch once; do not select or delete any files."""
     log, source = read_editor_log(run)
     if f'[KE] MAP_BATCH_OK maps={len(tasks)}' not in log:
@@ -392,7 +430,7 @@ def collect_candidates(cfg, run, raw, tasks, *, prevalidated=None):
             if bounds["status"] != "available":
                 raise ValueError(f'Нет координат танкового поля: {task["map_id"]}')
             verify_png(overview, cfg["tank_map_resolution"], cfg["tank_map_resolution"])
-        maps.append({"map_id": task["map_id"], "frames": task["count"], "tank_bounds": bounds,
+        maps.append({"map_id": task["map_id"], "frames": task["count"] - len(task.get("rejected_indices", ())), "tank_bounds": bounds,
                      "overview": f"maps/{overview_name}" if cfg["capture_tank_map"] else None,
                      "render_quality_flags": (["impostor_preshadow_incomplete"]
                                               if quality["skipped_updates"] else []),
@@ -403,6 +441,10 @@ def collect_candidates(cfg, run, raw, tasks, *, prevalidated=None):
                   f'impostor_shadow_skipped={quality["skipped_updates"]} '
                   f'assets={len(quality["assets"])}; visual review required', flush=True)
         for idx, image_path in enumerate(task["outputs"]):
+            if idx in task.get("rejected_indices", ()):
+                if rejected is None or int(image_path.stem) not in rejected or rejected[int(image_path.stem)] != read_depth_rejection(cfg, raw, task, idx, journal[idx]):
+                    raise ValueError("Rejected-frame journal changed after online validation")
+                continue
             if prevalidated is None:
                 record, image, annotation = collect_frame(cfg, run, raw, task, idx, journal[idx])
             else:

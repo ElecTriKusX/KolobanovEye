@@ -41,7 +41,7 @@ def await_value(process, read, timeout, description):
 def generate_online(cfg, run, raw, *, executor=None):
     # Lazy import avoids circular dependency with the existing renderer.
     from ke_single_editor import (jobs_for, write_capture, make_command, write_json,
-        collect_frame, collect_candidates, export_candidates, map_seed)
+        collect_frame, collect_candidates, export_candidates, map_seed, read_depth_rejection)
     from tools.ke_maps import scan_maps
     from kolobanoveye import (inspect, require_file, run_logged, parse_resources,
         choose_resources, dagor_path, editor_failure, BIN, GRP)
@@ -75,9 +75,11 @@ def generate_online(cfg, run, raw, *, executor=None):
                        for m, n in target_jobs], "tasks": 0}
     write_json(run / "generation-config.json", cfg)
     write_json(run / "manifest.json", report)
-    tasks, validated = [], {}
+    tasks, validated, rejected = [], {}, {}
     records = []
     no_gain = 0
+    consecutive_mismatch = 0
+    report["depth_mismatch_rejections"] = 0
     # A single miss is not stagnation. Allow several map-sized windows of
     # exploration, with a minimum useful number of observations for tiny runs.
     stall_limit = cfg["refill_stall_rounds"] * max(32, min(256, cfg["refill_batch_per_map"]), len(map_targets)*4)
@@ -148,27 +150,48 @@ def generate_online(cfg, run, raw, *, executor=None):
                 blk = await_value(process, completed_record, cfg["timeout"], f"task {number} frame {idx}")
                 if cfg["search_occlusion"]:
                     task["occlusion_targets"][idx] = target
-                candidate = collect_frame(cfg, run, raw, task, idx, blk)
-                record = candidate[0]
-                validated[record["image_id"]] = candidate
-                records.append(record)
+                rejection = read_depth_rejection(cfg, raw, task, idx, blk)
                 before = planner.report["selected"]
-                planner.finish(record)
+                if rejection is not None:
+                    record = rejection
+                    rejected[record["image_id"]] = record
+                    task.setdefault("rejected_indices", set()).add(idx)
+                    planner.finish()
+                    consecutive_mismatch += 1
+                    measured = "reject_depth_pass_mismatch"
+                    journal_name = "rejected-frames.jsonl"
+                    print(f'[KE] ONLINE_REJECT task={number} index={idx} reason=depth_pass_mismatch '
+                          f'missing={record["unmatched_pixels"]} amodal={record["amodal_pixels"]}', flush=True)
+                else:
+                    candidate = collect_frame(cfg, run, raw, task, idx, blk)
+                    record = candidate[0]
+                    validated[record["image_id"]] = candidate
+                    records.append(record)
+                    planner.finish(record)
+                    consecutive_mismatch = 0
+                    measured = record["visibility_measurement"]["visibility_bin"]
+                    journal_name = "candidate-pool.jsonl"
                 after = planner.report["selected"]
                 no_gain = no_gain + 1 if after == before else 0
-                with (run / "candidate-pool.jsonl").open("a", encoding="utf-8") as stream:
+                with (run / journal_name).open("a", encoding="utf-8") as stream:
                     stream.write(json.dumps(record, ensure_ascii=False) + "\n")
-                report["candidate_frames"] = report["validated_candidates"] = len(records)
+                report["depth_mismatch_rejections"] = len(rejected)
+                report["candidate_frames"] = len(records) + len(rejected)
+                report["validated_candidates"] = len(records)
                 for item in report["maps"]:
                     item["actual"] = planner.report["selected_by_map"][item["map_id"]]
                 with (run / "online-progress.jsonl").open("a", encoding="utf-8") as stream:
                     stream.write(json.dumps({"task": number, "index": idx, "image_id": record["image_id"],
-                        "requested_bin": target, "measured_bin": record["visibility_measurement"]["visibility_bin"],
+                        "requested_bin": target, "measured_bin": measured,
                         "map_id": mid, "selected": after, "deficit": planner.report["deficit"],
                         "deficit_by_map": planner.report["deficit_by_map"]}) + "\n")
                 write_json(run / "manifest.json", report)
                 print(f'[KE] ONLINE_FRAME task={number} index={idx} map={mid} '
-                      f'accepted={after}/{cfg["count"]} candidates={len(records)}', flush=True)
+                      f'accepted={after}/{cfg["count"]} candidates={report["candidate_frames"]} '
+                      f'depth_rejected={len(rejected)}', flush=True)
+                if consecutive_mismatch >= 5 or (report["candidate_frames"] >= 30 and
+                        5 * len(rejected) > report["candidate_frames"]):
+                    raise ValueError("VISIBILITY: systematic depth-pass mismatch (5 consecutive or >20% after 30 attempts)")
                 if planner.report["complete"]:
                     stop_reason, request = "exact_target", None
                 elif no_gain >= stall_limit:
@@ -201,13 +224,14 @@ def generate_online(cfg, run, raw, *, executor=None):
         report["render_complete"] = True
         # Verify native task sequence/stability/overview even though each
         # RGB/mask/BLK was already validated before the next decision.
-        pool = collect_candidates(cfg, run, raw, tasks, prevalidated=validated)
+        pool = collect_candidates(cfg, run, raw, tasks, prevalidated=validated, rejected=rejected)
         selected, quota = choose_candidates(pool[0], targets, map_targets)
         if len(selected) != planner.report["selected"]:
             raise ValueError("Online planner disagrees with final full-pool selection")
         quota.update(status="COMPLETE" if quota["complete"] else "INCOMPLETE",
                      stop_reason=stop_reason, attempts_by_map=dict(planner.attempts),
-                     candidate_budget=sum(budget.values()), tasks=len(tasks))
+                     candidate_budget=sum(budget.values()), tasks=len(tasks),
+                     depth_mismatch_rejections=len(rejected), attempted_candidates=len(records)+len(rejected))
         write_json(run / "visibility-quotas.json", quota)
         report["stop_reason"] = stop_reason
         if not quota["complete"]:
@@ -229,11 +253,14 @@ def generate_online(cfg, run, raw, *, executor=None):
                     old[key] = sorted(set(old[key]) | set(item[key]))
         result = export_candidates(cfg, run, raw, (*pool[:4], list(maps.values())),
                                    selection=(selected, quota), editor_processes=1)
+        # Rejected RGB is kept in staging on failure, never in published raw.
+        for item in rejected.values():
+            (raw / item["image"]).unlink()
         report.update(status="COMPLETE", complete=True)
         for item in report["maps"]:
             item["status"] = "verified"
         write_json(run / "manifest.json", report)
-        print(f'[KE] ONLINE_OK frames={result["images"]} candidates={len(records)} tasks={len(tasks)} instances=1', flush=True)
+        print(f'[KE] ONLINE_OK frames={result["images"]} candidates={report["candidate_frames"]} tasks={len(tasks)} instances=1', flush=True)
         return result
     except BaseException as exc:
         if process is not None and process.poll() is None:

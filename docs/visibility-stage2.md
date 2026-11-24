@@ -163,3 +163,15 @@ riProperties[p] без проверки размера. Вероятна отс�
 с Destructible; корректные свойства и collision mesh используются как прежде.
 Не ослаблять проверку масок. Маркер RI_TRACE_PROPS_FALLBACK выводится один раз
 при первом срабатывании; повторная Windows-сборка/прогон обязательны.
+
+### Windows test 25.11.2026 — mask depth mismatch
+
+Run run-20261124T190918Z-ffac3f06: RI_TRACE_PROPS_FALLBACK on index 1,
+14 validated open frames, index 14 failed after stable RGB and settled textures.
+1990/34430 unmatched (5.78%, threshold 5%). Underlying cause unconfirmed.
+Online only: explicit depth_pass_mismatch after successful readbacks,
+camera and LOD/offset checks rejects the candidate, never relaxes mask threshold
+or publishes its RGB. Budget counts rejections; five consecutive or >20%
+after >=30 attempts abort as systematic failure. Other technical failures
+abort as before. VISIBILITY_MISMATCH separates clear vs farther pixels and
+mismatch rectangle. Rejected BLKs: rejected-frames.jsonl. Windows test required.

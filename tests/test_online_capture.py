@@ -12,10 +12,11 @@ from tests import test_single_editor
 
 
 class FakeOnlineEditor:
-    def __init__(self, cmd, oracle, corrupt=False):
+    def __init__(self, cmd, oracle, corrupt=False, reject_indices=()):
         self.run = Path(next(s.split(":", 1)[1] for s in cmd if str(s).startswith("-rootdir:")))
         self.oracle = oracle
         self.corrupt = corrupt
+        self.reject_indices = set(reject_indices)
         self.frames = 0
         self.tasks = 0
         self.code = None
@@ -100,7 +101,12 @@ class FakeOnlineEditor:
                        f'camera_attempt:i=0\ncomposition_index:i={idx // int(value("frames_per_position"))}\n'
                        f'screen_bin_planned:t="{value(f"screen_bin_{idx}")}"\n'
                        f'screen_offset_uv:p2={value(f"screen_offset_{idx}")}\n')
-                if value("capture_visibility_masks") == "yes":
+                reject = self.frames in self.reject_indices
+                if reject:
+                    blk += ('visibility_rejection:t="depth_pass_mismatch"\n'
+                            'rejected_amodal_pixels:i=100\nrejected_visible_pixels:i=90\n'
+                            'rejected_unmatched_pixels:i=10\n')
+                elif value("capture_visibility_masks") == "yes":
                     amodal = bytearray(width * height * 3)
                     visible = bytearray(width * height * 3)
                     for x, y in ((2, 2), (3, 2), (2, 3), (3, 3)):
@@ -121,7 +127,8 @@ class FakeOnlineEditor:
                 payload = blk.encode("utf-8")
                 stream.write(f"KEFRAME {idx} {len(payload)}\n".encode("ascii") + payload)
                 stream.flush()
-                log += ["[KE] FRAME_OK ", "[KE] FRAME_STABILITY_FINAL enabled=1 stable=1"]
+                log += [f"[KE] FRAME_REJECT index={idx} reason=depth_pass_mismatch" if reject else "[KE] FRAME_OK ",
+                        "[KE] FRAME_STABILITY_FINAL enabled=1 stable=1"]
                 rendered += 1
                 self.frames += 1
                 if self.corrupt:
@@ -192,6 +199,41 @@ class OnlineCaptureTests(unittest.TestCase):
         with self.assertRaises((OSError, ValueError)):
             run_dataset(cfg, self.dataset, executor=execute)
         self.assertEqual(processes[0].frames, 1)
+        self.assertFalse((self.dataset / "raw").exists())
+        run, = (self.dataset / "runs").iterdir()
+        self.assertEqual(json.loads((run / "manifest.json").read_text())["status"], "FAILED")
+
+
+    def test_depth_mismatch_rejects_only_candidate_and_refills(self):
+        processes = []
+        def execute(cmd):
+            p = FakeOnlineEditor(cmd, lambda mid, target, i: ("open", "light", "moderate", "heavy")[target],
+                                 reject_indices={1})
+            processes.append(p)
+            return p
+        result = run_dataset(self.config_for(), self.dataset, executor=execute)
+        self.assertEqual(len(processes), 1)
+        self.assertEqual(processes[0].frames, 5)
+        self.assertEqual(result["images"], 4)
+        self.assertEqual(result["visibility_quotas"]["depth_mismatch_rejections"], 1)
+        self.assertEqual(result["visibility_quotas"]["attempted_candidates"], 5)
+        self.assertEqual(len(list((self.dataset / "raw/images").glob("*.png"))), 4)
+        self.assertEqual(len(list((self.dataset / "raw/masks/visible").glob("*.png"))), 4)
+        run, = (self.dataset / "runs").iterdir()
+        rejection = json.loads((run / "rejected-frames.jsonl").read_text())
+        self.assertEqual(rejection["unmatched_pixels"], 10)
+        coco = json.loads((self.dataset / "raw/annotations/instances.json").read_text())
+        self.assertNotIn(rejection["image_id"], {i["id"] for i in coco["images"]})
+
+    def test_systematic_mismatch_is_technical_failure(self):
+        processes = []
+        def execute(cmd):
+            p = FakeOnlineEditor(cmd, lambda *args: "open", reject_indices=range(20))
+            processes.append(p)
+            return p
+        with self.assertRaisesRegex(ValueError, "systematic depth-pass mismatch"):
+            run_dataset(self.config_for(), self.dataset, executor=execute)
+        self.assertEqual(processes[0].frames, 5)
         self.assertFalse((self.dataset / "raw").exists())
         run, = (self.dataset / "runs").iterdir()
         self.assertEqual(json.loads((run / "manifest.json").read_text())["status"], "FAILED")
