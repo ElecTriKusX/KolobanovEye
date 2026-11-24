@@ -67,7 +67,7 @@ class App:
         ttk.Label(map_bar, textvariable=self.map_summary).pack(side='left')
         ttk.Button(map_bar, text='Карты / белый список…', command=self.open_maps).pack(side='left', padx=10)
         ttk.Button(map_bar, text='Обновить', command=self.refresh_maps).pack(side='left')
-        ttk.Label(main, text='Кадры распределяются поровну по картам. Квоты: адаптивный добор раундами DaEditor.').pack(anchor='w')
+        ttk.Label(main, text='Кадры распределяются поровну по картам. Квоты: online-добор или добор раундами.').pack(anchor='w')
         ttk.Label(main, text='Датасет: KolobanovEye/dataset/raw (обновляется после успешной генерации); технические файлы: dataset/runs.').pack(anchor='w', pady=(2, 8))
         form = ttk.Frame(main)
         form.pack(fill='x')

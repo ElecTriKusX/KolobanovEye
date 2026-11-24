@@ -135,10 +135,16 @@ def generate_online(cfg, run, raw, *, executor=None):
             tasks.append(task)
             report["tasks"] = number
             for idx in range(cap):
+                ready = feedback / f"ready_{idx}.txt"
                 def completed_record():
-                    if not task["journal"].is_file():
+                    if not ready.is_file() or ready.read_bytes() != b"ok\n":
                         return None
-                    return read_journal(task["journal"], allow_truncated=True).get(idx)
+                    # Native acknowledgement follows PNG and journal close.
+                    # A ready marker with a missing record is a protocol error.
+                    journal = read_journal(task["journal"])
+                    if idx not in journal:
+                        raise ValueError("Ready marker has no matching frame journal record")
+                    return journal[idx]
                 blk = await_value(process, completed_record, cfg["timeout"], f"task {number} frame {idx}")
                 if cfg["search_occlusion"]:
                     task["occlusion_targets"][idx] = target
@@ -180,6 +186,11 @@ def generate_online(cfg, run, raw, *, executor=None):
                     task["outputs"] = task["outputs"][:idx+1]
                     break
                 target = request[1]
+            plan_path = run / "plans" / f'{task["index"]:03d}-{task["stem"]}.json'
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            plan["online_completed_frames"] = task["count"]
+            plan["online_occlusion_targets"] = task["occlusion_targets"][:task["count"]]
+            write_json(plan_path, plan)
             done = mailbox / f"done_{number}.txt"
             await_value(process, lambda: True if done.is_file() and done.read_bytes() == b"ok\n" else None,
                         cfg["timeout"], f"task {number} acknowledgement")
@@ -237,6 +248,14 @@ def generate_online(cfg, run, raw, *, executor=None):
         report["error"] = str(exc)
         write_json(run / "manifest.json", report)
         if isinstance(exc, (RuntimeError, TimeoutError, subprocess.TimeoutExpired)):
+            from ke_single_editor import read_editor_log, explain_batch_failure
+            try:
+                log, source = read_editor_log(run)
+                if "[KE] FAIL " in log:
+                    raise ValueError(explain_batch_failure(run, log, source)) from exc
+            except ValueError as detail:
+                if "[KE] FAIL " in str(detail):
+                    raise
             raise ValueError(editor_failure(run, str(exc))) from exc
         raise
     finally:

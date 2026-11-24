@@ -47,10 +47,10 @@ bool keOnlineDecision(const char *dir, int index, int &decision)
   return valid;
 }
 
-bool keOnlineDone(const char *dir, int index)
+bool keOnlineDone(const char *dir, const char *prefix, int index)
 {
   char path[4096];
-  if (!keOnlinePath(path, sizeof(path), dir, "done_", index, ".txt"))
+  if (!keOnlinePath(path, sizeof(path), dir, prefix, index, ".txt"))
     return false;
   FILE *file = fopen(path, "wb");
   if (!file)
@@ -67,7 +67,9 @@ BEFORE_FRAME = r'''  const char *keOnlineDir = config.getStr("online_feedback_di
   if (*keOnlineDir && (!keOnlineDecision(keOnlineDir, frameIndex, keOnlineTarget) || keOnlineTarget < 0))
     return fail("ONLINE_FEEDBACK", "Missing or invalid frame decision");
 '''
-AFTER_FRAME = r'''  if (*keOnlineDir && frameIndex + 1 < frameCount)
+AFTER_FRAME = r'''  if (*keOnlineDir && !keOnlineDone(keOnlineDir, "ready_", frameIndex))
+    return fail("ONLINE_FEEDBACK", "Could not acknowledge written frame");
+  if (*keOnlineDir && frameIndex + 1 < frameCount)
   {
     int nextDecision = 0;
     if (!keOnlineDecision(keOnlineDir, frameIndex + 1, nextDecision))
@@ -112,7 +114,7 @@ BATCH = r'''  const char *onlineDir = config.getStr("online_dir", "");
         return false;
       }
       console->addMessage(ILogWriter::NOTE, "[KE] MAP_TASK_OK index=%d/0", index);
-      if (!keOnlineDone(onlineDir, index))
+      if (!keOnlineDone(onlineDir, "done_", index))
       {
         console->addMessage(ILogWriter::ERROR, "[KE] FAIL ONLINE_FEEDBACK: Could not acknowledge task %d", index);
         return false;
