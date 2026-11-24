@@ -184,6 +184,39 @@ class SingleEditorTests(unittest.TestCase):
         self.assertEqual(ann["ke_visibility"]["visible_fraction"], .5)
         self.assertTrue((raw / ann["ke_visibility"]["amodal_mask"]).is_file())
 
+    def test_quota_selection_publishes_only_validated_accepted_frames(self):
+        cfg = {**self.config, "count": 2, "map_ids": ["levels/avg_normandy.bin"],
+               "capture_visibility_masks": True, "enforce_visibility_quotas": True,
+               "visibility_candidate_multiplier": 2,
+               "visibility_weights": {"open": 0, "light": 0, "moderate": 1, "heavy": 0}}
+        result = run_dataset(cfg, self.dataset, executor=fake_editor)
+        raw = self.dataset / "raw"
+        self.assertEqual(result["images"], 2)
+        self.assertEqual(result["annotations"], 2)
+        self.assertEqual(result["visibility_quotas"]["candidates"], 4)
+        self.assertTrue(result["visibility_quotas"]["complete"])
+        self.assertEqual(result["visibility_bins"]["moderate"], 2)
+        self.assertEqual(len(list((raw / "images").glob("*.png"))), 2)
+        self.assertEqual(len(list((raw / "masks" / "visible").glob("*.png"))), 2)
+        coco = json.loads((raw / "annotations/instances.json").read_text())
+        self.assertEqual({i["id"] for i in coco["images"]}, {1, 3})
+        self.assertEqual({a["image_id"] for a in coco["annotations"]}, {1, 3})
+
+    def test_quota_shortfall_preserves_old_raw_and_candidates(self):
+        run_dataset(self.config, self.dataset, executor=fake_editor)
+        old = (self.dataset / "raw/manifest.json").read_bytes()
+        cfg = {**self.config, "count": 2, "map_ids": ["levels/avg_normandy.bin"],
+               "capture_visibility_masks": True, "enforce_visibility_quotas": True,
+               "visibility_candidate_multiplier": 2,
+               "visibility_weights": {"open": 1, "light": 0, "moderate": 0, "heavy": 0}}
+        with self.assertRaisesRegex(ValueError, "Не набраны квоты"):
+            run_dataset(cfg, self.dataset, replace_raw=True, executor=fake_editor)
+        self.assertEqual((self.dataset / "raw/manifest.json").read_bytes(), old)
+        staging, = self.dataset.glob(".raw-staging-*")
+        self.assertEqual(len(list((staging / "images").glob("*.png"))), 4)
+        report, = (self.dataset / "runs").glob("*/visibility-quotas.json")
+        self.assertEqual(json.loads(report.read_text())["deficit"]["open"], 2)
+
     def test_replace_preserves_old_raw_when_batch_fails(self):
         run_dataset(self.config, self.dataset, executor=fake_editor)
         old_manifest = (self.dataset / "raw" / "manifest.json").read_bytes()

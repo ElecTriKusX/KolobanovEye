@@ -19,6 +19,7 @@ from tools.ke_png_fast import validate_rgb_png
 from tools.ke_annotation import parse_annotation
 from tools.ke_composition import plan_screen_positions
 from tools.ke_visibility import read_capture_masks, mask_decoder_name
+from tools.ke_visibility_quotas import candidate_allocation, visibility_targets, choose_candidates
 from tools.ke_frame_journal import read_journal
 from kolobanoveye import (
     BIN, GRP, inspect, choose_resources, parse_resources, require_file,
@@ -388,6 +389,31 @@ def finalize(cfg, run, raw, tasks):
                 "scene_group_id": group, "image_ids": [],
             })["image_ids"].append(image_id)
             print(f"[KE] FINALIZE_FRAME {image_id}/{expected} image={image_path.name}", flush=True)
+    quota_report = None
+    if cfg["enforce_visibility_quotas"]:
+        targets = visibility_targets(cfg["count"], cfg["visibility_weights"])
+        selected, quota_report = choose_candidates(records, targets)
+        write_json(run / "visibility-quotas.json", quota_report)
+        print("[KE] VISIBILITY_QUOTAS " + json.dumps(quota_report, ensure_ascii=False), flush=True)
+        if not quota_report["complete"]:
+            raise ValueError("Не набраны квоты видимости: " + json.dumps(quota_report["deficit"]) +
+                             f"; отчёт: {run / 'visibility-quotas.json'}")
+        # Keep stable candidate filenames and image IDs. COCO IDs need not be contiguous.
+        # Drop RGB and both masks only AFTER complete candidate validation and exact selection.
+        for record in records:
+            if record["image_id"] not in selected:
+                (raw / record["image"]).unlink()
+                for kind in ("amodal_mask", "visible_mask"):
+                    (raw / record["visibility_measurement"][kind]).unlink()
+        records = [r for r in records if r["image_id"] in selected]
+        images = [i for i in images if i["id"] in selected]
+        annotations = [a for a in annotations if a["image_id"] in selected]
+        for scene in scenes.values():
+            scene["image_ids"] = [i for i in scene["image_ids"] if i in selected]
+        scenes = {k: s for k, s in scenes.items() if s["image_ids"]}
+        for m in maps:
+            m["candidate_frames"] = m["frames"]
+            m["frames"] = quota_report["selected_by_map"].get(m["map_id"], 0)
     (raw / "annotations").mkdir()
     (raw / "metadata").mkdir()
     write_json(raw / "annotations" / "instances.json", {
@@ -409,6 +435,7 @@ def finalize(cfg, run, raw, tasks):
         "run_id": run.name, "images": len(images), "annotations": len(annotations),
         "scenes": len(scenes), "maps": len(maps), "editor_processes": 1,
         "visibility_diagnostic": cfg["capture_visibility_masks"],
+        "visibility_quotas": quota_report,
         "visibility_bins": ({name: sum(r["visibility_measurement"]["visibility_bin"] == name for r in records)
                              for name in ("open", "light", "moderate", "heavy", "reject_too_occluded")}
                             if cfg["capture_visibility_masks"] else None),
@@ -435,7 +462,9 @@ def generate(config, run, raw, executor=None):
         if (run == forbidden or run.is_relative_to(forbidden) or
                 raw == forbidden or raw.is_relative_to(forbidden)):
             raise ValueError("Результат не может находиться внутри Dagor или War Thunder")
-    quotas = jobs_for(cfg, scan_maps(game))
+    target_jobs = jobs_for(cfg, scan_maps(game))
+    quotas = (candidate_allocation(target_jobs, cfg["visibility_candidate_multiplier"])
+              if cfg["enforce_visibility_quotas"] else target_jobs)
     if run.exists() or raw.exists():
         raise ValueError("Рабочий каталог или исходный датасет уже существует")
     run.mkdir(parents=True)
@@ -449,7 +478,7 @@ def generate(config, run, raw, executor=None):
     write_json(run / "generation-config.json", cfg)
     report = {
         "schema_version": 2, "editor_processes": 1,
-        "requested_frames": cfg["count"], "complete": False,
+        "requested_frames": cfg["count"], "candidate_frames": sum(n for _, n in quotas), "complete": False,
         "maps": [{"map_id": mid, "planned": n, "actual": 0, "status": "pending"} for mid, n in quotas],
     }
     write_json(run / "manifest.json", report)
@@ -479,7 +508,10 @@ def generate(config, run, raw, executor=None):
                 run, raw, index, model, skeleton, next_image_id))
             next_image_id += count
         cmd = make_command(cfg, run, tasks)
-        print(f'[KE] SINGLE_EDITOR_START maps={len(tasks)} frames={cfg["count"]} instances=1', flush=True)
+        if cfg["enforce_visibility_quotas"]:
+            print(f'[KE] VISIBILITY_PLAN target={cfg["count"]} candidates={sum(n for _, n in quotas)} '
+                  f'quotas={visibility_targets(cfg["count"], cfg["visibility_weights"])}', flush=True)
+        print(f'[KE] SINGLE_EDITOR_START maps={len(tasks)} frames={sum(n for _, n in quotas)} instances=1', flush=True)
         if executor is not None:
             if (status := executor(cmd)):
                 raise RuntimeError(f"DaEditor завершился с кодом {status}")
@@ -501,7 +533,9 @@ def generate(config, run, raw, executor=None):
         print(f'[KE] RENDER_COMPLETE staging={raw}; validating RGB, metadata and masks', flush=True)
         result = finalize(cfg, run, raw, tasks)
         for item in report["maps"]:
-            item.update(actual=item["planned"], status="verified")
+            actual = (result["visibility_quotas"]["selected_by_map"].get(item["map_id"], 0)
+                      if cfg["enforce_visibility_quotas"] else item["planned"])
+            item.update(actual=actual, status="verified")
         report["complete"] = True
         write_json(run / "manifest.json", report)
         print(f'[KE] SINGLE_EDITOR_OK frames={result["images"]} maps={result["maps"]} instances=1', flush=True)

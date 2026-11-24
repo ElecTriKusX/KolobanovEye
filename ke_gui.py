@@ -26,6 +26,7 @@ FIELDS = [
  ('camera_height_min', 'Высота камеры над землёй: от'), ('camera_height_max', 'Высота камеры над землёй: до'),
  ('clipmap_feedback', 'Обратная связь clipmap'), ('timeout', 'Таймаут, с'),
  ('min_warmup_renders', 'Мин. проходов прогрева (8–64)'),
+ ('visibility_candidate_multiplier', 'Запас кандидатов для квот, ×'),
 ]
 
 
@@ -46,6 +47,8 @@ class App:
         self.render_debug = tk.BooleanVar(value=False)
         self.capture_visibility_masks = tk.BooleanVar(value=DEFAULTS['capture_visibility_masks'])
         self.screen_position_weights = DEFAULTS['screen_position_weights'].copy()
+        self.enforce_visibility_quotas = tk.BooleanVar(value=DEFAULTS['enforce_visibility_quotas'])
+        self.visibility_weights = DEFAULTS['visibility_weights'].copy()
         self.wait_frame_stability = tk.BooleanVar(value=DEFAULTS['wait_frame_stability'])
         self.wait_sky_convergence = tk.BooleanVar(value=DEFAULTS['wait_sky_convergence'])
         self.values['output'].set(str(DATASET_DIR))
@@ -73,7 +76,7 @@ class App:
             ('Танк и место', [('placement_mode',), ('map_margin_percent',), ('tank_x','tank_z','Центр поиска: X / Z'), ('tank_yaw',), ('turret_yaw_min','turret_yaw_max','Башня относительно корпуса, °'), ('gun_pitch_min','gun_pitch_max','Наклон орудия, °'), ('placement_radius',), ('minimum_ground_y',), ('max_height_range',), ('ground_offset',)]),
             ('Камера', [('distance_min','distance_max','Дистанция по горизонтали: от / до'),
                         ('camera_height_min','camera_height_max','Высота над рельефом: от / до'), ('camera_clearance',)]),
-            ('Служебные параметры', [('camera_attempts',), ('placement_attempts',), ('clipmap_feedback',), ('timeout',), ('min_warmup_renders',)])]
+            ('Служебные параметры', [('camera_attempts',), ('placement_attempts',), ('clipmap_feedback',), ('timeout',), ('min_warmup_renders',), ('visibility_candidate_multiplier',)])]
         self.widgets = {}
         def add_widget(parent, key):
             if key == 'placement_mode':
@@ -108,6 +111,8 @@ class App:
         menu.add_checkbutton(label='Ждать сходимости освещения неба', variable=self.wait_sky_convergence)
         menu.add_checkbutton(label='Диагностика рендера (MRT, глубина)', variable=self.render_debug)
         menu.add_checkbutton(label='Маски видимости (эксперимент)', variable=self.capture_visibility_masks)
+        menu.add_checkbutton(label='Строгие квоты видимости 40/25/25/10', variable=self.enforce_visibility_quotas,
+                             command=lambda: self.capture_visibility_masks.set(True) if self.enforce_visibility_quotas.get() else None)
         menu.add_separator()
         menu.add_command(label='Открыть настройки…', command=self.open_config)
         menu.add_command(label='Сохранить настройки…', command=self.save_config)
@@ -255,6 +260,8 @@ class App:
         data['render_debug'] = self.render_debug.get()
         data['capture_visibility_masks'] = self.capture_visibility_masks.get()
         data['screen_position_weights'] = self.screen_position_weights.copy()
+        data['enforce_visibility_quotas'] = self.enforce_visibility_quotas.get()
+        data['visibility_weights'] = self.visibility_weights.copy()
         data['wait_frame_stability'] = self.wait_frame_stability.get()
         data['wait_sky_convergence'] = self.wait_sky_convergence.get()
         data['map_ids'] = available_whitelist(self.detected_maps, self.selected_maps or [])
@@ -272,6 +279,8 @@ class App:
             self.render_debug.set(data['render_debug'])
             self.capture_visibility_masks.set(data['capture_visibility_masks'])
             self.screen_position_weights = data['screen_position_weights'].copy()
+            self.enforce_visibility_quotas.set(data['enforce_visibility_quotas'])
+            self.visibility_weights = data['visibility_weights'].copy()
             self.wait_frame_stability.set(data['wait_frame_stability'])
             self.wait_sky_convergence.set(data['wait_sky_convergence'])
             for k, v in data.items():

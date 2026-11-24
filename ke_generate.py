@@ -9,6 +9,8 @@ from pathlib import Path
 from kolobanoveye import plan_articulation, plan_camera_orbits
 from tools.ke_maps import MAP_ID
 from tools.ke_composition import DEFAULT_WEIGHTS, validate_weights
+from tools.ke_visibility import DEFAULT_VISIBILITY_WEIGHTS
+from tools.ke_visibility_quotas import validate_visibility_weights
 
 DEFAULTS = {
     'dagor': r'D:\Projects\DagorEngine', 'game': r'D:\Games\WarThunder',
@@ -21,9 +23,11 @@ DEFAULTS = {
     'turret_yaw_min': 0.0, 'turret_yaw_max': 0.0, 'gun_pitch_min': 0.0, 'gun_pitch_max': 0.0,
     'min_warmup_renders': 8, 'wait_sky_convergence': False, 'wait_frame_stability': True,
     'screen_position_weights': DEFAULT_WEIGHTS.copy(), 'capture_visibility_masks': False,
+    'enforce_visibility_quotas': False, 'visibility_weights': DEFAULT_VISIBILITY_WEIGHTS.copy(),
+    'visibility_candidate_multiplier': 5,
     'keep_open': False, 'render_debug': False, 'capture_last_clip': False, 'clipmap_feedback': 'software', 'timeout': 360,
 }
-INTS = {'count', 'seed', 'width', 'height', 'timeout', 'placement_attempts', 'camera_attempts', 'frames_per_position', 'min_warmup_renders', 'tank_map_resolution'}
+INTS = {'count', 'seed', 'width', 'height', 'timeout', 'placement_attempts', 'camera_attempts', 'frames_per_position', 'min_warmup_renders', 'tank_map_resolution', 'visibility_candidate_multiplier'}
 FLOATS = {'turret_yaw_min', 'turret_yaw_max', 'gun_pitch_min', 'gun_pitch_max', 'fov', 'tank_x', 'tank_z', 'tank_yaw', 'ground_offset', 'camera_clearance',
           'minimum_ground_y', 'distance_min', 'distance_max', 'elevation_min', 'elevation_max', 'placement_radius', 'max_height_range', 'camera_height_min', 'camera_height_max', 'map_margin_percent'}
 
@@ -47,6 +51,11 @@ def validate_config(raw):
     c['screen_position_weights'] = validate_weights(c['screen_position_weights'])
     if not isinstance(c['capture_visibility_masks'], bool):
         raise ValueError('capture_visibility_masks: требуется true или false')
+    if not isinstance(c['enforce_visibility_quotas'], bool):
+        raise ValueError('enforce_visibility_quotas: требуется true или false')
+    c['visibility_weights'] = validate_visibility_weights(c['visibility_weights'])
+    if c['enforce_visibility_quotas'] and not c['capture_visibility_masks']:
+        raise ValueError('Квоты видимости требуют включённых масок')
     if not isinstance(c['map_ids'], list) or len(c['map_ids']) != len(set(str(x).casefold() for x in c['map_ids'])):
         raise ValueError('map_ids: требуется список уникальных карт')
     if any(not isinstance(x, str) or MAP_ID.fullmatch(x) is None for x in c['map_ids']):
@@ -64,6 +73,8 @@ def validate_config(raw):
     for key in INTS:
         if isinstance(c[key], bool) or not isinstance(c[key], int):
             raise ValueError(f'{key}: требуется целое число')
+    if not 1 <= c['visibility_candidate_multiplier'] <= 20:
+        raise ValueError('visibility_candidate_multiplier: 1–20')
     for key in FLOATS:
         if isinstance(c[key], bool) or not isinstance(c[key], (int, float)) or not math.isfinite(c[key]):
             raise ValueError(f'{key}: требуется конечное число')
