@@ -135,3 +135,16 @@ Windows-проверка C++ и сравнение с обычным режим�
 - Следующий подшаг 2.6.b: один нативный процесс, обратная связь на кадр,
   ранняя остановка внутри пакета. Реальная Windows-проверка после 2.6.b
   по решению пользователя; офлайн-тесты 2.6.a проверяют отдельные сценарии.
+
+## 2.6.b — online feedback (candidate implementation)
+
+Opt-in `visibility_quota_mode=online` with strict quotas (GUI: Online-добор).
+One DaEditor process receives immutable BLK tasks and per-frame target decisions.
+Python validates the complete RGB/masks/metadata before acknowledging the next
+frame; exact map/global visibility quotas remain unchanged. Current map stays
+loaded within a task; a scheduler can change maps or stop midway. Native
+feedback timeout 300 s; Python timeout per response uses config timeout.
+Per-map attempt budget = map target × multiplier; no-gain stop after several
+bounded windows; no silent fallback. Technical errors fail closed. Existing
+refill mode remains available. Online uses in-memory selection per candidate;
+large-scale performance and actual native Windows build/run are unverified.

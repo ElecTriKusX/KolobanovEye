@@ -49,5 +49,6 @@
   "refill_batch_per_map": 256,
   "refill_stall_rounds": 3,
   "refill_max_rounds": 10000,
-  "search_occlusion": false
+  "search_occlusion": false,
+  "visibility_quota_mode": "refill"
 }

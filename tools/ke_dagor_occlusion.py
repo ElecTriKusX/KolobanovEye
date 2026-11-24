@@ -102,7 +102,10 @@ def install_occlusion_search(source: Path) -> bool:
     raw = source.read_bytes()
     text = raw.replace(b"\r\n", b"\n").decode("utf-8")
     if MARKER in text:
-        if not all(text.count(new) == 1 for _, new in EDITS):
+        # The online successor replaces just the requested-target expression.
+        from tools.ke_dagor_online import OLD_TARGET, NEW_TARGET
+        checked = text.replace(NEW_TARGET, OLD_TARGET, 1) if text.count(NEW_TARGET) == 1 else text
+        if not all(checked.count(new) == 1 for _, new in EDITS):
             raise ValueError(f"Partial occlusion-search installation: {source}")
         return False
     for old, new in EDITS:

@@ -26,6 +26,7 @@ DEFAULTS = {
     'enforce_visibility_quotas': False, 'visibility_weights': DEFAULT_VISIBILITY_WEIGHTS.copy(),
     'visibility_candidate_multiplier': 5, 'search_occlusion': False,
     'refill_batch_per_map': 256, 'refill_stall_rounds': 3, 'refill_max_rounds': 10000,
+    'visibility_quota_mode': 'refill',
     'keep_open': False, 'render_debug': False, 'capture_last_clip': False, 'clipmap_feedback': 'software', 'timeout': 360,
 }
 INTS = {'count', 'seed', 'width', 'height', 'timeout', 'placement_attempts', 'camera_attempts', 'frames_per_position', 'min_warmup_renders', 'tank_map_resolution', 'visibility_candidate_multiplier', 'refill_batch_per_map', 'refill_stall_rounds', 'refill_max_rounds'}
@@ -55,6 +56,8 @@ def validate_config(raw):
     if not isinstance(c['enforce_visibility_quotas'], bool):
         raise ValueError('enforce_visibility_quotas: требуется true или false')
     c['visibility_weights'] = validate_visibility_weights(c['visibility_weights'])
+    if c['visibility_quota_mode'] not in ('refill', 'online'):
+        raise ValueError('visibility_quota_mode: refill или online')
     if not isinstance(c['search_occlusion'], bool):
         raise ValueError('search_occlusion: требуется true или false')
     if c['search_occlusion'] and not c['capture_visibility_masks']:

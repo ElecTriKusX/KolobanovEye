@@ -266,7 +266,7 @@ def read_impostor_quality(source: Path, count: int) -> list[dict]:
         match = re.search(r"CON: \[KE\] MAP_TASK_BEGIN index=(\d+)/(\d+)", line)
         if match:
             pos = int(match.group(1)) - 1
-            current = pos if 0 <= pos < count and int(match.group(2)) == count else None
+            current = pos if 0 <= pos < count and int(match.group(2)) in (0, count) else None
         if current is not None and "[KE] IMPOSTOR_SHADOW_SLICE_SKIPPED " in line:
             found[current]["skipped_updates"] += 1
             asset = re.search(r"\basset=(\S+)", line)
@@ -302,7 +302,74 @@ def extract_map_logs(log, tasks, *, stability=True):
     return result
 
 
-def collect_candidates(cfg, run, raw, tasks):
+def collect_frame(cfg, run, raw, task, idx, blk):
+    """Validate one completed frame; shared by fixed and online capture."""
+    image_path = task["outputs"][idx]
+    verify_png(image_path, cfg["width"], cfg["height"])
+    validate_rgb_png(image_path, cfg["width"], cfg["height"])
+    level_match = re.search(r'^level:t="([^"\r\n]+)"', blk, re.MULTILINE)
+    if not level_match or Path(level_match.group(1)).name.casefold() != Path(task["map_id"]).name.casefold():
+        raise ValueError(f'Несовпадение карты в кадре {idx}: {task["map_id"]}')
+    annotation = parse_annotation(blk)["annotations"][0]
+    attempt, camera = select_camera_attempt(blk, task["cameras"][idx])
+    comp = idx // task["frames_per_position"]
+    if not re.search(rf"^composition_index:i={comp}\s*$", blk, re.MULTILINE):
+        raise ValueError("Неверный индекс расстановки техники")
+    articulation = read_articulation(blk, task["poses"][idx]) if task["poses"] else {}
+    position = task["screen_positions"][idx]
+    screen_bin = re.search(r'^screen_bin_planned:t="([^"\r\n]+)"', blk, re.MULTILINE)
+    if not screen_bin or screen_bin.group(1) != position["bin"]:
+        raise ValueError("Native Dagor screen-composition metadata missing or mismatched")
+    match_uv = re.search(r'^screen_offset_uv:p2=([^\r\n]+)', blk, re.MULTILINE)
+    if not match_uv:
+        raise ValueError("Native Dagor did not report the camera screen offset")
+    actual_uv = [float(q.strip()) for q in match_uv.group(1).split(",")]
+    if len(actual_uv) != 2 or any(abs(a - b) > 1e-4 for a, b in
+                                  zip(actual_uv, position["offset_uv"])):
+        raise ValueError("Native Dagor camera offset differs from the capture plan")
+    visibility = (read_capture_masks(raw, image_path.name, blk, cfg["width"], cfg["height"])
+                  if cfg["capture_visibility_masks"] else None)
+    occlusion = (read_occlusion_proxy(blk, task["occlusion_targets"][idx], cfg["camera_attempts"], visibility)
+                 if cfg["search_occlusion"] else None)
+    image_id = int(image_path.stem)
+    scene_id = f'{run.name}:{task["index"]}:{task["stem"]}:{comp}'
+    group = group_for(blk, 256)
+    record = {
+        "image_id": image_id, "image": f"images/{image_path.name}",
+        "map_id": task["map_id"], "scene_id": scene_id, "scene_group_id": group,
+        "frame_index": idx, "composition_index": comp, "seed": task["seed"],
+        "camera_attempt": attempt, "camera_azimuth_deg": camera["azimuth_deg"],
+        "camera_horizontal_distance": camera["horizontal_distance"],
+        "planned_camera_offset": camera["offset"],
+        "screen_position_bin_planned": position["bin"],
+        "screen_position_target_uv": position["target_uv"],
+        "annotation": annotation, "visibility_measurement": visibility,
+        "occlusion_search": occlusion,
+        "dagor_frame_metadata_blk": blk,
+        "sha256": hashlib.sha256(image_path.read_bytes()).hexdigest(), **articulation,
+    }
+    image = {
+        "id": image_id, "file_name": record["image"],
+        "width": cfg["width"], "height": cfg["height"], "map_id": task["map_id"],
+        "scene_id": scene_id, "scene_group": group, "scene_group_id": group,
+        "ke_scene": scene_metadata(blk),
+        **({"ke_visibility": visibility} if visibility is not None else {}),
+    }
+    box = annotation["bbox_xywh"] if visibility is None else visibility["bbox_visible_xywh"]
+    coco_annotation = None
+    if box is not None:
+        x, y, w, h = box
+        coco_annotation = {
+            "id": image_id, "image_id": image_id, "category_id": 1,
+            "bbox": [x, y, w, h], "area": w * h, "iscrowd": 0,
+            "bbox_kind": annotation["bbox_kind"] if visibility is None else "visible_opaque",
+            "bbox_method": annotation["bbox_method"] if visibility is None else visibility["method"],
+            **({"ke_visibility": visibility} if visibility is not None else {}),
+        }
+    return record, image, coco_annotation
+
+
+def collect_candidates(cfg, run, raw, tasks, *, prevalidated=None):
     """Validate one native batch once; do not select or delete any files."""
     log, source = read_editor_log(run)
     if f'[KE] MAP_BATCH_OK maps={len(tasks)}' not in log:
@@ -336,72 +403,21 @@ def collect_candidates(cfg, run, raw, tasks):
                   f'impostor_shadow_skipped={quality["skipped_updates"]} '
                   f'assets={len(quality["assets"])}; visual review required', flush=True)
         for idx, image_path in enumerate(task["outputs"]):
-            verify_png(image_path, cfg["width"], cfg["height"])
-            validate_rgb_png(image_path, cfg["width"], cfg["height"])
-            blk = journal[idx]
-            level_match = re.search(r'^level:t="([^"\r\n]+)"', blk, re.MULTILINE)
-            if not level_match or Path(level_match.group(1)).name.casefold() != Path(task["map_id"]).name.casefold():
-                raise ValueError(f'Несовпадение карты в кадре {idx}: {task["map_id"]}')
-            annotation = parse_annotation(blk)["annotations"][0]
-            attempt, camera = select_camera_attempt(blk, task["cameras"][idx])
-            comp = idx // task["frames_per_position"]
-            if not re.search(rf"^composition_index:i={comp}\s*$", blk, re.MULTILINE):
-                raise ValueError("Неверный индекс расстановки техники")
-            articulation = read_articulation(blk, task["poses"][idx]) if task["poses"] else {}
-            position = task["screen_positions"][idx]
-            screen_bin = re.search(r'^screen_bin_planned:t="([^"\r\n]+)"', blk, re.MULTILINE)
-            if not screen_bin or screen_bin.group(1) != position["bin"]:
-                raise ValueError("Native Dagor screen-composition metadata missing or mismatched")
-            match_uv = re.search(r'^screen_offset_uv:p2=([^\r\n]+)', blk, re.MULTILINE)
-            if not match_uv:
-                raise ValueError("Native Dagor did not report the camera screen offset")
-            actual_uv = [float(q.strip()) for q in match_uv.group(1).split(",")]
-            if len(actual_uv) != 2 or any(abs(a - b) > 1e-4 for a, b in
-                                          zip(actual_uv, position["offset_uv"])):
-                raise ValueError("Native Dagor camera offset differs from the capture plan")
-            visibility = (read_capture_masks(raw, image_path.name, blk, cfg["width"], cfg["height"])
-                          if cfg["capture_visibility_masks"] else None)
-            occlusion = (read_occlusion_proxy(blk, task["occlusion_targets"][idx], cfg["camera_attempts"], visibility)
-                         if cfg["search_occlusion"] else None)
-            image_id = int(image_path.stem)
-            scene_id = f'{run.name}:{task["stem"]}:{comp}'
-            group = group_for(blk, 256)
-            record = {
-                "image_id": image_id, "image": f"images/{image_path.name}",
-                "map_id": task["map_id"], "scene_id": scene_id, "scene_group_id": group,
-                "frame_index": idx, "composition_index": comp, "seed": task["seed"],
-                "camera_attempt": attempt, "camera_azimuth_deg": camera["azimuth_deg"],
-                "camera_horizontal_distance": camera["horizontal_distance"],
-                "planned_camera_offset": camera["offset"],
-                "screen_position_bin_planned": position["bin"],
-                "screen_position_target_uv": position["target_uv"],
-                "annotation": annotation, "visibility_measurement": visibility,
-                "occlusion_search": occlusion,
-                "dagor_frame_metadata_blk": blk,
-                "sha256": hashlib.sha256(image_path.read_bytes()).hexdigest(), **articulation,
-            }
+            if prevalidated is None:
+                record, image, annotation = collect_frame(cfg, run, raw, task, idx, journal[idx])
+            else:
+                record, image, annotation = prevalidated[int(image_path.stem)]
+                if record["dagor_frame_metadata_blk"] != journal[idx]:
+                    raise ValueError("Frame journal changed after online validation")
             records.append(record)
-            images.append({
-                "id": image_id, "file_name": record["image"],
-                "width": cfg["width"], "height": cfg["height"], "map_id": task["map_id"],
-                "scene_id": scene_id, "scene_group": group, "scene_group_id": group,
-                "ke_scene": scene_metadata(blk),
-                **({"ke_visibility": visibility} if visibility is not None else {}),
-            })
-            box = annotation["bbox_xywh"] if visibility is None else visibility["bbox_visible_xywh"]
-            if box is not None:
-                x, y, w, h = box
-                annotations.append({
-                    "id": image_id, "image_id": image_id, "category_id": 1,
-                    "bbox": [x, y, w, h], "area": w * h, "iscrowd": 0,
-                    "bbox_kind": annotation["bbox_kind"] if visibility is None else "visible_opaque",
-                    "bbox_method": annotation["bbox_method"] if visibility is None else visibility["method"],
-                    **({"ke_visibility": visibility} if visibility is not None else {}),
-                })
+            images.append(image)
+            if annotation is not None:
+                annotations.append(annotation)
+            scene_id = record["scene_id"]
             scenes.setdefault(scene_id, {
                 "scene_id": scene_id, "map_id": task["map_id"],
-                "scene_group_id": group, "image_ids": [],
-            })["image_ids"].append(image_id)
+                "scene_group_id": record["scene_group_id"], "image_ids": [],
+            })["image_ids"].append(record["image_id"])
             print(f"[KE] FINALIZE_FRAME {len(images)}/{expected} image={image_path.name}", flush=True)
     return records, images, annotations, scenes, maps
 
@@ -593,6 +609,9 @@ def generate(config, run, raw, executor=None):
     cfg = validate_config(config)
     if not cfg["enforce_visibility_quotas"]:
         return _generate_batch(cfg, run, raw, executor)
+    if cfg["visibility_quota_mode"] == "online":
+        from tools.ke_online_capture import generate_online
+        return generate_online(cfg, run, raw, executor=executor)
     run, raw = Path(run).resolve(), Path(raw).resolve()
     for forbidden in (Path(cfg["game"]).resolve(), Path(cfg["dagor"]).resolve()):
         if any(path == forbidden or path.is_relative_to(forbidden) for path in (run, raw)):

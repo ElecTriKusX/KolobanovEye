@@ -879,6 +879,8 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
     install_occlusion_search(capture_cpp)
     from tools.ke_dagor_visibility import install_visibility_capture
     install_visibility_capture(dagor)
+    from tools.ke_dagor_online import install_online_feedback
+    install_online_feedback(capture_cpp)
     guard_impostor_shadow_atlas_slices(dagor)
     if with_ooz:
         enable_failed_ooz_stream_capture(dagor)

@@ -48,6 +48,7 @@ class App:
         self.capture_visibility_masks = tk.BooleanVar(value=DEFAULTS['capture_visibility_masks'])
         self.screen_position_weights = DEFAULTS['screen_position_weights'].copy()
         self.enforce_visibility_quotas = tk.BooleanVar(value=DEFAULTS['enforce_visibility_quotas'])
+        self.online_quotas = tk.BooleanVar(value=True)
         self.visibility_weights = DEFAULTS['visibility_weights'].copy()
         self.search_occlusion = tk.BooleanVar(value=DEFAULTS['search_occlusion'])
         self.wait_frame_stability = tk.BooleanVar(value=DEFAULTS['wait_frame_stability'])
@@ -114,6 +115,7 @@ class App:
         menu.add_checkbutton(label='Маски видимости (эксперимент)', variable=self.capture_visibility_masks)
         menu.add_checkbutton(label='Строгие квоты видимости + добор (40/25/25/10)', variable=self.enforce_visibility_quotas,
                              command=lambda: self.capture_visibility_masks.set(True) if self.enforce_visibility_quotas.get() else None)
+        menu.add_checkbutton(label='Online-добор в одном DaEditor (2.6.b)', variable=self.online_quotas)
         menu.add_checkbutton(label='Поиск перекрытий по коллизиям (эксперимент)', variable=self.search_occlusion,
                              command=lambda: self.capture_visibility_masks.set(True) if self.search_occlusion.get() else None)
         menu.add_separator()
@@ -264,6 +266,7 @@ class App:
         data['capture_visibility_masks'] = self.capture_visibility_masks.get()
         data['screen_position_weights'] = self.screen_position_weights.copy()
         data['enforce_visibility_quotas'] = self.enforce_visibility_quotas.get()
+        data['visibility_quota_mode'] = 'online' if self.online_quotas.get() else 'refill'
         data['visibility_weights'] = self.visibility_weights.copy()
         data['search_occlusion'] = self.search_occlusion.get()
         data['wait_frame_stability'] = self.wait_frame_stability.get()
@@ -284,6 +287,7 @@ class App:
             self.capture_visibility_masks.set(data['capture_visibility_masks'])
             self.screen_position_weights = data['screen_position_weights'].copy()
             self.enforce_visibility_quotas.set(data['enforce_visibility_quotas'])
+            self.online_quotas.set(data['visibility_quota_mode'] == 'online')
             self.visibility_weights = data['visibility_weights'].copy()
             self.search_occlusion.set(data['search_occlusion'])
             self.wait_frame_stability.set(data['wait_frame_stability'])
