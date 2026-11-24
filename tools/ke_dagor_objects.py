@@ -65,7 +65,7 @@ INCLUDES = r'''#include <rendInst/rendInstCollision.h>
 namespace rendinst { void keForeachGeometryInBox(const BBox3 &, ForeachCB &); }
 '''
 # Keep the existing includes and bounds marker for previous patch installers.
-INCLUDE_ANCHOR = "#include <chrono>\n"
+INCLUDE_ANCHOR = "#include <thread>\n"
 CAPTURE_ANCHOR = '  float ground = 0.f;\n  Point3 groundNormal;'
 CAPTURE = r'''  // [KE] OBJECT_SCAN_V1
   if (const char *inventory = config.getStr("object_inventory", ""); *inventory)

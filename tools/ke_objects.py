@@ -7,6 +7,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 import json
 import math
+import os
 from pathlib import Path
 import subprocess
 import uuid
@@ -245,7 +246,8 @@ def run_scan(dagor,game,output,selected,resolution=1024,timeout=1800,executor=No
     cmd=make_command(cfg,out,tasks)
     if executor is None:
         with (out/"host-stdout.log").open("wb") as host:
-            code=subprocess.run(cmd,cwd=out,stdout=host,stderr=subprocess.STDOUT,timeout=timeout).returncode
+            code=subprocess.run(cmd,cwd=out,stdout=host,stderr=subprocess.STDOUT,timeout=timeout,
+                                env={**os.environ,"KE_OOZ_FAILURE_DIR":str(out/"ooz-failures")}).returncode
     else:
         code=executor(cmd)
     log,source=read_editor_log(out)

@@ -11,8 +11,11 @@ class NativeInventoryInstallerTests(unittest.TestCase):
         self.assertIn("GatherRiTypeFlag::RiGenOnly, nullptr, ignore, callback, false, true",patched)
 
     def test_capture_idempotence(self):
-        src=INCLUDE_ANCHOR+"\n"+CAPTURE_ANCHOR
+        from tools.ke_dagor_online import EDITS
+        online_includes = EDITS[0][1]
+        src=online_includes+"\n"+CAPTURE_ANCHOR
         patched=upgrade_capture(src)
         self.assertEqual(upgrade_capture(patched),patched)
+        self.assertIn(online_includes, patched)
         self.assertIn("scene.prepareFixedClip(1024);",patched)
         self.assertIn('return true;\n  }\n'+CAPTURE_ANCHOR,patched)

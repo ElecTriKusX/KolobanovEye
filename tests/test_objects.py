@@ -43,3 +43,43 @@ class ObjectInventoryTests(unittest.TestCase):
         self.assertEqual(len(grid["cells"]),4)
         self.assertEqual(len(grid["groups"]),1)
         self.assertEqual(sum(len(c["center_ids"]) for c in grid["cells"]),1)
+
+
+    def test_separate_native_batch_without_dataset_raw(self):
+        from tests.test_single_editor import SingleEditorTests
+        from tools.ke_objects import run_scan
+        from tools.ke_review import write_rgb_png
+        import json
+        import re
+        fixture = SingleEditorTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        cfg = fixture.config
+        dataset = fixture.dataset
+        dataset.mkdir(parents=True, exist_ok=True)
+        sentinel = dataset/"raw"
+        sentinel.mkdir(exist_ok=True)
+        (sentinel/"keep.txt").write_text("untouched")
+        mids = cfg["map_ids"]
+        def executor(cmd):
+            run=Path(next(s.split(":",1)[1] for s in cmd if str(s).startswith("-rootdir:")))
+            batch=(run/"map-batch.blk").read_text(encoding="ascii")
+            paths=re.findall(r'^map_\d+:t="([^"]+)"$',batch,re.M)
+            logs=[]
+            for mid,path in zip(mids,paths):
+                text=Path(path).read_text(encoding="ascii")
+                inventory=Path(re.search(r'^object_inventory:t="([^"]+)"$',text,re.M).group(1))
+                inventory.write_text("KEOBJECTS\t1\t0\t128\t0\t128\t1\n"+
+                    row("ri_extra",1,(10,0,10),(8,0,8),(12,2,12),"house")+
+                    "T\t0\t0\t1\t1\nEND\t1\t1\t0\n",encoding="ascii")
+                write_rgb_png(run/"maps"/(Path(mid).name+"-tank.png"),256,256,bytes([20,30,40])*256*256)
+                logs.append("[KE] OBJECT_SCAN_OK tiles=1 objects=1 invalid=0")
+            logs.append(f"[KE] MAP_BATCH_OK maps={len(paths)}")
+            (run/"probe.dcmd.log").write_text("\n".join(logs),encoding="ascii")
+            return 0
+        out=run_scan(cfg["dagor"],cfg["game"],dataset,mids,256,executor=executor)
+        manifest=json.loads((out/"manifest.json").read_text())
+        self.assertEqual(manifest["editor_processes"],1)
+        self.assertEqual(set(manifest["maps"]),set(mids))
+        self.assertEqual((sentinel/"keep.txt").read_text(),"untouched")
+        self.assertEqual(manifest["maps"][mids[0]]["background"],"dagor_tank_square")
