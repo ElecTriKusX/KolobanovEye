@@ -896,6 +896,8 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
     install_stability_reject(capture_cpp)
     from tools.ke_ri_trace_props import install_ri_trace_props
     install_ri_trace_props(dagor / "prog/gameLibs/rendInst/rendInstGenCollision.cpp")
+    from tools.ke_dagor_objects import install_object_scan
+    install_object_scan(dagor)
     guard_impostor_shadow_atlas_slices(dagor)
     if with_ooz:
         enable_failed_ooz_stream_capture(dagor)

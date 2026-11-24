@@ -126,6 +126,7 @@ class App:
         self.open_button = ttk.Button(buttons, text='Открыть папку', command=self.open_result)
         self.open_button.pack(side='left', padx=5)
         ttk.Button(buttons, text='Провести анализ', command=self.analyze_dataset).pack(side='left', padx=5)
+        ttk.Button(buttons, text='Анализ объектов', command=self.analyze_objects).pack(side='left', padx=5)
         ttk.Button(buttons, text='Копировать журнал', command=self.copy_log).pack(side='left')
         self.state = tk.StringVar(value='Готово')
         ttk.Label(main, textvariable=self.state).pack(anchor='w')
@@ -152,6 +153,21 @@ class App:
             return
         self.start_tool('ke_analysis.py', ['--dataset', str(DATASET_DIR)])
 
+
+    def analyze_objects(self):
+        if self.running:
+            return
+        try:
+            selected = available_whitelist(self.detected_maps, self.selected_maps or [])
+            if not selected:
+                raise ValueError('Выберите хотя бы одну карту')
+            args = ['--dagor', self.values['dagor'].get(), '--game', self.values['game'].get(),
+                    '--output', str(DATASET_DIR)]
+            for mid in selected:
+                args += ['--map', mid]
+            self.start_tool('ke_objects.py', args)
+        except ValueError as exc:
+            messagebox.showerror('Анализ объектов', str(exc))
 
     def copy_log(self):
         try:
