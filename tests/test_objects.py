@@ -23,7 +23,8 @@ class ObjectInventoryTests(unittest.TestCase):
             self.assertEqual(report["groups"],3)
             self.assertEqual(report["by_category_hint"],{"building":1,"vegetation":1,"other":1})
             for name in ("objects-map.png","density-map.png","groups-map.png","large-obstacles-map.png",
-                         "vegetation-map.png","small-obstacles-map.png","unknown-obstacles-map.png","low-density-map.png"):
+                         "vegetation-map.png","small-obstacles-map.png","unknown-obstacles-map.png","low-density-map.png",
+                         "placement-candidates-map.png"):
                 self.assertEqual(load_png(p/name)[:2],(256,256))
             self.assertEqual(report["background"],"plain_background_overview_missing")
 

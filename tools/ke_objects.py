@@ -20,6 +20,7 @@ from tools.ke_maps import scan_maps, available_whitelist
 from tools.ke_pixel_debug import load_png
 from tools.ke_review import write_rgb_png
 from tools.ke_object_layers import build_index, LAYERS, COLORS as LAYER_COLORS
+from tools.ke_smart_positions import build_pool, digest, BINS as POSITION_BINS, COLORS as POSITION_COLORS
 
 CELL = 16.0
 COLORS = {"building": (232, 149, 57), "vegetation": (63, 173, 105), "other": (87, 159, 229)}
@@ -169,6 +170,27 @@ def render_maps(out, bounds, objects, grid, overview, resolution):
     return background,peak
 
 
+def render_candidate_map(out, bank, overview, resolution):
+    if overview.is_file():
+        w,h,pixels=load_png(overview)
+        if (w,h)!=(resolution,resolution):
+            raise ValueError("Overview resolution mismatch")
+    else:
+        w=h=resolution
+        pixels=bytes((35,44,50))*w*h
+    image=bytearray(pixels)
+    xmin,xmax,zmin,zmax=bank["bounds"]
+    for kind,color in zip(POSITION_BINS,POSITION_COLORS):
+        for x,z in bank["pools"][kind]:
+            ix=max(0,min(w-1,int((x-xmin)/(xmax-xmin)*w)))
+            iy=max(0,min(h-1,int((zmax-z)/(zmax-zmin)*h)))
+            for row in range(iy,min(h,iy+2)):
+                for col in range(ix,min(w,ix+2)):
+                    off=(row*w+col)*3
+                    image[off:off+3]=bytes(color)
+    write_rgb_png(out/"placement-candidates-map.png",w,h,image)
+
+
 def analyze_map(out, overview, resolution=1024):
     bounds,objects,tiles,invalid=read_inventory(out/"objects-native.tsv")
     grid=spatial_index(bounds,objects)
@@ -177,6 +199,11 @@ def analyze_map(out, overview, resolution=1024):
             stream.write(json.dumps(item,ensure_ascii=False)+"\n")
     write_json(out/"spatial-index.json",grid)
     background,peak=render_maps(out,bounds,objects,grid,overview,resolution)
+    bank=build_pool(bounds,objects)
+    bank["map_id"]="levels/"+out.name+".bin"
+    bank["source_sha256"]=digest(out/"objects-native.tsv")
+    write_json(out/"placement-candidates.json",bank)
+    render_candidate_map(out,bank,overview,resolution)
     report={"status":"SCANNED_UNVERIFIED" if objects else "EMPTY_UNVERIFIED",
             "coverage":"loaded_rendinst_snapshot_per_tile_not_proven_complete",
             "static_scene_objects":"not_enumerated", "tile_size_max_m":128,
@@ -197,6 +224,7 @@ def analyze_map(out, overview, resolution=1024):
             "sector_size_m":grid["sector_size_m"],
             "low_density_threshold":.1,"low_density_is_not_validated_placement":True,
             "raw_index_includes_all_objects":True,
+            "placement_candidate_bank":{k:v for k,v in bank.items() if k!="pools"},
             "limitations":["render_AABB_proxy_not_mesh_or_collision", "semantic_hints_not_asset_metadata",
                            "groups_are_local_sampling_regions_not_city_boundaries"]}
     write_json(out/"objects-report.json",report)
