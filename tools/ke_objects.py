@@ -116,8 +116,9 @@ def spatial_index(bounds, objects, cell=CELL):
     # city/forest claim; a bridge of adjacent cells may connect large regions.
     remaining = set(footprints)
     groups, group_by_cell = [], {}
-    while remaining:
-        seed = min(remaining, key=lambda p:(p[1],p[0]))
+    for seed in sorted(remaining, key=lambda p:(p[1],p[0])):
+        if seed not in remaining:
+            continue
         remaining.remove(seed)
         stack, members, ids = [seed], [], set()
         while stack:

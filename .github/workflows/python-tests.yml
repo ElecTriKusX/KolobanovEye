@@ -1,7 +1,7 @@
 name: Python unit tests
 on:
   push:
-    branches: [feature/avg-map-catalog-whitelist, feature/visibility-quotas]
+    branches: [main, feature/avg-map-catalog-whitelist, feature/visibility-quotas, feature/smart-placement]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -48,4 +48,10 @@ jobs:
               assert not install_ri_trace_props(ri_source)
               assert once == ri_source.read_bytes()
               print('RendInst trace guard applies to pinned Dagor and is idempotent.')
+              from tools.ke_dagor_objects import upgrade_walk
+              before = ri_source.read_text(encoding='utf-8')
+              after = upgrade_walk(before)
+              assert before != after
+              assert upgrade_walk(after) == after
+              print('Geometry-only walk applies to pinned Dagor and is idempotent.')
           PY
