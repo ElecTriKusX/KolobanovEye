@@ -20,9 +20,10 @@ class ObjectInventoryTests(unittest.TestCase):
                 "T\t0\t0\t3\t3\nEND\t1\t3\t0\n",encoding="ascii")
             report=analyze_map(p,p/"missing.png",256)
             self.assertEqual(report["objects"],3)
-            self.assertEqual(report["groups"],2)
+            self.assertEqual(report["groups"],3)
             self.assertEqual(report["by_category_hint"],{"building":1,"vegetation":1,"other":1})
-            for name in ("objects-map.png","density-map.png","groups-map.png"):
+            for name in ("objects-map.png","density-map.png","groups-map.png","large-obstacles-map.png",
+                         "vegetation-map.png","small-obstacles-map.png","unknown-obstacles-map.png","low-density-map.png"):
                 self.assertEqual(load_png(p/name)[:2],(256,256))
             self.assertEqual(report["background"],"plain_background_overview_missing")
 

@@ -19,6 +19,7 @@ from kolobanoveye import dagor_path, editor_failure
 from tools.ke_maps import scan_maps, available_whitelist
 from tools.ke_pixel_debug import load_png
 from tools.ke_review import write_rgb_png
+from tools.ke_object_layers import build_index, LAYERS, COLORS as LAYER_COLORS
 
 CELL = 16.0
 COLORS = {"building": (232, 149, 57), "vegetation": (63, 173, 105), "other": (87, 159, 229)}
@@ -96,52 +97,7 @@ def read_inventory(path):
 
 
 def spatial_index(bounds, objects, cell=CELL):
-    if not math.isfinite(cell) or cell <= 0:
-        raise ValueError("Invalid cell size")
-    xmin,xmax,zmin,zmax = bounds
-    nx,nz = math.ceil((xmax-xmin)/cell), math.ceil((zmax-zmin)/cell)
-    if nx*nz > 1048576:
-        raise ValueError("Spatial grid exceeds limit")
-    def index(x,z):
-        return max(0,min(nx-1,int((x-xmin)//cell))), max(0,min(nz-1,int((z-zmin)//cell)))
-    centers, footprints = defaultdict(list), defaultdict(list)
-    for o in objects:
-        centers[index(o["position"][0],o["position"][2])].append(o["id"])
-        lo,hi = o["bbox_min"],o["bbox_max"]
-        if hi[0] < xmin or lo[0] > xmax or hi[2] < zmin or lo[2] > zmax:
-            continue
-        x0,z0 = index(lo[0],lo[2]); x1,z1 = index(hi[0],hi[2])
-        for z in range(z0,z1+1):
-            for x in range(x0,x1+1):
-                footprints[x,z].append(o["id"])
-    # Connected components on occupied AABB cells (8-neighbor). No semantic
-    # city/forest claim; a bridge of adjacent cells may connect large regions.
-    remaining = set(footprints)
-    groups, group_by_cell = [], {}
-    for seed in sorted(remaining, key=lambda p:(p[1],p[0])):
-        if seed not in remaining:
-            continue
-        remaining.remove(seed)
-        stack, members, ids = [seed], [], set()
-        while stack:
-            x,z = stack.pop()
-            members.append((x,z))
-            ids.update(footprints[x,z])
-            for dx,dz in ((-1,-1),(0,-1),(1,-1),(-1,0),(1,0),(-1,1),(0,1),(1,1)):
-                neighbor = x+dx,z+dz
-                if neighbor in remaining:
-                    remaining.remove(neighbor)
-                    stack.append(neighbor)
-        gid = len(groups)+1
-        for p in members:
-            group_by_cell[p] = gid
-        groups.append({"id":gid, "cells":len(members), "object_ids":sorted(ids),
-                       "cell_bounds":[min(x for x,z in members), max(x for x,z in members),
-                                      min(z for x,z in members), max(z for x,z in members)]})
-    cells = [{"x":x,"z":z,"center_ids":centers.get((x,z),[]),
-              "bbox_ids":footprints.get((x,z),[]),"group":group_by_cell.get((x,z))}
-             for x,z in sorted(set(centers)|set(footprints),key=lambda p:(p[1],p[0]))]
-    return {"cell_size_m":cell,"nx":nx,"nz":nz,"bounds":bounds,"cells":cells,"groups":groups}
+    return build_index(bounds, objects, cell)
 
 
 def render_maps(out, bounds, objects, grid, overview, resolution):
@@ -155,39 +111,60 @@ def render_maps(out, bounds, objects, grid, overview, resolution):
         base = bytearray(bytes((35,44,50))*w*h)
         background = "plain_background_overview_missing"
     xmin,xmax,zmin,zmax=bounds
-    def pix(x,z):
-        return (max(0,min(w-1,int((x-xmin)/(xmax-xmin)*w))),
-                max(0,min(h-1,int((zmax-z)/(zmax-zmin)*h))))
-    def paint(rgb,x0,y0,x1,y1,color,alpha=.65):
-        for y in range(y0,y1+1):
-            for x in range(x0,x1+1):
-                i=(y*w+x)*3
-                rgb[i:i+3]=bytes(int(rgb[i+k]*(1-alpha)+color[k]*alpha) for k in range(3))
+    def px(x):
+        return max(0,min(w,round((x-xmin)/(xmax-xmin)*w)))
+    def py(z):
+        return max(0,min(h,round((zmax-z)/(zmax-zmin)*h)))
+    def paint(rgb,x0,y0,x1,y1,color,alpha):
+        if x0>=x1 or y0>=y1:return
+        lut=[bytes(round(v*(1-alpha)+c*alpha) for v in range(256)) for c in color]
+        for y in range(y0,y1):
+            a,b=(y*w+x0)*3,(y*w+x1)*3
+            for k in range(3):
+                rgb[a+k:b+k:3]=rgb[a+k:b+k:3].translate(lut[k])
     obj_image=bytearray(base)
-    # Draw clipped AABB footprint and a center pixel, not a filled exact mesh.
     for o in objects:
-        lo,hi=o["bbox_min"],o["bbox_max"]
-        if hi[0]>=xmin and lo[0]<=xmax and hi[2]>=zmin and lo[2]<=zmax:
-            x0,y1=pix(lo[0],lo[2]); x1,y0=pix(hi[0],hi[2])
-            color=COLORS[o["category_hint"]]
-            paint(obj_image,x0,y0,x1,y1,color,.55)
-        x,y=pix(o["position"][0],o["position"][2])
-        obj_image[(y*w+x)*3:(y*w+x)*3+3]=bytes(COLORS[o["category_hint"]])
+        layer=o['analysis_layer']
+        if layer not in LAYERS or o['duplicate_of'] is not None:continue
+        x,z=o['position'][0],o['position'][2]
+        ix,iy=min(w-1,px(x)),min(h-1,py(z))
+        obj_image[(iy*w+ix)*3:(iy*w+ix)*3+3]=bytes(LAYER_COLORS[layer])
     write_rgb_png(out/"objects-map.png",w,h,obj_image)
-    density,groups=bytearray(base),bytearray(base)
-    peak=max((len(c["center_ids"]) for c in grid["cells"]),default=0)
-    palette=((89,196,225),(238,169,65),(192,125,227),(85,207,132),(231,112,117),(215,212,92))
-    cell=grid["cell_size_m"]
-    for c in grid["cells"]:
-        x,z=c["x"],c["z"]
-        x0,y1=pix(xmin+x*cell,zmin+z*cell); x1,y0=pix(min(xmax,xmin+(x+1)*cell),min(zmax,zmin+(z+1)*cell))
-        count=len(c["center_ids"])
-        if count:
-            t=math.log1p(count)/math.log1p(peak)
-            paint(density,x0,y0,x1,y1,(255,int(210*(1-t)),int(90*(1-t))),.65)
-        if c["group"]:
-            paint(groups,x0,y0,x1,y1,palette[(c["group"]-1)%len(palette)],.60)
-    write_rgb_png(out/"density-map.png",w,h,density)
+    # Each layer uses the same absolute 0..1 projected area proxy on all maps.
+    specs={"density-map.png":("combined",(245,112,48)),
+           "large-obstacles-map.png":("large",(232,149,57)),
+           "vegetation-map.png":("vegetation",LAYER_COLORS["vegetation"]),
+           "small-obstacles-map.png":("small",LAYER_COLORS["small"]),
+           "unknown-obstacles-map.png":("unknown",LAYER_COLORS["unknown"]),
+           "low-density-map.png":("low",(151,203,139))}
+    images={name:bytearray(base) for name in specs}
+    groups=bytearray(base)
+    cell=grid['cell_size_m']
+    cells={(c['x'],c['z']):c for c in grid['cells']}
+    peak=max((len(c['center_ids']) for c in grid['cells']),default=0)
+    for z in range(grid['nz']):
+        for x in range(grid['nx']):
+            c=cells.get((x,z),{})
+            sc=c.get('layer_scores',{})
+            density=c.get('density',0.)
+            box=(px(xmin+x*cell),py(min(zmax,zmin+(z+1)*cell)),
+                 px(min(xmax,xmin+(x+1)*cell)),py(zmin+z*cell))
+            values={**sc,"combined":density,"large":max(sc.get('building',0.),sc.get('rock',0.)),
+                    "low":1.-density if density<=.1 else 0.}
+            for name,(key,color) in specs.items():
+                value=values.get(key,0.)
+                if value>0:
+                    paint(images[name],*box,color,.12+.78*math.sqrt(value))
+            memberships=c.get('groups_by_layer',{})
+            if memberships:
+                layer=max(memberships,key=lambda k:(sc.get(k,0.),k))
+                gid=memberships[layer]
+                # Same layer hue with stable per-group brightness variation.
+                factor=.65+.35*((gid*37)%11)/10
+                color=tuple(round(v*factor) for v in LAYER_COLORS[layer])
+                paint(groups,*box,color,.8)
+    for name,image in images.items():
+        write_rgb_png(out/name,w,h,image)
     write_rgb_png(out/"groups-map.png",w,h,groups)
     return background,peak
 
@@ -210,9 +187,18 @@ def analyze_map(out, overview, resolution=1024):
             "collision_resource_count":sum(o["has_collision_resource"] for o in objects),
             "cell_size_m":CELL,"occupied_cells":len(grid["cells"]),"groups":len(grid["groups"]),
             "density_peak_objects_per_cell":peak,"background":background,
-            "category_colors":COLORS,"category_method":"resource_name_heuristic",
-            "density_method":"root_count_per_cell_log_color_scaled_per_map",
-            "group_method":"8_connected_projected_render_AABB_cells"}
+            "category_colors":LAYER_COLORS,"category_method":"resource_name_and_render_AABB_dimensions_v2",
+            "analysis_version":2,"analysis_layer_counts":grid["layer_counts"],
+            "duplicate_records":grid["duplicate_records"],"eligible_unique":grid["eligible_unique"],
+            "groups_by_layer":dict(Counter(g["layer"] for g in grid["groups"])),
+            "largest_group_objects":max((len(g["object_ids"]) for g in grid["groups"]),default=0),
+            "density_method":"max_over_layers_of_capped_AABB_subcell_max_area_fraction_absolute_0_1",
+            "group_method":"4_connected_semantic_root_cells_bounded_sectors",
+            "sector_size_m":grid["sector_size_m"],
+            "low_density_threshold":.1,"low_density_is_not_validated_placement":True,
+            "raw_index_includes_all_objects":True,
+            "limitations":["render_AABB_proxy_not_mesh_or_collision", "semantic_hints_not_asset_metadata",
+                           "groups_are_local_sampling_regions_not_city_boundaries"]}
     write_json(out/"objects-report.json",report)
     print(f'[KE] OBJECT_REPORT {out.name} objects={len(objects)} groups={len(grid["groups"])} background={background}',flush=True)
     return report
