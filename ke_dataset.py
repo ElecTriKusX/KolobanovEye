@@ -33,9 +33,20 @@ def run_dataset(config, dataset_root=DATASET, *, replace_raw=False, executor=Non
     try:
         result = generate({**cfg, "output": str(work)}, work, staging, executor=executor)
     except Exception:
-        # Keep the run's diagnostic scripts, maps and logs; never publish partial raw.
+        # Do not erase an expensive completed native render on postprocessing errors.
+        # Incomplete native runs are still discarded; neither replaces valid raw.
+        manifest = work / "manifest.json"
+        rendered = False
+        if manifest.is_file():
+            try:
+                rendered = bool(json.loads(manifest.read_text(encoding="utf-8")).get("render_complete"))
+            except (OSError, ValueError):
+                pass
         if staging.exists():
-            shutil.rmtree(staging)
+            if rendered:
+                print(f"[KE] FINALIZE_FAILED staging preserved: {staging}; logs and journals: {work}", flush=True)
+            else:
+                shutil.rmtree(staging)
         raise
     backup = dataset_root / (".raw-backup-" + uuid.uuid4().hex)
     moved_old = False
@@ -50,11 +61,11 @@ def run_dataset(config, dataset_root=DATASET, *, replace_raw=False, executor=Non
         if moved_old and not raw.exists():
             backup.rename(raw)
         raise
-    finally:
-        if staging.exists():
-            shutil.rmtree(staging)
     if moved_old:
         shutil.rmtree(backup)
+    # Only after raw is safely published are the native journals redundant.
+    for journal in (work / "journals").glob("*.jsonl"):
+        journal.unlink()
     print(f'[KE] DATASET_RAW_OK frames={result["images"]} maps={result["maps"]} instances=1 output={raw}', flush=True)
     return result
 

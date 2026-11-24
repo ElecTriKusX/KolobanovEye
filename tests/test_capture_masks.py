@@ -4,10 +4,27 @@ import unittest
 from pathlib import Path
 
 from tools.ke_review import write_rgb_png
-from tools.ke_visibility import read_capture_masks
+from tools.ke_visibility import read_capture_masks, _bbox
 
 
 class CaptureMaskValidationTests(unittest.TestCase):
+    def test_exact_mask_bbox_and_empty(self):
+        self.assertEqual(_bbox(bytes([0,1,0,0, 0,0,0,1, 0,0,0,0]), 4), [1,0,3,2])
+        self.assertIsNone(_bbox(bytes(12), 4))
+
+    def test_valid_mask_pair(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for kind in ("amodal", "visible"):
+                (root / "masks" / kind).mkdir(parents=True)
+            write_rgb_png(root / "masks/amodal/1.png", 2, 2, bytes([255]*6 + [0]*6))
+            write_rgb_png(root / "masks/visible/1.png", 2, 2, bytes([0]*3 + [255]*3 + [0]*6))
+            meta = ('visibility_method:t="reverse_z_opaque_depth_compare_v1"\n'
+                    'amodal_pixels:i=2\nvisible_pixels:i=1\nunmatched_depth_pixels:i=0\nvisible_fraction:r=0.5\n')
+            result = read_capture_masks(root, "1.png", meta, 2, 2)
+            self.assertEqual(result["bbox_visible_xywh"], [1,0,1,1])
+            self.assertEqual(result["visible_fraction"], .5)
+
     def test_rejects_corrupt_counts_nonbinary_and_outside_amodal(self):
         for case in ("counts", "nonbinary", "outside"):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:

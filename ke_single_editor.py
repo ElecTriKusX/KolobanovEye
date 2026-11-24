@@ -18,7 +18,7 @@ from tools.ke_coco import group_for, scene_metadata
 from tools.ke_png_fast import validate_rgb_png
 from tools.ke_annotation import parse_annotation
 from tools.ke_composition import plan_screen_positions
-from tools.ke_visibility import read_capture_masks
+from tools.ke_visibility import read_capture_masks, mask_decoder_name
 from tools.ke_frame_journal import read_journal
 from kolobanoveye import (
     BIN, GRP, inspect, choose_resources, parse_resources, require_file,
@@ -298,7 +298,11 @@ def finalize(cfg, run, raw, tasks):
     map_logs = extract_map_logs(log, tasks, stability=cfg["wait_frame_stability"])
     shadow_quality = read_impostor_quality(source, len(tasks))
     images, annotations, records, scenes, maps = [], [], [], {}, []
+    expected = sum(task["count"] for task in tasks)
+    decoder = mask_decoder_name() if cfg["capture_visibility_masks"] else "none"
+    print(f"[KE] FINALIZE_BEGIN frames={expected} maps={len(tasks)} mask_decoder={decoder}", flush=True)
     for task, map_log, quality in zip(tasks, map_logs, shadow_quality):
+        print(f'[KE] FINALIZE_MAP map={task["map_id"]} completed={len(images)}/{expected}', flush=True)
         journal = read_journal(require_file(task["journal"]))
         if set(journal) != set(range(task["count"])):
             raise ValueError(f'Неполный журнал кадров: {task["map_id"]}')
@@ -383,7 +387,7 @@ def finalize(cfg, run, raw, tasks):
                 "scene_id": scene_id, "map_id": task["map_id"],
                 "scene_group_id": group, "image_ids": [],
             })["image_ids"].append(image_id)
-        task["journal"].unlink()
+            print(f"[KE] FINALIZE_FRAME {image_id}/{expected} image={image_path.name}", flush=True)
     (raw / "annotations").mkdir()
     (raw / "metadata").mkdir()
     write_json(raw / "annotations" / "instances.json", {
@@ -414,6 +418,7 @@ def finalize(cfg, run, raw, tasks):
         },
     }
     write_json(raw / "manifest.json", overview)
+    print(f"[KE] FINALIZE_OK frames={len(images)} annotations={len(annotations)}", flush=True)
     return overview
 
 
@@ -490,6 +495,10 @@ def generate(config, run, raw, executor=None):
                            env=editor_env)
             except (ValueError, subprocess.TimeoutExpired) as exc:
                 raise ValueError(editor_failure(run, str(exc))) from exc
+        report["render_complete"] = True
+        report["staging"] = str(raw)
+        write_json(run / "manifest.json", report)
+        print(f'[KE] RENDER_COMPLETE staging={raw}; validating RGB, metadata and masks', flush=True)
         result = finalize(cfg, run, raw, tasks)
         for item in report["maps"]:
             item.update(actual=item["planned"], status="verified")
