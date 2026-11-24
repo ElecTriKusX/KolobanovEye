@@ -754,7 +754,11 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
         input=OFFSCREEN_FRAME_CLOCK_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
     texture_pump_applied = offscreen_frame_clock_applied or subprocess.run([*apply, "--reverse", "--check"],
         input=TEXTURE_PUMP_PATCH.read_bytes().replace(b"\r\n", b"\n"), cwd=dagor, capture_output=True).returncode == 0
+    from tools.ke_patch_predecessors import predecessor_additions_present
     for patch in patches:
+        if patch == OFFSCREEN_RESOLVE_CAMERA_PATCH and predecessor_additions_present(dagor, patch):
+            print("[KE] OFFSCREEN_RESOLVE_CAMERA_PATCH already present (including visibility successor)", flush=True)
+            continue
         if patch == OOZ_PATCH and ooz_already_applied:
             continue
         if last_clip_bounds_applied and patch == LAST_CLIP_BOUNDS_PATCH:
@@ -815,13 +819,15 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
 
     apply_haze_capture_pipeline(capture_cpp, HAZE_CONVERGENCE_PATCH, HAZE_STABILITY_PATCH)
     diff = TANK_ARTICULATION_PATCH.read_bytes().replace(b"\r\n", b"\n")
-    if subprocess.run([*apply, "--reverse", "--check"], input=diff, cwd=dagor, capture_output=True).returncode:
+    if (not predecessor_additions_present(dagor, TANK_ARTICULATION_PATCH) and
+            subprocess.run([*apply, "--reverse", "--check"], input=diff, cwd=dagor, capture_output=True).returncode):
         print(f"[KE] Applying {TANK_ARTICULATION_PATCH.name}", flush=True)
         subprocess.run([*apply, "--check"], input=diff, cwd=dagor, check=True)
         subprocess.run(apply, input=diff, cwd=dagor, check=True)
     ensure_level_settings_accessor(dagor / "prog/tools/sceneTools/daEditorX/binSceneView/strmlevel.h")
     diff = TANK_MAP_PATCH.read_bytes().replace(b"\r\n", b"\n")
-    if subprocess.run([*apply, "--reverse", "--check"], input=diff, cwd=dagor, capture_output=True).returncode:
+    if (not predecessor_additions_present(dagor, TANK_MAP_PATCH) and
+            subprocess.run([*apply, "--reverse", "--check"], input=diff, cwd=dagor, capture_output=True).returncode):
         print(f"[KE] Applying {TANK_MAP_PATCH.name}", flush=True)
         subprocess.run([*apply, "--check"], input=diff, cwd=dagor, check=True)
         subprocess.run(apply, input=diff, cwd=dagor, check=True)

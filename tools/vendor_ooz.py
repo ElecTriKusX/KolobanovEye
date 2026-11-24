@@ -22,28 +22,40 @@ def required_hashes():
     return lock["files"]
 
 
-def verify_files(root):
-    """Fail on any missing or modified source, without trusting external versions."""
+def verify_files(root, *, repair_eol=False):
+    """Verify exact pinned bytes; optionally restore only proven CRLF conversions.
+
+    Validate all sources before writing any repaired file.
+    """
     root = Path(root)
     expected = required_hashes()
+    repairs = []
     for name, digest in expected.items():
         file = root / name
         if not file.is_file() or file.is_symlink():
             raise ValueError(f"OOZ source missing or symlink: {file}")
-        actual = hashlib.sha256(file.read_bytes()).hexdigest()
+        data = file.read_bytes()
+        actual = hashlib.sha256(data).hexdigest()
         if actual != digest:
-            raise ValueError(f"OOZ SHA256 mismatch: {file.name}; expected {digest}, got {actual}")
+            normalized = data.replace(b"\r\n", b"\n")
+            if repair_eol and hashlib.sha256(normalized).hexdigest() == digest:
+                repairs.append((file, normalized))
+            else:
+                raise ValueError(f"OOZ SHA256 mismatch: {file.name}; expected {digest}, got {actual}")
+    for file, normalized in repairs:
+        file.write_bytes(normalized)
+        print(f"[KE] OOZ_EOL_RESTORED {file.name}", flush=True)
     return expected
 
 
 def verify_vendor():
-    return verify_files(VENDOR)
+    return verify_files(VENDOR, repair_eol=True)
 
 
 def install(source=DEFAULT_SOURCE):
     """Copy a checked snapshot to vendor/ooz, never silently overwrite another version."""
     source = Path(source).resolve()
-    expected = verify_files(source)
+    expected = verify_files(source, repair_eol=True)
     if VENDOR.exists():
         verify_vendor()
         print(f"[KE] OOZ_VENDOR_OK already pinned at {VENDOR}")
