@@ -910,6 +910,8 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
     install_avf_batch(capture_cpp)
     from tools.ke_dagor_avf_residency import install_avf_residency
     install_avf_residency(capture_cpp)
+    from tools.ke_dagor_guided import install_guided
+    install_guided(capture_cpp)
     from tools.ke_ri_scene_lifetime import install_scene_lifetime
     install_scene_lifetime(map_cpp)
     guard_impostor_shadow_atlas_slices(dagor)
