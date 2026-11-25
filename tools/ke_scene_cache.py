@@ -117,7 +117,7 @@ class SceneCache:
         self.used_sectors=set()
         self.entries={}
         self.stats={"loaded":0,"replays":0,"hits":0,"misses":0,"unmeasured_rejections":0,
-                    "new_hints":0,"committed":False}
+                    "learned_observations":0,"inserted_hints":0,"committed":False}
         self.path.parent.mkdir(parents=True,exist_ok=True)
         with self.connect() as db:
             db.execute("""CREATE TABLE IF NOT EXISTS hints_v1(
@@ -191,18 +191,20 @@ class SceneCache:
             return
         sx,sz=sector(*hint["position"])
         self.pending.append(("learn",(mid,target,sx,sz),hint))
-        self.stats["new_hints"]+=1
+        self.stats["learned_observations"]+=1
 
     def commit(self):
         if self.stats["committed"]:
             raise ValueError("Cache observations already committed")
+        inserted=0
         with self.connect() as db:
             for action,(mid,target,sx,sz),value in self.pending:
                 key=(self.scopes[mid],target,sx,sz)
                 if action=="learn":
-                    db.execute("""INSERT INTO hints_v1(scope,target,sx,sz,hint,hits)
+                    cursor=db.execute("""INSERT INTO hints_v1(scope,target,sx,sz,hint,hits)
                         VALUES(?,?,?,?,?,1) ON CONFLICT(scope,target,sx,sz)
-                        DO UPDATE SET hits=hits+1""",(*key,json.dumps(value,allow_nan=False)))
+                        DO NOTHING""",(*key,json.dumps(value,allow_nan=False)))
+                    inserted+=cursor.rowcount
                 else:
                     column=value
                     if column not in ("hits","misses","unmeasured"):
@@ -213,5 +215,6 @@ class SceneCache:
                     (SELECT rowid FROM hints_v1 WHERE scope=?
                      ORDER BY (hits+1.0)/(hits+misses+2) DESC,uses ASC,target,sx,sz LIMIT ?)""",
                     (scope,scope,LIMIT))
+        self.stats["inserted_hints"]=inserted
         self.stats["committed"]=True
         self.pending.clear()
