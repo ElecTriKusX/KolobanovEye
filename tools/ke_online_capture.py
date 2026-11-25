@@ -137,8 +137,13 @@ def generate_online(cfg, run, raw, *, executor=None):
         report["editor_processes"] = 1
         print(f'[KE] ONLINE_START target={cfg["count"]} maps={len(map_targets)} instances=1', flush=True)
         stop_reason = None
+        residency_map, residency_attempts, residency_misses = None, 0, 0
+        report['map_residency_policy'] = {'enabled': bool(cfg.get('avf_probe_size', 0)),
+                                          'preferred_attempts': 16, 'max_consecutive_no_gain': 6}
         while request is not None:
             mid, target = request
+            if mid != residency_map:
+                residency_map, residency_attempts, residency_misses = mid, 0, 0
             number = len(tasks) + 1
             cap = min(cfg["refill_batch_per_map"], budget[mid] - planner.attempts[mid] + 1)
             task = write_capture(cfg, mid, cap, map_seed(f'{cfg["seed"]}:online:{number}', mid),
@@ -237,6 +242,10 @@ def generate_online(cfg, run, raw, *, executor=None):
                 validation_finished = time.monotonic()
                 after = planner.report["selected"]
                 no_gain = no_gain + 1 if after == before else 0
+                residency_attempts += 1
+                residency_misses = residency_misses + 1 if after == before else 0
+                prefer_current = bool(cfg.get('avf_probe_size', 0) and
+                                      residency_attempts < 16 and residency_misses < 6)
                 with (run / journal_name).open("a", encoding="utf-8") as stream:
                     stream.write(json.dumps(record, ensure_ascii=False) + "\n")
                 report["depth_mismatch_rejections"] = len(rejected)
@@ -271,7 +280,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                 elif no_gain >= stall_limit:
                     stop_reason, request = "stall", None
                 else:
-                    request = planner.next_request(current_map=mid)
+                    request = planner.next_request(current_map=mid, prefer_current=prefer_current)
                     if request is None:
                         stop_reason = "candidate_budget"
                 same = request is not None and request[0] == mid and idx + 1 < cap
@@ -293,6 +302,8 @@ def generate_online(cfg, run, raw, *, executor=None):
                         "scheduler_ms": round(1000*(scheduler_finished-bookkeeping_finished), 3),
                         "decision_publish_ms": round(1000*(decision_published-scheduler_finished), 3),
                         "python_turnaround_ms": round(1000*(decision_published-ready_observed), 3),
+                        "residency_attempts": residency_attempts, "residency_misses": residency_misses,
+                        "prefer_current_map": prefer_current,
                         "continue_same_task": same, "switch_map": request is not None and request[0] != mid}) + "\n")
                 if not same:
                     task["count"] = idx + 1
