@@ -170,9 +170,38 @@ EDITS = {
     ),
 }
 
+# The first native build exposed two C++ issues. Keep the original V3
+# literals for migrating already-patched checkouts and predecessor checks.
+BUILD_FIXES = {
+    "header": (("int &, int &, int &, int slot = -1) { return false; }",
+                "int &, int &, int &, int = -1) { return false; }"),),
+    "render": (
+        ("  bool collectKolobanovEyeProbe(int slot, int &amodal, int &visible, int &missing)\n  {\n",
+         "public:\n  bool collectKolobanovEyeProbe(int slot, int &amodal, int &visible, int &missing)\n  {\n"),
+        ("  void closeKeProbeQueue()\n  {\n",
+         "private:\n  void closeKeProbeQueue()\n  {\n"),
+    ),
+}
+
+
+def apply_build_fixes(src, key):
+    for old, new in BUILD_FIXES[key]:
+        if src.count(new) == 1:
+            continue
+        if src.count(old) != 1 or src.count(new):
+            raise ValueError(f"AVF GPU build fix anchor missing: {key} {old[:80]!r}")
+        src = src.replace(old, new, 1)
+    return src
+
+
 def normalize_gpu(src, key):
     if MARKER not in src and ("collectKolobanovEyeProbe" not in src if key == "header" else True):
         return src
+    for old, new in reversed(BUILD_FIXES[key]):
+        if src.count(new) == 1:
+            src = src.replace(new, old, 1)
+        elif src.count(old) != 1:
+            raise ValueError(f"Partial AVF GPU build fix: {key}")
     for old, new in reversed(EDITS[key]):
         if src.count(new) != 1:
             raise ValueError(f"Partial AVF GPU queue {key}")
@@ -187,12 +216,20 @@ def install_avf_gpu(dagor: Path):
     if MARKER in src["render"]:
         for k in paths:
             normalize_gpu(src[k], k)
-        return False
-    for k, edits in EDITS.items():
-        for old, new in edits:
-            if old == new or src[k].count(old) != 1:
-                raise ValueError(f"AVF GPU queue anchor missing {k}: {old[:80]!r}")
-            src[k] = src[k].replace(old,new,1)
+    else:
+        for k, edits in EDITS.items():
+            for old, new in edits:
+                if old == new or src[k].count(old) != 1:
+                    raise ValueError(f"AVF GPU queue anchor missing {k}: {old[:80]!r}")
+                src[k] = src[k].replace(old,new,1)
+    for k in paths:
+        src[k] = apply_build_fixes(src[k], k)
+    changed = False
     for k,p in paths.items():
-        p.write_bytes(src[k].encode("utf-8").replace(b"\n",b"\r\n" if b"\r\n" in raw[k] else b"\n"))
-    return True
+        updated = src[k].encode("utf-8").replace(b"\n",b"\r\n" if b"\r\n" in raw[k] else b"\n")
+        if updated != raw[k]:
+            p.write_bytes(updated)
+            changed = True
+    if changed:
+        print("[KE] AVF_GPU_BUILD_FIX public collector, unnamed default slot", flush=True)
+    return changed
