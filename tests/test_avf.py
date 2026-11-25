@@ -9,8 +9,9 @@ class AVFTests(unittest.TestCase):
                     max(0., min(1., (min(v.azimuth_deg, 360-v.azimuth_deg)-2)/13))
                     for v in views]
         result = search_visibility(oracle, "moderate", rings=1, coarse=12,
-                                   budget=60, seed=4)
+                                   budget=60, seed=0)
         self.assertTrue(result.matched)
+        self.assertGreater(len(result.probes), 12)
         self.assertLessEqual(len(result.probes), 60)
         self.assertEqual(len({p.view for p in result.probes}), len(result.probes))
 
