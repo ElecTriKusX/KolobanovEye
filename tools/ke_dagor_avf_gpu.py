@@ -118,6 +118,25 @@ SCENE_NEW = SCENE_NEW.replace(
     """      if (slot >= 0)
         return keSubmitProbe(slot, sceneTex, modelTex, width, height);
       request_readback_nosyslock(modelTex, 0);""")
+# Verification mode consumes the same two textures, not a second rendering.
+SCENE_NEW = SCENE_NEW.replace(
+    "      // An undersampled or inconsistent probe is unknown, not heavy overlap.\n",
+    """      if (slot == -2)
+      {
+        int ga=0, gv=0, gm=0;
+        const bool submitted = keSubmitProbe(0,sceneTex,modelTex,width,height);
+        const bool gpuValid = submitted && collectKolobanovEyeProbe(0,ga,gv,gm);
+        const bool cpuValid = amodal >= 16 && missing <= max(4,amodal/20);
+        if (!submitted || gpuValid != cpuValid || ga!=amodal || gv!=visible || gm!=missing)
+        {
+          debug("[KE] AVF_GPU_VERIFY_FAIL cpu=%d,%d,%d gpu=%d,%d,%d submitted=%d",
+            amodal,visible,missing,ga,gv,gm,int(submitted));
+          return false;
+        }
+        debug("[KE] AVF_GPU_VERIFY_OK amodal=%d visible=%d missing=%d",amodal,visible,missing);
+      }
+      // An undersampled or inconsistent probe is unknown, not heavy overlap.
+""")
 SERVICE_NEW = SERVICE.replace("int &amodal, int &visible, int &missing) override",
                               "int &amodal, int &visible, int &missing, int slot) override")
 SERVICE_NEW = SERVICE_NEW.replace(
