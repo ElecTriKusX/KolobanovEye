@@ -89,7 +89,7 @@ class App:
             if key == 'placement_mode':
                 widget = ttk.Combobox(parent, textvariable=self.values[key], values=tuple(MODE_LABELS.values()), state='readonly', width=18)
             elif key == 'avf_backend':
-                widget = ttk.Combobox(parent, textvariable=self.values[key], values=('gpu', 'cpu'), state='readonly', width=12)
+                widget = ttk.Combobox(parent, textvariable=self.values[key], values=('gpu', 'cpu', 'verify'), state='readonly', width=12)
             elif key == 'avf_batch_size':
                 widget = ttk.Combobox(parent, textvariable=self.values[key], values=('1', '2', '3', '4'), state='readonly', width=12)
             elif key == 'avf_region':
