@@ -115,6 +115,7 @@ def write_capture(cfg, map_id, count, seed, run, raw, index, model, skeleton, fi
     if cfg.get('avf_probe_size', 0):
         lines.append(f'avf_probe_size:i={cfg["avf_probe_size"]}')
         lines.append(f'avf_roi:b={"yes" if cfg.get("avf_region", "roi") == "roi" else "no"}')
+        lines.append(f'avf_reuse_map:b={"yes" if cfg.get("avf_reuse_map", True) else "no"}')
     if poses:
         lines.append("articulate_tank:b=yes")
         lines.extend(f"articulation_{i}:p2={numbers(pose)}" for i, pose in enumerate(poses))
