@@ -216,6 +216,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                 selected_fields = {}
                 def publish_points(frame_index, requested):
                     points = sampler.choose(requested,cfg["placement_attempts"])
+                    original_points=points
                     if guided and not diverse and frame_index % 5 != 4:
                         points = prioritize_points(occluders[mid],sampler.bounds,points,requested,cfg)
                     group = None
@@ -244,7 +245,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                         # At most one replay per six non-open requests. Preserve the
                         # explicit broad-exploration family, even on a cache slot.
                         if cache_attempts[mid]%6==0 and requested_family!="explore":
-                            bank,cached,key=scene_cache.take(mid,requested,points,sampler.bounds,cfg)
+                            bank,cached,key=scene_cache.take(mid,requested,original_points,sampler.bounds,cfg)
                             if cached is not None:
                                 points,group=bank,cached
                                 family="scene_cache"
