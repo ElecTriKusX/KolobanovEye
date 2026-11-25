@@ -83,6 +83,8 @@ EDITS = (
 
 
 def normalize_guided(src):
+    from tools.ke_dagor_fixed_final import normalize_fixed_final
+    src = normalize_fixed_final(src)
     from tools.ke_guided_prerender import normalize_prerender
     src = normalize_prerender(src)
     if MARKER not in src:
