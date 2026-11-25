@@ -65,14 +65,21 @@ def write_capture(cfg, map_id, count, seed, run, raw, index, model, skeleton, fi
             cfg["placement_radius"], cfg["placement_attempts"], count, frames_per)
     else:
         raise ValueError("Для единого запуска поддерживаются tank_map и around_point")
-    orbits = plan_camera_orbits(seed, count * cfg["camera_attempts"],
-        (cfg["distance_min"], cfg["distance_max"]),
-        (cfg["elevation_min"], cfg["elevation_max"]))
-    hrng = random.Random(f"camera-ground-height:{seed}")
-    for camera in orbits:
-        camera["height_above_ground"] = round(hrng.uniform(
-            cfg["camera_height_min"], cfg["camera_height_max"]), 5)
-    cameras = [orbits[i * cfg["camera_attempts"]:(i + 1) * cfg["camera_attempts"]] for i in range(count)]
+    if cfg.get('avf_probe_size', 0):
+        from tools.ke_avf import plan_camera_field
+        cameras = plan_camera_field(seed, count, cfg["camera_attempts"],
+            (cfg["distance_min"], cfg["distance_max"]),
+            (cfg["elevation_min"], cfg["elevation_max"]),
+            (cfg["camera_height_min"], cfg["camera_height_max"]))
+    else:
+        orbits = plan_camera_orbits(seed, count * cfg["camera_attempts"],
+            (cfg["distance_min"], cfg["distance_max"]),
+            (cfg["elevation_min"], cfg["elevation_max"]))
+        hrng = random.Random(f"camera-ground-height:{seed}")
+        for camera in orbits:
+            camera["height_above_ground"] = round(hrng.uniform(
+                cfg["camera_height_min"], cfg["camera_height_max"]), 5)
+        cameras = [orbits[i * cfg["camera_attempts"]:(i + 1) * cfg["camera_attempts"]] for i in range(count)]
     screen_positions = plan_screen_positions(seed, count, cfg['screen_position_weights'])
     occlusion_targets = (plan_occlusion_targets(seed, count, cfg['visibility_weights'])
                          if cfg['search_occlusion'] else [])
@@ -126,6 +133,9 @@ def write_capture(cfg, map_id, count, seed, run, raw, index, model, skeleton, fi
         for j, cam in enumerate(options):
             lines.append(f"camera_offset_{i}_{j}:p3={numbers(cam['offset'])}")
             lines.append(f"camera_height_{i}_{j}:r={numbers([cam['height_above_ground']])}")
+            if cfg.get('avf_probe_size', 0):
+                lines.append(f"avf_ring_{i}_{j}:i={cam['avf_ring']}")
+                lines.append(f"avf_angle_{i}_{j}:r={numbers([cam['azimuth_deg']])}")
         if cfg["render_debug"]:
             debug = run / "render-debug" / f"{index:03d}-{stem}" / f"{i:06d}"
             debug.mkdir(parents=True, exist_ok=True)
