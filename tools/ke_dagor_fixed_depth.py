@@ -197,6 +197,10 @@ def edge_edits(key):
 
 def normalize_edge_renderer(src,key):
     from tools.ke_dagor_depth_proposals import renderer_successors, reverse_successors
+    from tools.ke_dagor_fixed_gpu import renderer_edits as gpu_edits
+    gpu=gpu_edits(key)
+    if any(new in src for _,new in gpu):
+        src=reverse_successors(src,gpu)
     from tools.ke_dagor_aperture import renderer_edits as aperture_edits
     aperture=aperture_edits(key)
     if any(new in src for _,new in aperture):
@@ -245,7 +249,9 @@ def add_fixed_renderer(src,key):
     from tools.ke_dagor_depth_proposals import renderer_successors, apply_successors
     from tools.ke_dagor_aperture import renderer_edits as aperture_edits
     src=apply_successors(src,renderer_successors(key))
-    return apply_successors(src,aperture_edits(key))
+    src=apply_successors(src,aperture_edits(key))
+    from tools.ke_dagor_fixed_gpu import renderer_edits as gpu_edits
+    return apply_successors(src,gpu_edits(key))
 
 
 def install_fixed_renderer(dagor: Path):
