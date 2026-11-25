@@ -70,12 +70,17 @@ def generate_online(cfg, run, raw, *, executor=None):
     targets = visibility_targets(cfg["count"], cfg["visibility_weights"])
     budget = {m: n * cfg["visibility_candidate_multiplier"] for m, n in target_jobs}
     planner = AdaptiveQuotaPlanner(targets, map_targets, budget)
-    samplers, bank_info = {}, {}
+    samplers, bank_info, occluders = {}, {}, {}
+    guided = cfg.get("guided_sampling", "off") == "obstacle"
+    if guided:
+        from tools.ke_guided_sampling import OccluderIndex, candidate_fields, fields_block
     if cfg["smart_placement_cache"]:
         for mid in map_targets:
             bank = load_pool(cfg["smart_placement_cache"],mid)
             samplers[mid] = CandidateSampler(bank,map_seed(cfg["seed"],mid),cfg["map_margin_percent"])
             bank_info[mid] = {k:v for k,v in bank.items() if k!="pools"}
+            if guided:
+                occluders[mid] = OccluderIndex.load(cfg["smart_placement_cache"],mid)
     run.mkdir(parents=True)
     raw.mkdir(parents=True)
     for name in ("images", "masks/amodal", "masks/visible"):
@@ -168,11 +173,18 @@ def generate_online(cfg, run, raw, *, executor=None):
                     stream.write(f'smart_placement:b=yes\nsmart_bounds_min:p2={xmin:.9f},{zmin:.9f}\n'
                                  f'smart_bounds_max:p2={xmax:.9f},{zmax:.9f}\n')
                 task["smart_points"] = {}
+                guided_fields = {}
+                selected_fields = {}
                 def publish_points(frame_index, requested):
                     points = sampler.choose(requested,cfg["placement_attempts"])
                     task["smart_points"][frame_index] = points
-                    publish(feedback/f"smart_{frame_index}.blk",
-                            frame_block(frame_index,requested,points,cfg["ground_offset"]))
+                    block = frame_block(frame_index,requested,points,cfg["ground_offset"])
+                    if guided:
+                        fields = candidate_fields(task["cameras"][frame_index],occluders[mid],sampler.bounds,
+                            points,requested,cfg,f'{task["seed"]}:{frame_index}')
+                        guided_fields[frame_index] = fields
+                        block += "guided_sampling:b=yes\n"+fields_block(fields)
+                    publish(feedback/f"smart_{frame_index}.blk",block)
                     with (run/"smart-placement-plans.jsonl").open("a",encoding="utf-8") as stream:
                         stream.write(json.dumps({"task":number,"index":frame_index,"map_id":mid,
                             "target":requested,"points":points})+"\n")
@@ -233,10 +245,20 @@ def generate_online(cfg, run, raw, *, executor=None):
                     print(f'[KE] ONLINE_REJECT task={number} index={idx} reason=depth_pass_mismatch '
                           f'missing={record["unmatched_pixels"]} amodal={record["amodal_pixels"]}', flush=True)
                 else:
+                    smart = verify_frame(blk,target,task["smart_points"][idx],sampler.bounds) if sampler else None
+                    if guided:
+                        import re
+                        if not re.search(r"^guided_camera_plan:b=(?:yes|true|1)\s*$",blk,re.M):
+                            raise ValueError("Missing guided camera metadata; rebuild Dagor")
+                        match = re.search(r"^guided_placement_index:i=(\d+)\s*$",blk,re.M)
+                        if not match or int(match.group(1)) != smart["attempt"]:
+                            raise ValueError("Guided camera bank does not match selected placement")
+                        field = guided_fields[idx][smart["attempt"]]
+                        task["cameras"][idx] = field
+                        selected_fields[idx] = field
                     candidate = collect_frame(cfg, run, raw, task, idx, blk)
                     record = candidate[0]
                     if sampler:
-                        smart = verify_frame(blk,target,task["smart_points"][idx],sampler.bounds)
                         record["smart_placement"] = smart
                         candidate[1]["ke_smart_placement"] = smart
                         sources = report["smart_placement"]["validated_sources"]
@@ -247,6 +269,8 @@ def generate_online(cfg, run, raw, *, executor=None):
                     consecutive_mismatch = 0
                     measured = record["visibility_measurement"]["visibility_bin"]
                     journal_name = "candidate-pool.jsonl"
+                if guided:
+                    guided_fields.pop(idx,None)
                 validation_finished = time.monotonic()
                 after = planner.report["selected"]
                 no_gain = no_gain + 1 if after == before else 0
@@ -328,6 +352,8 @@ def generate_online(cfg, run, raw, *, executor=None):
             plan_path = run / "plans" / f'{task["index"]:03d}-{task["stem"]}.json'
             plan = json.loads(plan_path.read_text(encoding="utf-8"))
             plan["online_completed_frames"] = task["count"]
+            if guided:
+                plan["guided_selected_camera_fields"] = selected_fields
             plan["online_occlusion_targets"] = task["occlusion_targets"][:task["count"]]
             write_json(plan_path, plan)
             done = mailbox / f"done_{number}.txt"
