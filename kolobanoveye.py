@@ -920,6 +920,8 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
     install_fixed_capture(capture_cpp)
     from tools.ke_dagor_fixed_final import install_fixed_final
     install_fixed_final(capture_cpp)
+    from tools.ke_dagor_terrain_family import install_terrain_family
+    install_terrain_family(capture_cpp)
     from tools.ke_ri_scene_lifetime import install_scene_lifetime
     install_scene_lifetime(map_cpp)
     guard_impostor_shadow_atlas_slices(dagor)
