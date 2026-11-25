@@ -279,3 +279,9 @@ learned_observations, inserted_hints, committed. План содержит кл�
 повтора; валидированный кадр содержит происхождение, не ground truth.
 Для A/B сравнения использовать --compare-guided и отдельно пустую базу
 и прогретую базу. Пять тестов Python добавлены. Windows не проверен.
+
+
+Проверка 2.9.7: из GitHub извлечены точные файлы tools/ke_scene_cache.py
+(blob 598d4892127dda159609b23a737026ba3998b1e1) и tests/test_scene_cache.py
+(blob 0409a5993f57f3fdd16bf6bf7595453762ba3d8d); изолированный unittest
+в Linux: 5/5 OK. Это не проверка online-интеграции или нативной сборки.
