@@ -1,4 +1,4 @@
-"""Minimal Tk interface for the existing single-process sequence renderer."""
+"""Tk interface for the single supported dataset generation pipeline."""
 import json
 import os
 import queue
@@ -10,37 +10,29 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 
-from ke_generate import DEFAULTS, INTS, FLOATS, validate_config
-from tools.ke_gui_policy import RECOMMENDED, TESTED_RANGES, effective_config, visible_rows
+from ke_generate import DEFAULTS, INTS, FLOATS, validate_dataset_config
+from tools.ke_pipeline import SCENE_DEFAULTS, migrated_keys
+from tools.ke_visibility_quotas import visibility_targets
 from tools.ke_maps import scan_maps, load_whitelist, save_whitelist, initial_whitelist, available_whitelist
 
 FIELDS = [
- ('dagor', 'Папка Dagor Engine'), ('game', 'Папка War Thunder'), ('output', 'Родительская папка результатов'),
- ('count', 'Количество кадров (итог)'), ('frames_per_position', 'Кадров на позицию'), ('seed', 'Seed'),
+ ('dagor', 'Папка Dagor Engine'), ('game', 'Папка War Thunder'),
+ ('count', 'Количество кадров'), ('seed', 'Seed'),
  ('width', 'Ширина'), ('height', 'Высота'), ('fov', 'Горизонтальный FOV, °'),
- ('smart_placement_cache', 'Кэш умной расстановки (2.7)'),
- ('scene_cache', 'Кэш интересных сцен (2.9.7)'),
- ('placement_mode', 'Где размещать танк'), ('map_margin_percent', 'Отступ от краёв карты, %'),
- ('tank_x', 'Центр поиска X'), ('tank_z', 'Центр поиска Z'), ('tank_yaw', 'Ориентация корпуса, °'),
- ('turret_yaw_min', 'Башня: от'), ('turret_yaw_max', 'Башня: до'),
- ('gun_pitch_min', 'Орудие: от'), ('gun_pitch_max', 'Орудие: до'),
- ('camera_attempts', 'Попыток камеры на кадр'), ('placement_radius', 'Радиус поиска точки'), ('placement_attempts', 'Попыток размещения'),
- ('minimum_ground_y', 'Минимальная высота земли Y'), ('max_height_range', 'Макс. перепад высот'), ('ground_offset', 'Отступ танка от земли'), ('camera_clearance', 'Мин. запас камеры над землёй'),
+ ('smart_placement_cache', 'Кэш анализа объектов'),
+ ('scene_cache', 'Папка кэша сцен'),
+ ('map_margin_percent', 'Отступ от краёв карты, %'), ('tank_yaw', 'Ориентация корпуса, °'),
+ ('camera_attempts', 'Попыток камеры'), ('placement_attempts', 'Попыток размещения'),
+ ('minimum_ground_y', 'Минимальная высота земли Y'), ('max_height_range', 'Макс. перепад высот'),
+ ('ground_offset', 'Отступ танка от земли'), ('camera_clearance', 'Мин. запас камеры над землёй'),
  ('distance_min', 'Горизонтальная дистанция: от'), ('distance_max', 'Горизонтальная дистанция: до'),
  ('camera_height_min', 'Высота камеры над землёй: от'), ('camera_height_max', 'Высота камеры над землёй: до'),
- ('clipmap_feedback', 'Обратная связь clipmap'), ('timeout', 'Таймаут, с'),
- ('min_warmup_renders', 'Мин. проходов прогрева (8–64)'),
- ('visibility_candidate_multiplier', 'Общий лимит кандидатов, ×'),
- ('avf_probe_size', 'AVF: размер пробы (0 — выкл.)'),
- ('avf_region', 'AVF: область пробы'),
- ('avf_backend', 'AVF: подсчёт пикселей'),
- ('avf_batch_size', 'AVF: камер в группе'),
- ('guided_sampling', 'AVF: направленный поиск (2.9)'),
- ('guided_prerender', 'AVF: отбраковка до рендера'),
+ ('timeout', 'Таймаут, с'), ('min_warmup_renders', 'Мин. проходов прогрева (8–64)'),
+ ('visibility_candidate_multiplier', 'Лимит кандидатов, ×'),
 ]
+BINS = ("open","light","moderate","heavy")
+BIN_LABELS = ("Без перекрытия","Лёгкое","Среднее","Сильное")
 
-
-MODE_LABELS = {'tank_map': 'Танковое поле', 'around_point': 'Вокруг точки'}
 DATASET_DIR = Path(__file__).resolve().parent / 'dataset'
 
 class App:
@@ -52,21 +44,13 @@ class App:
         self.events = queue.Queue()
         self.process = None
         self.running = False
-        self.values = {k: tk.StringVar(value=str(DEFAULTS[k])) for k, _ in FIELDS}
-        self.keep_open = tk.BooleanVar(value=False)
-        self.render_debug = tk.BooleanVar(value=False)
-        self.capture_visibility_masks = tk.BooleanVar(value=DEFAULTS['capture_visibility_masks'])
-        self.screen_position_weights = DEFAULTS['screen_position_weights'].copy()
-        self.enforce_visibility_quotas = tk.BooleanVar(value=DEFAULTS['enforce_visibility_quotas'])
-        self.online_quotas = tk.BooleanVar(value=True)
-        self.visibility_weights = DEFAULTS['visibility_weights'].copy()
-        self.search_occlusion = tk.BooleanVar(value=DEFAULTS['search_occlusion'])
-        self.wait_frame_stability = tk.BooleanVar(value=DEFAULTS['wait_frame_stability'])
-        self.wait_sky_convergence = tk.BooleanVar(value=DEFAULTS['wait_sky_convergence'])
-        self.values['output'].set(str(DATASET_DIR))
-        # The GUI opts into the new tank-map sampler; old CLI configurations keep their defaults.
-        self.values['placement_mode'].set(MODE_LABELS['tank_map'])
-        self.values['map_margin_percent'].set('0.0')
+        defaults={**DEFAULTS,**SCENE_DEFAULTS}
+        self.values={k:tk.StringVar(value=str(defaults[k])) for k,_ in FIELDS}
+        self.scene_cache_enabled=tk.BooleanVar(value=False)
+        self.verify_gpu=tk.BooleanVar(value=False)
+        self.wait_sky_convergence=tk.BooleanVar(value=False)
+        self.screen_position_weights=DEFAULTS['screen_position_weights'].copy()
+        self.visibility_weights={k:tk.StringVar(value=str(DEFAULTS['visibility_weights'][k])) for k in BINS}
         self.detected_maps = []
         self.selected_maps = None
         self.map_summary = tk.StringVar(value='Поиск avg-карт…')
@@ -77,127 +61,80 @@ class App:
         ttk.Label(map_bar, textvariable=self.map_summary).pack(side='left')
         ttk.Button(map_bar, text='Карты / белый список…', command=self.open_maps).pack(side='left', padx=10)
         ttk.Button(map_bar, text='Обновить', command=self.refresh_maps).pack(side='left')
-        profile_bar = ttk.Frame(main)
-        profile_bar.pack(fill='x', pady=(8, 0))
-        self.profile = tk.StringVar(value='Рекомендуемый')
-        ttk.Label(profile_bar, text='Режим генерации:').pack(side='left')
-        picker = ttk.Combobox(profile_bar, textvariable=self.profile, values=('Рекомендуемый', 'Ручная настройка'), state='readonly', width=22)
-        picker.pack(side='left', padx=8)
-        picker.bind('<<ComboboxSelected>>', lambda e: self.change_profile())
-        ttk.Button(profile_bar, text='Восстановить проверенные параметры', command=self.reset_profile).pack(side='left')
-        self.pipeline_summary = tk.StringVar()
-        ttk.Label(main, textvariable=self.pipeline_summary, wraplength=980).pack(anchor='w', pady=(4, 0))
+        ttk.Label(main, text='Единый конвейер: маски • строгие квоты • разнообразные сцены • GPU').pack(anchor='w',pady=(8,0))
         ttk.Label(main, text='Датасет: KolobanovEye/dataset/raw (обновляется после успешной генерации); технические файлы: dataset/runs.').pack(anchor='w', pady=(2, 8))
         notebook = ttk.Notebook(main)
         notebook.pack(fill='x', pady=(4, 0))
         tabs = {}
-        for name in ('Основное', 'Сцена и камера', 'Качество', 'Диагностика'):
+        for name in ('Основное', 'Сцена и камера', 'Качество'):
             tabs[name] = ttk.Frame(notebook, padding=6)
             notebook.add(tabs[name], text=name)
             tabs[name].columnconfigure(0, weight=1)
             tabs[name].columnconfigure(1, weight=1)
         labels = dict(FIELDS)
         groups = [
-            ('Основное', 'Пути и кэш', [('dagor',), ('game',), ('smart_placement_cache',), ('scene_cache',)]),
-            ('Основное', 'Параметры датасета', [('count',), ('frames_per_position',), ('seed',),
-                ('width','height','Размер, пиксели: ширина / высота'), ('fov',)]),
-            ('Сцена и камера', 'Размещение танка', [('placement_mode',), ('map_margin_percent',),
-                ('tank_x','tank_z','Центр поиска: X / Z'), ('placement_radius',), ('tank_yaw',),
-                ('turret_yaw_min','turret_yaw_max','Башня относительно корпуса, °'),
-                ('gun_pitch_min','gun_pitch_max','Наклон орудия, °'), ('minimum_ground_y',),
-                ('max_height_range',), ('ground_offset',)]),
-            ('Сцена и камера', 'Камера', [('distance_min','distance_max','Дистанция по горизонтали: от / до'),
-                ('camera_height_min','camera_height_max','Высота над рельефом: от / до'), ('camera_clearance',)]),
-            ('Качество', 'Поиск и квоты', [('camera_attempts',), ('placement_attempts',), ('visibility_candidate_multiplier',)]),
-            ('Качество', 'Параметры AVF (ручной режим)', [('avf_probe_size',), ('avf_region',),
-                ('avf_backend',), ('avf_batch_size',), ('guided_sampling',), ('guided_prerender',)]),
-            ('Диагностика', 'Рендер и тайм-ауты', [('clipmap_feedback',), ('timeout',), ('min_warmup_renders',)])]
-        self.widgets = {}
-        self.rows = {}
-        self.group_boxes = []
-        def add_widget(parent, key):
-            if key == 'placement_mode':
-                widget = ttk.Combobox(parent, textvariable=self.values[key], values=tuple(MODE_LABELS.values()), state='readonly', width=18)
-            elif key == 'guided_prerender':
-                widget = ttk.Combobox(parent, textvariable=self.values[key], values=('off', 'conservative'), state='readonly', width=12)
-            elif key == 'guided_sampling':
-                widget = ttk.Combobox(parent, textvariable=self.values[key], values=('off', 'obstacle', 'fixed_camera', 'diverse'), state='readonly', width=12)
-            elif key == 'avf_backend':
-                widget = ttk.Combobox(parent, textvariable=self.values[key], values=('gpu', 'cpu', 'verify'), state='readonly', width=12)
-            elif key == 'avf_batch_size':
-                widget = ttk.Combobox(parent, textvariable=self.values[key], values=('1', '2', '3', '4'), state='readonly', width=12)
-            elif key == 'avf_region':
-                widget = ttk.Combobox(parent, textvariable=self.values[key], values=('roi', 'full'), state='readonly', width=12)
-            elif key == 'avf_probe_size':
-                widget = ttk.Combobox(parent, textvariable=self.values[key], values=('0', '64', '128', '256'), state='readonly', width=12)
-            elif key == 'clipmap_feedback':
-                widget = ttk.Combobox(parent, textvariable=self.values[key], values=('software', 'hardware'), state='readonly', width=12)
-            else:
-                widget = ttk.Entry(parent, textvariable=self.values[key], width=12)
-            widget.pack(side='left', fill='x', expand=True)
-            self.widgets[key] = widget
-            if key in ('dagor', 'game', 'output', 'smart_placement_cache', 'scene_cache'):
-                ttk.Button(parent, text='…', width=3, command=lambda k=key: self.choose_directory(k)).pack(side='left')
+            ('Основное','Пути и кэш',[('dagor',),('game',),('smart_placement_cache',),('scene_cache',)]),
+            ('Основное','Параметры датасета',[('count',),('seed',),
+                ('width','height','Размер, пиксели: ширина / высота'),('fov',)]),
+            ('Сцена и камера','Размещение',[('map_margin_percent',),('tank_yaw',),
+                ('minimum_ground_y',),('max_height_range',),('ground_offset',)]),
+            ('Сцена и камера','Камера',[('distance_min','distance_max','Дистанция по горизонтали, м'),
+                ('camera_height_min','camera_height_max','Высота над рельефом, м'),('camera_clearance',)]),
+            ('Качество','Лимиты поиска',[('camera_attempts',),('placement_attempts',),('visibility_candidate_multiplier',),
+                ('timeout',),('min_warmup_renders',)])]
+        self.rows={}
+        def add_widget(parent,key):
+            ttk.Entry(parent,textvariable=self.values[key],width=12).pack(side='left',fill='x',expand=True)
+            if key in ('dagor','game','smart_placement_cache','scene_cache'):
+                ttk.Button(parent,text='…',width=3,command=lambda k=key:self.choose_directory(k)).pack(side='left')
         tab_counts = {name: 0 for name in tabs}
         for tab, title, rows in groups:
             idx = tab_counts[tab]; tab_counts[tab] += 1
             box = ttk.LabelFrame(tabs[tab], text=title, padding=8)
             box.grid(row=idx//2, column=idx%2, sticky='nsew', padx=4, pady=3)
             box.columnconfigure(0, weight=1)
-            keys = []
-            for i, row in enumerate(rows):
-                container = ttk.Frame(box)
-                container.grid(row=i, column=0, sticky='ew', pady=2)
-                self.rows[row[0]] = container
-                keys.append(row[0])
-                label = labels[row[0]] if len(row) == 1 else row[2]
-                ttk.Label(container, text=label, width=32).pack(side='left')
-                add_widget(container, row[0])
-                if len(row) > 1:
-                    ttk.Label(container, text=' — ').pack(side='left')
-                    add_widget(container, row[1])
-            self.group_boxes.append((box, keys))
-        def checks(tab, title, options):
-            idx = tab_counts[tab]; tab_counts[tab] += 1
-            box = ttk.LabelFrame(tabs[tab], text=title, padding=8)
-            box.grid(row=idx//2, column=idx%2, sticky='nsew', padx=4, pady=3)
-            keys = []
-            for i,(key,label,var) in enumerate(options):
-                row = ttk.Checkbutton(box, text=label, variable=var)
-                row.grid(row=i, column=0, sticky='w', pady=3)
-                self.rows[key] = row
-                keys.append(key)
-            self.group_boxes.append((box,keys))
-        checks('Качество', 'Управление конвейером (ручной режим)', [
-            ('capture_visibility_masks','Маски видимости',self.capture_visibility_masks),
-            ('enforce_visibility_quotas','Строгие квоты видимости',self.enforce_visibility_quotas),
-            ('online_quotas','Online-добор в одном DaEditor',self.online_quotas),
-            ('search_occlusion','Поиск перекрытий',self.search_occlusion)])
-        checks('Диагностика', 'Режимы отладки', [
-            ('wait_frame_stability','Ждать стабильности изображения',self.wait_frame_stability),
-            ('wait_sky_convergence','Ждать сходимости освещения неба',self.wait_sky_convergence),
-            ('render_debug','Диагностика рендера (MRT, глубина)',self.render_debug),
-            ('keep_open','Оставить редактор открытым',self.keep_open)])
+            for i,row in enumerate(rows):
+                container=ttk.Frame(box)
+                container.grid(row=i,column=0,sticky='ew',pady=2)
+                self.rows[row[0]]=container
+                label=labels[row[0]] if len(row)==1 else row[2]
+                ttk.Label(container,text=label,width=30).pack(side='left')
+                add_widget(container,row[0])
+                if len(row)>1:
+                    ttk.Label(container,text=' — ').pack(side='left')
+                    add_widget(container,row[1])
+            if tab=='Основное' and title=='Пути и кэш':
+                ttk.Checkbutton(box,text='Накопительный кэш сцен',variable=self.scene_cache_enabled).grid(
+                    row=len(rows),column=0,sticky='w',pady=4)
+        quota_box=ttk.LabelFrame(tabs['Качество'],text='Распределение видимости (веса)',padding=8)
+        quota_box.grid(row=0,column=1,sticky='nsew',padx=4,pady=3)
+        for i,(key,label) in enumerate(zip(BINS,BIN_LABELS)):
+            ttk.Label(quota_box,text=label,width=20).grid(row=i,column=0,sticky='w',pady=2)
+            ttk.Entry(quota_box,textvariable=self.visibility_weights[key],width=10).grid(row=i,column=1,sticky='ew')
+        quota_box.columnconfigure(1,weight=1)
+        ttk.Label(quota_box,text='Веса нормализуются автоматически.',wraplength=350).grid(row=4,column=0,columnspan=2,sticky='w')
         self.cache_status = tk.StringVar()
         ttk.Label(tabs['Основное'], textvariable=self.cache_status, wraplength=950).grid(
             row=2, column=0, columnspan=2, sticky='w', padx=6, pady=5)
         self.quota_status = tk.StringVar()
         ttk.Label(tabs['Качество'], textvariable=self.quota_status, wraplength=950).grid(
             row=2, column=0, columnspan=2, sticky='w', padx=6, pady=5)
-        self._sync_suspended = True
-        for var in list(self.values.values()) + [self.keep_open,self.render_debug,
-            self.capture_visibility_masks,self.enforce_visibility_quotas,self.online_quotas,
-            self.search_occlusion,self.wait_frame_stability,self.wait_sky_convergence]:
-            var.trace_add('write', lambda *_: self.sync_form())
-        self._sync_suspended = False
-        self.reset_profile()
+        self._sync_suspended=False
+        for var in [self.values['smart_placement_cache'], self.values['count'],
+                    self.scene_cache_enabled,*self.visibility_weights.values()]:
+            var.trace_add('write',lambda *_:self.sync_form())
+        self.sync_form()
         buttons = ttk.Frame(main); buttons.pack(fill='x', pady=8)
         self.run_button = ttk.Button(buttons, text='Создать и проверить датасет', command=self.run)
         self.run_button.pack(side='left')
-        menu_button = ttk.Menubutton(buttons, text='Настройки')
+        menu_button = ttk.Menubutton(buttons, text='Дополнительно')
         menu = tk.Menu(menu_button, tearoff=False)
+        menu.add_checkbutton(label='Сверять GPU с CPU (медленнее)',variable=self.verify_gpu)
+        menu.add_checkbutton(label='Ждать сходимости освещения неба',variable=self.wait_sky_convergence)
+        menu.add_separator()
         menu.add_command(label='Открыть настройки…', command=self.open_config)
         menu.add_command(label='Сохранить настройки…', command=self.save_config)
+        menu.add_command(label='Восстановить проверенные параметры сцены', command=self.reset_scene)
         menu_button['menu'] = menu
         menu_button.pack(side='left', padx=8)
         self.open_button = ttk.Button(buttons, text='Открыть папку', command=self.open_result)
@@ -220,78 +157,59 @@ class App:
         root.after(100, self.poll)
         root.after(0, self.refresh_maps)
 
-    def raw_form(self):
-        data = {key: var.get().strip() for key, var in self.values.items()}
-        data['placement_mode'] = next((k for k,label in MODE_LABELS.items()
-                                      if label == data['placement_mode']), data['placement_mode'])
-        for key in ('keep_open','render_debug','capture_visibility_masks','enforce_visibility_quotas',
-                    'search_occlusion','wait_frame_stability','wait_sky_convergence'):
-            data[key] = getattr(self,key).get()
-        data['visibility_quota_mode'] = 'online' if self.online_quotas.get() else 'refill'
-        return data
-
-    def apply_form(self, values):
-        self._sync_suspended = True
-        try:
-            for k,v in values.items():
-                if k in self.values:
-                    self.values[k].set(MODE_LABELS.get(v,v) if k == 'placement_mode' else str(v))
-                elif k == 'visibility_quota_mode':
-                    self.online_quotas.set(v == 'online')
-                elif isinstance(getattr(self,k,None),tk.BooleanVar):
-                    getattr(self,k).set(v)
-        finally:
-            self._sync_suspended = False
+    def reset_scene(self):
+        self.apply_form(SCENE_DEFAULTS)
+        for key in BINS:
+            self.visibility_weights[key].set(str(DEFAULTS['visibility_weights'][key]))
+        self.verify_gpu.set(False)
+        self.wait_sky_convergence.set(False)
         self.sync_form()
 
-    def change_profile(self):
-        if self.profile.get() == 'Рекомендуемый':
-            self.apply_form(RECOMMENDED)
-        else:
-            self.sync_form()
+    def apply_form(self,values):
+        self._sync_suspended=True
+        try:
+            for key,value in values.items():
+                if key in self.values:
+                    self.values[key].set(str(value))
+            if 'scene_cache' in values:
+                self.scene_cache_enabled.set(bool(values['scene_cache']))
+            if 'avf_backend' in values:
+                self.verify_gpu.set(values['avf_backend']=='verify')
+            if 'wait_sky_convergence' in values:
+                self.wait_sky_convergence.set(values['wait_sky_convergence'])
+            if 'visibility_weights' in values:
+                for key,value in values['visibility_weights'].items():
+                    self.visibility_weights[key].set(str(value))
+        finally:
+            self._sync_suspended=False
+        self.sync_form()
 
-    def reset_profile(self):
-        self.profile.set('Рекомендуемый')
-        self.apply_form({**RECOMMENDED, **TESTED_RANGES})
+    def quota_weights(self):
+        return {k:float(v.get().strip().replace(',','.')) for k,v in self.visibility_weights.items()}
 
     def sync_form(self):
         if getattr(self,'_sync_suspended',True):
             return
-        recommended = self.profile.get() == 'Рекомендуемый'
-        raw = self.raw_form()
-        effective = effective_config(raw,recommended)
-        hidden = visible_rows(raw,recommended)
-        for key,row in self.rows.items():
-            if key in hidden:
-                row.grid_remove()
-            else:
-                row.grid()
-        for box,keys in self.group_boxes:
-            if all(key in hidden for key in keys):
-                box.grid_remove()
-            else:
-                box.grid()
-        if recommended:
-            self.pipeline_summary.set('Конвейер 2.9: маски • строгие квоты • online • AVF GPU • разнообразные сцены. Предфильтр отключён до отдельной проверки.')
+        if self.scene_cache_enabled.get():
+            self.rows['scene_cache'].grid()
         else:
-            self.pipeline_summary.set('Ручная настройка: доступны только совместимые параметры. Скрытые зависимые значения не участвуют в запуске.')
-        path = effective['smart_placement_cache']
-        maps = available_whitelist(self.detected_maps, self.selected_maps or [])
-        if recommended and not path:
-            status = 'Требуется кэш умной расстановки: выполните «Анализ объектов» для выбранных карт и укажите папку результата.'
-        elif path:
-            required = ['placement-candidates.json','objects-native.tsv']
-            if str(effective['avf_probe_size']) != '0':
-                required.append('objects.jsonl')
-            missing = [Path(mid).stem for mid in maps if not all(
+            self.rows['scene_cache'].grid_remove()
+        path=self.values['smart_placement_cache'].get().strip()
+        maps=available_whitelist(self.detected_maps,self.selected_maps or [])
+        if not path:
+            status='Выполните анализ объектов для выбранных карт и укажите папку результата.'
+        else:
+            required=('placement-candidates.json','objects-native.tsv','objects.jsonl')
+            missing=[Path(mid).stem for mid in maps if not all(
                 (Path(path)/Path(mid).stem/name).is_file() for name in required)]
-            status = 'Кэш: отсутствуют файлы для ' + ', '.join(missing) if missing else f'Кэш: найдены файлы для {len(maps)} выбранных карт; проверка отпечатков выполняется при запуске.'
-        else:
-            status = 'Умная расстановка не используется в текущем ручном режиме.'
+            status=('Кэш: отсутствуют файлы для '+', '.join(missing)) if missing else (
+                f'Кэш: найдены файлы для {len(maps)} выбранных карт; отпечатки проверяются при запуске.')
         self.cache_status.set(status)
-        weights = self.visibility_weights
-        self.quota_status.set('Квоты: ' + ' / '.join(str(weights[k]) for k in ('open','light','moderate','heavy'))
-                              if effective['enforce_visibility_quotas'] else 'Строгий добор выключен.')
+        try:
+            targets=visibility_targets(int(self.values['count'].get()),self.quota_weights())
+            self.quota_status.set('Целевые кадры: '+' · '.join(f'{label}: {targets[key]}' for key,label in zip(BINS,BIN_LABELS)))
+        except (ValueError,OverflowError):
+            self.quota_status.set('Укажите корректное количество кадров и неотрицательные веса.')
 
     def open_result(self):
         try:
@@ -423,46 +341,55 @@ class App:
         ttk.Button(actions, text='Отмена', command=window.destroy).pack(side='right', padx=6)
 
     def get_config(self):
-        recommended = self.profile.get() == 'Рекомендуемый'
-        data = effective_config(self.raw_form(), recommended)
-        if recommended and not data['smart_placement_cache']:
-            raise ValueError('Укажите кэш умной расстановки (анализ объектов выбранных карт).')
+        data={key:var.get().strip() for key,var in self.values.items()}
+        if not self.scene_cache_enabled.get():
+            data['scene_cache']=''
+        elif not data['scene_cache']:
+            raise ValueError('Укажите папку накопительного кэша сцен или отключите его.')
+        data['avf_backend']='verify' if self.verify_gpu.get() else 'gpu'
+        data['wait_sky_convergence']=self.wait_sky_convergence.get()
         for key,value in list(data.items()):
             try:
                 data[key] = int(value) if key in INTS else float(str(value).replace(',', '.')) if key in FLOATS else value
             except ValueError as exc:
                 raise ValueError(f'{dict(FIELDS).get(key,key)}: неверное число') from exc
         data['output'] = str(DATASET_DIR)
-        data['capture_last_clip'] = False
-        data['capture_tank_map'] = True
         data['screen_position_weights'] = self.screen_position_weights.copy()
-        data['visibility_weights'] = self.visibility_weights.copy()
+        data['visibility_weights'] = self.quota_weights()
         data['map_ids'] = available_whitelist(self.detected_maps, self.selected_maps or [])
         if not data['map_ids']:
             raise ValueError('Выберите хотя бы одну карту для генерации')
         data['map_id'] = data['map_ids'][0]
+        data = validate_dataset_config(data)
         if data['smart_placement_cache']:
-            required = ['placement-candidates.json', 'objects-native.tsv']
-            if data['avf_probe_size']:
-                required.append('objects.jsonl')
+            required = ['placement-candidates.json', 'objects-native.tsv','objects.jsonl']
             missing = [Path(mid).stem for mid in data['map_ids'] if not all(
                 (Path(data['smart_placement_cache'])/Path(mid).stem/name).is_file() for name in required)]
             if missing:
                 raise ValueError('Кэш умной расстановки не содержит выбранные карты: ' + ', '.join(missing))
-        return validate_config(data)
+        return data
 
     def open_config(self):
         path = filedialog.askopenfilename(filetypes=[('JSON', '*.json')])
         if not path: return
         try:
-            data = validate_config(json.loads(Path(path).read_text(encoding='utf-8')))
-            self.profile.set('Ручная настройка')
+            raw=json.loads(Path(path).read_text(encoding='utf-8'))
+            if not isinstance(raw,dict):
+                raise ValueError('Настройки должны быть JSON-объектом')
+            # Import old settings even before a cache is prepared. Generation
+            # still requires a real cache; the placeholder never leaves import.
+            missing_cache=not raw.get('smart_placement_cache')
+            data=validate_dataset_config({**raw,'smart_placement_cache':'__import_only__'} if missing_cache else raw)
+            if missing_cache:
+                data['smart_placement_cache']=''
+            changed=migrated_keys(raw,data)
             self.screen_position_weights = data['screen_position_weights'].copy()
-            self.visibility_weights = data['visibility_weights'].copy()
             self.apply_form(data)
             saved_maps = data.get('map_ids') or [data['map_id']]
             self.selected_maps = saved_maps
             self.refresh_maps()
+            if changed:
+                messagebox.showinfo('Настройки обновлены','Старые переключатели заменены единым конвейером: '+', '.join(changed))
         except (OSError, ValueError) as exc: messagebox.showerror('Ошибка настроек', str(exc))
 
     def save_config(self):
@@ -471,7 +398,9 @@ class App:
             messagebox.showerror('Ошибка настроек', str(exc)); return
         path = filedialog.asksaveasfilename(defaultextension='.json', filetypes=[('JSON', '*.json')])
         if path:
-            try: Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
+            keys=set(self.values)|{'map_id','map_ids','visibility_weights','screen_position_weights','avf_backend','wait_sky_convergence'}
+            saved={k:v for k,v in data.items() if k in keys}
+            try: Path(path).write_text(json.dumps(saved, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
             except OSError as exc: messagebox.showerror('Ошибка сохранения', str(exc))
 
     def run(self):
@@ -558,7 +487,7 @@ class App:
                     if kind == 'success':
                         self.progress.configure(value=self.progress.cget('maximum'))
                         self.state.set(f'Готово: {value}')
-                        messagebox.showinfo('Готово', f'Кадры и метаданные: {value}\nCOCO: {value}\\annotations\\instances.json\n\nПроверьте manifest.json и visibility-quotas.json. При отключённых масках рамка приблизительная.')
+                        messagebox.showinfo('Готово', f'Кадры и метаданные: {value}\nCOCO: {value}\\annotations\\instances.json\n\nПроверенные маски, квоты и отчёты: manifest.json и visibility-quotas.json.')
                     else:
                         self.state.set('Завершено' if kind == 'done' and value == 0 else f'Ошибка: {value}. Проверьте журнал.')
         except queue.Empty: pass

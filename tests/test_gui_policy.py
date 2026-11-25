@@ -1,60 +1,46 @@
 import unittest
-from tools.ke_gui_policy import RECOMMENDED, TESTED_RANGES, effective_config, visible_rows
+from ke_generate import validate_dataset_config
+from tools.ke_pipeline import PIPELINE, SCENE_DEFAULTS, migrated_keys
+from ke_gui import FIELDS
 
-BASE = dict(RECOMMENDED, **TESTED_RANGES, smart_placement_cache="map-cache",
-            scene_cache="scene-cache", tank_x=10., tank_z=20., placement_radius=30.,
-            wait_sky_convergence=False)
-
-class GuiPolicyTests(unittest.TestCase):
-    def test_recommended_forces_pipeline_and_neutral_pose(self):
-        raw=dict(BASE, placement_mode="around_point", frames_per_position="6",
-                 capture_visibility_masks=False, render_debug=True, guided_sampling="off")
-        c=effective_config(raw, True)
-        for k,v in RECOMMENDED.items():
+class DatasetPipelineTests(unittest.TestCase):
+    def test_mandatory_pipeline_migrates_obsolete_options(self):
+        raw={"smart_placement_cache":"cache","placement_mode":"around_point",
+             "frames_per_position":6,"capture_visibility_masks":False,
+             "enforce_visibility_quotas":False,"search_occlusion":False,
+             "avf_probe_size":0,"guided_sampling":"off","guided_prerender":"conservative",
+             "render_debug":True,"keep_open":True}
+        c=validate_dataset_config(raw)
+        for k,v in PIPELINE.items():
             self.assertEqual(c[k],v)
-        self.assertEqual(c["smart_placement_cache"],"map-cache")
-        self.assertEqual(c["scene_cache"],"scene-cache")
-        self.assertEqual(c["tank_x"],0.)
-        self.assertEqual(c["tank_z"],0.)
-        self.assertIn("avf_backend",visible_rows(raw, True))
-        self.assertNotIn("smart_placement_cache",visible_rows(raw, True))
-        self.assertNotIn("scene_cache",visible_rows(raw, True))
+        self.assertEqual(c["avf_backend"],"gpu")
+        self.assertIn("guided_prerender",migrated_keys(raw,c))
+        self.assertEqual(validate_dataset_config(c),c)
 
-    def test_manual_around_point_disables_map_dependencies(self):
-        raw=dict(BASE,placement_mode="around_point")
-        c=effective_config(raw)
-        self.assertEqual(c["smart_placement_cache"],"")
-        self.assertEqual(c["scene_cache"],"")
-        self.assertEqual(c["avf_probe_size"],0)
-        self.assertEqual(c["guided_sampling"],"off")
-        self.assertEqual(c["tank_x"],10.)
-        self.assertEqual(c["map_margin_percent"],0.)
-        hidden=visible_rows(raw)
-        self.assertIn("map_margin_percent",hidden)
-        self.assertNotIn("tank_x",hidden)
-        self.assertIn("smart_placement_cache",hidden)
-        self.assertEqual(raw["smart_placement_cache"],"map-cache")
+    def test_user_scene_parameters_and_weights_are_preserved(self):
+        c=validate_dataset_config({"smart_placement_cache":"cache","distance_max":50.,
+            "count":600,"seed":7,"scene_cache":"hints",
+            "visibility_weights":{"open":40,"light":25,"moderate":25,"heavy":10}})
+        self.assertEqual(c["distance_max"],50.)
+        self.assertEqual(c["count"],600)
+        self.assertEqual(c["seed"],7)
+        self.assertEqual(c["scene_cache"],"hints")
+        self.assertEqual(c["camera_attempts"],SCENE_DEFAULTS["camera_attempts"])
 
-    def test_manual_masks_and_debug_dependencies(self):
-        c=effective_config(dict(BASE,capture_visibility_masks=False))
-        self.assertFalse(c["enforce_visibility_quotas"])
-        self.assertFalse(c["search_occlusion"])
-        self.assertEqual(c["avf_probe_size"],0)
-        self.assertEqual(c["scene_cache"],"")
-        c=effective_config(dict(BASE,render_debug=True))
-        self.assertEqual(c["avf_probe_size"],0)
-        self.assertEqual(c["guided_sampling"],"off")
+    def test_no_fallback_without_object_cache(self):
+        for raw in ({},{"smart_placement_cache":"  "},{"smart_placement_cache":False}):
+            with self.assertRaises(ValueError):
+                validate_dataset_config(raw)
 
-    def test_manual_avf_off_hides_only_dependent_rows(self):
-        raw=dict(BASE,avf_probe_size="0",guided_prerender="conservative")
-        c=effective_config(raw)
-        self.assertEqual(c["guided_prerender"],"off")
-        self.assertEqual(c["scene_cache"],"")
-        self.assertIn("guided_sampling",visible_rows(raw))
-        self.assertNotIn("avf_probe_size",visible_rows(raw))
-        self.assertNotIn("smart_placement_cache",visible_rows(raw))
+    def test_only_same_texture_verification_remains_as_backend_diagnostic(self):
+        for backend,expected in (("gpu","gpu"),("cpu","verify"),("verify","verify")):
+            self.assertEqual(validate_dataset_config({"smart_placement_cache":"cache","avf_backend":backend})["avf_backend"],expected)
+        with self.assertRaises(ValueError):
+            validate_dataset_config({"smart_placement_cache":"cache","avf_backend":"unknown"})
 
-    def test_recommended_missing_cache_does_not_silently_downgrade(self):
-        raw=dict(BASE,smart_placement_cache="")
-        self.assertEqual(effective_config(raw,True)["avf_probe_size"],128)
-        self.assertNotIn("smart_placement_cache",visible_rows(raw,True))
+    def test_gui_does_not_expose_pipeline_switches(self):
+        fields={key for key,_ in FIELDS}
+        self.assertFalse(fields & set(PIPELINE))
+        self.assertIn("smart_placement_cache",fields)
+        self.assertIn("scene_cache",fields)
+        self.assertIn("count",fields)
