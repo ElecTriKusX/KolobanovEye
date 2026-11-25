@@ -265,6 +265,7 @@ ROI_SIZE_NEW = r'''        int probeW = int(float(keProbeSize)*width/longSide+.5
           debug("[KE] AVF_ROI_FALLBACK index=%d attempt=%d", frameIndex, cameraAttempt);
 '''
 ROI_EDITS = (
+    ("#include <cmath>\n", "#include <drv/3d/dag_decl.h>\n#include <drv/3d/dag_matricesAndPerspective.h>\n#include <math/dag_TMatrix4.h>\n#include <cmath>\n"),
     (ROI_SETUP_OLD, ROI_SETUP_NEW),
     ("      float probeFraction = -1.f;\n", "      float probeFraction = -1.f;\n      bool probeUsedRoi = false;\n"),
     (ROI_SIZE_OLD, ROI_SIZE_NEW),
