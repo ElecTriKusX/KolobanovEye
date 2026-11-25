@@ -32,6 +32,7 @@ FIELDS = [
  ('avf_region', 'AVF: область пробы'),
  ('avf_backend', 'AVF: подсчёт пикселей'),
  ('avf_batch_size', 'AVF: камер в группе'),
+ ('guided_sampling', 'AVF: направленный поиск (2.9)'),
 ]
 
 
@@ -83,11 +84,13 @@ class App:
             ('Танк и место', [('placement_mode',), ('smart_placement_cache',), ('map_margin_percent',), ('tank_x','tank_z','Центр поиска: X / Z'), ('tank_yaw',), ('turret_yaw_min','turret_yaw_max','Башня относительно корпуса, °'), ('gun_pitch_min','gun_pitch_max','Наклон орудия, °'), ('placement_radius',), ('minimum_ground_y',), ('max_height_range',), ('ground_offset',)]),
             ('Камера', [('distance_min','distance_max','Дистанция по горизонтали: от / до'),
                         ('camera_height_min','camera_height_max','Высота над рельефом: от / до'), ('camera_clearance',)]),
-            ('Служебные параметры', [('camera_attempts',), ('placement_attempts',), ('clipmap_feedback',), ('timeout',), ('min_warmup_renders',), ('visibility_candidate_multiplier',), ('avf_probe_size',), ('avf_region',), ('avf_backend',), ('avf_batch_size',)])]
+            ('Служебные параметры', [('camera_attempts',), ('placement_attempts',), ('clipmap_feedback',), ('timeout',), ('min_warmup_renders',), ('visibility_candidate_multiplier',), ('avf_probe_size',), ('avf_region',), ('avf_backend',), ('avf_batch_size',), ('guided_sampling',)])]
         self.widgets = {}
         def add_widget(parent, key):
             if key == 'placement_mode':
                 widget = ttk.Combobox(parent, textvariable=self.values[key], values=tuple(MODE_LABELS.values()), state='readonly', width=18)
+            elif key == 'guided_sampling':
+                widget = ttk.Combobox(parent, textvariable=self.values[key], values=('off', 'obstacle'), state='readonly', width=12)
             elif key == 'avf_backend':
                 widget = ttk.Combobox(parent, textvariable=self.values[key], values=('gpu', 'cpu', 'verify'), state='readonly', width=12)
             elif key == 'avf_batch_size':
