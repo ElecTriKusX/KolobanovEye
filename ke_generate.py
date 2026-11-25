@@ -24,12 +24,12 @@ DEFAULTS = {
     'min_warmup_renders': 8, 'wait_sky_convergence': False, 'wait_frame_stability': True,
     'screen_position_weights': DEFAULT_WEIGHTS.copy(), 'capture_visibility_masks': False,
     'enforce_visibility_quotas': False, 'visibility_weights': DEFAULT_VISIBILITY_WEIGHTS.copy(),
-    'visibility_candidate_multiplier': 5, 'search_occlusion': False, 'avf_probe_size': 0, 'avf_region': 'roi', 'avf_reuse_map': True,
+    'visibility_candidate_multiplier': 5, 'search_occlusion': False, 'avf_probe_size': 0, 'avf_region': 'roi', 'avf_reuse_map': True, 'avf_backend': 'gpu', 'avf_batch_size': 4,
     'refill_batch_per_map': 256, 'refill_stall_rounds': 3, 'refill_max_rounds': 10000,
     'visibility_quota_mode': 'refill', 'smart_placement_cache': '',
     'keep_open': False, 'render_debug': False, 'capture_last_clip': False, 'clipmap_feedback': 'software', 'timeout': 360,
 }
-INTS = {'avf_probe_size', 'count', 'seed', 'width', 'height', 'timeout', 'placement_attempts', 'camera_attempts', 'frames_per_position', 'min_warmup_renders', 'tank_map_resolution', 'visibility_candidate_multiplier', 'refill_batch_per_map', 'refill_stall_rounds', 'refill_max_rounds'}
+INTS = {'avf_batch_size', 'avf_probe_size', 'count', 'seed', 'width', 'height', 'timeout', 'placement_attempts', 'camera_attempts', 'frames_per_position', 'min_warmup_renders', 'tank_map_resolution', 'visibility_candidate_multiplier', 'refill_batch_per_map', 'refill_stall_rounds', 'refill_max_rounds'}
 FLOATS = {'turret_yaw_min', 'turret_yaw_max', 'gun_pitch_min', 'gun_pitch_max', 'fov', 'tank_x', 'tank_z', 'tank_yaw', 'ground_offset', 'camera_clearance',
           'minimum_ground_y', 'distance_min', 'distance_max', 'elevation_min', 'elevation_max', 'placement_radius', 'max_height_range', 'camera_height_min', 'camera_height_max', 'map_margin_percent'}
 
@@ -92,6 +92,8 @@ def validate_config(raw):
             raise ValueError(f'{key}: требуется целое число')
     if not isinstance(c['avf_reuse_map'], bool):
         raise ValueError('avf_reuse_map: требуется true или false')
+    if c['avf_backend'] not in ('cpu', 'gpu') or not 1 <= c['avf_batch_size'] <= 4:
+        raise ValueError('AVF: backend cpu/gpu, размер группы 1–4')
     if c['avf_region'] not in ('full', 'roi'):
         raise ValueError('avf_region: full или roi')
     if c['avf_probe_size'] not in (0, 64, 128, 256):
