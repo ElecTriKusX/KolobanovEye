@@ -72,8 +72,11 @@ def generate_online(cfg, run, raw, *, executor=None):
     budget = {m: n * cfg["visibility_candidate_multiplier"] for m, n in target_jobs}
     planner = AdaptiveQuotaPlanner(targets, map_targets, budget)
     samplers, bank_info, occluders = {}, {}, {}
-    guided = cfg.get("guided_sampling", "off") in ("obstacle","fixed_camera")
-    fixed_mode = cfg.get("guided_sampling") == "fixed_camera"
+    guided = cfg.get("guided_sampling", "off") in ("obstacle","fixed_camera","diverse")
+    fixed_mode = cfg.get("guided_sampling") in ("fixed_camera","diverse")
+    diverse = cfg.get("guided_sampling") == "diverse"
+    from tools.ke_scene_families import SceneIndexes, family_for, prepare_family, family_fields, count_family
+    family_indexes, family_attempts = {}, {}
     from tools.ke_depth_feedback import DepthFeedback, read_world_edges
     depth_feedback = DepthFeedback()
     from tools.ke_fixed_camera import fixed_camera_group, fixed_block, read_fixed_metadata, read_fixed_final
@@ -86,6 +89,9 @@ def generate_online(cfg, run, raw, *, executor=None):
             bank_info[mid] = {k:v for k,v in bank.items() if k!="pools"}
             if guided:
                 occluders[mid] = OccluderIndex.load(cfg["smart_placement_cache"],mid)
+                if diverse:
+                    family_indexes[mid] = SceneIndexes.load(cfg["smart_placement_cache"],mid)
+                    family_attempts[mid] = 0
     run.mkdir(parents=True)
     raw.mkdir(parents=True)
     for name in ("images", "masks/amodal", "masks/visible"):
@@ -117,6 +123,7 @@ def generate_online(cfg, run, raw, *, executor=None):
     report["fixed_camera"] = {"planned_groups":0,"measured_groups":0,"environment_passes":0,"valid_probes":0,
                               "selected_fixed_views":0,"world_edge_proposals":0,"depth_feedback_offered":0,"depth_feedback_used":0,
                               "measurement_scope":"validated_full_frames_only; native FIXED_PRESELECT includes rejected frames"}
+    report["scene_families"] = {}
     consecutive_unstable = 0
     report["attempted_candidates"] = 0
     # A single miss is not stagnation. Allow several map-sized windows of
@@ -186,14 +193,31 @@ def generate_online(cfg, run, raw, *, executor=None):
                 task["smart_points"] = {}
                 task["guided_skip"] = {}
                 fixed_groups = {}
+                families = {}
                 guided_fields = {}
                 selected_fields = {}
                 def publish_points(frame_index, requested):
                     points = sampler.choose(requested,cfg["placement_attempts"])
-                    if guided and frame_index % 5 != 4:
+                    if guided and not diverse and frame_index % 5 != 4:
                         points = prioritize_points(occluders[mid],sampler.bounds,points,requested,cfg)
                     group = None
-                    if fixed_mode and planner.attempts[mid]%5!=0:
+                    family, requested_family = "legacy", "legacy"
+                    index, profile = occluders.get(mid), cfg
+                    if diverse:
+                        if requested!="open":
+                            family_attempts[mid] += 1
+                        requested_family=family_for(requested,family_attempts[mid])
+                        if requested_family=="aperture":
+                            points,group=depth_feedback.take(mid,requested,points,sampler.bounds,cfg)
+                        if group is not None:
+                            family="depth_feedback"
+                        else:
+                            family,points,group,index,profile=prepare_family(family_indexes[mid],index,sampler.bounds,
+                                points,requested,cfg,f'{task["seed"]}:family:{frame_index}',requested_family)
+                        report["fixed_camera"]["depth_feedback_used"]=depth_feedback.used
+                        families[frame_index]=(requested_family,family)
+                        count_family(report["scene_families"],family,requested)
+                    elif fixed_mode and planner.attempts[mid]%5!=0:
                         points,group = depth_feedback.take(mid,requested,points,sampler.bounds,cfg)
                         if group is None:
                             points,group = fixed_camera_group(occluders[mid],sampler.bounds,points,requested,cfg,
@@ -205,8 +229,13 @@ def generate_online(cfg, run, raw, *, executor=None):
                     task["smart_points"][frame_index] = points
                     block = frame_block(frame_index,requested,points,cfg["ground_offset"])+fixed_block(group)
                     if guided:
-                        fields = candidate_fields(task["cameras"][frame_index],occluders[mid],sampler.bounds,
-                            points,requested,cfg,f'{task["seed"]}:{frame_index}')
+                        if diverse:
+                            fields=family_fields(task["cameras"][frame_index],index,sampler.bounds,points,
+                                requested,profile,f'{task["seed"]}:{frame_index}',family)
+                            block += f'guided_scene_family:t="{family}"\n'
+                        else:
+                            fields = candidate_fields(task["cameras"][frame_index],occluders[mid],sampler.bounds,
+                                points,requested,cfg,f'{task["seed"]}:{frame_index}')
                         guided_fields[frame_index] = fields
                         skip = (cfg.get("guided_prerender","off") == "conservative" and
                                 mid not in report["guided_prerender_disabled_maps"] and allow_skip(planner,mid,requested))
@@ -218,7 +247,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                         stream.write(json.dumps({"task":number,"index":frame_index,"map_id":mid,
                             "target":requested,"points":points,
                             "guided_skip_open":task["guided_skip"].get(frame_index,False),
-                            "fixed_camera_group":group})+"\n")
+                            "fixed_camera_group":group,"requested_family":requested_family,"proposal_family":family})+"\n")
                 publish_points(0,target)
             publish(feedback / "decision_0.txt", f"{VISIBILITY_BINS.index(target)}\n")
             attempt_started = time.monotonic()
@@ -338,6 +367,14 @@ def generate_online(cfg, run, raw, *, executor=None):
                     validated[record["image_id"]] = candidate
                     records.append(record)
                     planner.finish(record)
+                    if diverse:
+                        requested_family,family=families[idx]
+                        measured_family=record["visibility_measurement"]["visibility_bin"]
+                        family_meta={"requested":requested_family,"proposal":family,"is_ground_truth":False}
+                        record["scene_family"]=family_meta
+                        candidate[1]["ke_scene_family"]=family_meta
+                        count_family(report["scene_families"],family,target,measured_family,
+                                     planner.report["selected"]>before)
                     consecutive_mismatch = 0
                     measured = record["visibility_measurement"]["visibility_bin"]
                     if guided and cfg.get("guided_prerender","off")=="conservative":
@@ -354,6 +391,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                 if guided:
                     guided_fields.pop(idx,None)
                     fixed_groups.pop(idx,None)
+                    families.pop(idx,None)
                 validation_finished = time.monotonic()
                 after = planner.report["selected"]
                 no_gain = no_gain + 1 if after == before else 0
@@ -465,6 +503,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                      guided_prerender_probes=report["guided_prerender_probes"],
                      guided_prerender_disabled_maps=report["guided_prerender_disabled_maps"],
                      fixed_camera=report["fixed_camera"],
+                     scene_families=report["scene_families"],
                      attempted_candidates=report["attempted_candidates"], rendered_candidates=report["candidate_frames"])
         write_json(run / "visibility-quotas.json", quota)
         report["stop_reason"] = stop_reason
