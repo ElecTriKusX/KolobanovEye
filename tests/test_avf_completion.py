@@ -45,6 +45,18 @@ class AVFCompletionContracts(unittest.TestCase):
             self.assertEqual(normalize_gpu(v3[1], "render"), v2[1])
             self.assertFalse(install_avf_probe(root))
             self.assertFalse(install_avf_gpu(root))
+            # Simulate the exact installed V3 that failed the Windows build.
+            from tools.ke_dagor_avf_gpu import BUILD_FIXES
+            for key, path in (("header", header), ("render", render)):
+                old_v3 = path.read_text(encoding="utf-8")
+                for old, new in reversed(BUILD_FIXES[key]):
+                    self.assertEqual(old_v3.count(new), 1)
+                    old_v3 = old_v3.replace(new, old, 1)
+                path.write_text(old_v3, encoding="utf-8")
+            self.assertFalse(install_avf_probe(root))
+            self.assertTrue(install_avf_gpu(root))
+            self.assertEqual([p.read_text(encoding="utf-8") for p in (header, render)], v3)
+            self.assertFalse(install_avf_gpu(root))
 
     def test_gpu_skips_cpu_depth_readback_and_verification_uses_same_buffers(self):
         self.assertIn("return keSubmitProbe(slot, sceneTex, modelTex, width, height);", SCENE_NEW)
