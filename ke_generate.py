@@ -24,12 +24,12 @@ DEFAULTS = {
     'min_warmup_renders': 8, 'wait_sky_convergence': False, 'wait_frame_stability': True,
     'screen_position_weights': DEFAULT_WEIGHTS.copy(), 'capture_visibility_masks': False,
     'enforce_visibility_quotas': False, 'visibility_weights': DEFAULT_VISIBILITY_WEIGHTS.copy(),
-    'visibility_candidate_multiplier': 5, 'search_occlusion': False,
+    'visibility_candidate_multiplier': 5, 'search_occlusion': False, 'avf_probe_size': 0,
     'refill_batch_per_map': 256, 'refill_stall_rounds': 3, 'refill_max_rounds': 10000,
     'visibility_quota_mode': 'refill', 'smart_placement_cache': '',
     'keep_open': False, 'render_debug': False, 'capture_last_clip': False, 'clipmap_feedback': 'software', 'timeout': 360,
 }
-INTS = {'count', 'seed', 'width', 'height', 'timeout', 'placement_attempts', 'camera_attempts', 'frames_per_position', 'min_warmup_renders', 'tank_map_resolution', 'visibility_candidate_multiplier', 'refill_batch_per_map', 'refill_stall_rounds', 'refill_max_rounds'}
+INTS = {'avf_probe_size', 'count', 'seed', 'width', 'height', 'timeout', 'placement_attempts', 'camera_attempts', 'frames_per_position', 'min_warmup_renders', 'tank_map_resolution', 'visibility_candidate_multiplier', 'refill_batch_per_map', 'refill_stall_rounds', 'refill_max_rounds'}
 FLOATS = {'turret_yaw_min', 'turret_yaw_max', 'gun_pitch_min', 'gun_pitch_max', 'fov', 'tank_x', 'tank_z', 'tank_yaw', 'ground_offset', 'camera_clearance',
           'minimum_ground_y', 'distance_min', 'distance_max', 'elevation_min', 'elevation_max', 'placement_radius', 'max_height_range', 'camera_height_min', 'camera_height_max', 'map_margin_percent'}
 
@@ -90,6 +90,10 @@ def validate_config(raw):
     for key in INTS:
         if isinstance(c[key], bool) or not isinstance(c[key], int):
             raise ValueError(f'{key}: требуется целое число')
+    if c['avf_probe_size'] not in (0, 64, 128, 256):
+        raise ValueError('avf_probe_size: 0, 64, 128 или 256')
+    if c['avf_probe_size'] and not (c['smart_placement_cache'] and c['search_occlusion'] and c['capture_visibility_masks'] and not c['render_debug']):
+        raise ValueError('AVF требует умную расстановку и маски; отключите render_debug')
     if not 1 <= c['visibility_candidate_multiplier'] <= 20:
         raise ValueError('visibility_candidate_multiplier: 1–20')
     for key, limit in (('refill_batch_per_map', 1000), ('refill_stall_rounds', 100), ('refill_max_rounds', 10000)):
