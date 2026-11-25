@@ -103,6 +103,9 @@ EDGE_EDITS = (
 
 def normalize_edge_capture(src):
     from tools.ke_dagor_depth_proposals import MARKER as WORLD_MARKER, CAPTURE_EDITS, reverse_successors
+    from tools.ke_dagor_aperture import MARKER as APERTURE_MARKER, CAPTURE_EDITS as aperture_edits
+    if APERTURE_MARKER in src:
+        src=reverse_successors(src,aperture_edits)
     if WORLD_MARKER in src:
         src=reverse_successors(src,CAPTURE_EDITS)
     if EDGE_MARKER not in src:
@@ -142,6 +145,8 @@ def install_fixed_final(source: Path):
         src=src.replace(old,new,1)
     from tools.ke_dagor_depth_proposals import CAPTURE_EDITS, apply_successors
     src=apply_successors(src,CAPTURE_EDITS)
+    from tools.ke_dagor_aperture import CAPTURE_EDITS as aperture_edits
+    src=apply_successors(src,aperture_edits)
     updated=src.encode("utf-8").replace(b"\n",b"\r\n" if b"\r\n" in raw else b"\n")
     if updated==raw:
         return False
