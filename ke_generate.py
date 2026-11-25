@@ -99,7 +99,7 @@ def validate_config(raw):
     if c['guided_prerender'] not in ('off', 'conservative'):
         raise ValueError('guided_prerender: off или conservative')
     if c['guided_prerender'] != 'off' and c['guided_sampling'] not in ('obstacle','fixed_camera','diverse'):
-        raise ValueError('Предварительная отбраковка требует направленный поиск obstacle или fixed_camera')
+        raise ValueError('Предварительная отбраковка требует направленный поиск obstacle, fixed_camera или diverse')
     if c['guided_sampling'] not in ('off', 'obstacle','fixed_camera','diverse'):
         raise ValueError('guided_sampling: off, obstacle, fixed_camera или diverse')
     if c['guided_sampling'] != 'off' and not c['avf_probe_size']:
