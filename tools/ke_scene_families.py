@@ -57,6 +57,12 @@ def family_for(target,attempt):
     return FAMILIES[(attempt-1)%len(FAMILIES)]
 
 
+def reserve_aperture(family, attempt):
+    # The first and every third aperture slot are protected from feedback/cache.
+    # attempt is the one-based non-open request counter for this map.
+    return family == 'aperture' and ((attempt-1)//len(FAMILIES))%3==0
+
+
 def profile(cfg,family):
     result=dict(cfg)
     lo=max(cfg["camera_height_min"],cfg.get("camera_clearance",0.))
