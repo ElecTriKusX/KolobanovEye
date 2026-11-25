@@ -271,8 +271,68 @@ RUNTIME_DIAGNOSTICS = (
 )
 BUILD_FIXES["render"] += RUNTIME_DIAGNOSTICS
 
+# Dagor frameStateTM.inc.h: validatepersp only recognizes a symmetric
+# projection (col2.x/y must be zero). calcproj and setpersp explicitly
+# support ox/oy and setpersp caches the complete Driver3dPerspective.
+# Preserve the old diagnostic block as an upgrade anchor.
+PROJECTION_FIX = (
+    RUNTIME_DIAGNOSTICS[0][1],
+    """        width > 512 || height > 512)
+    {
+      debug("[KE] AVF_NATIVE_FAIL stage=precondition rtype=%d width=%d height=%d",
+        rtype,width,height);
+      return false;
+    }
+    // [KE] AVF_ASYMMETRIC_PROJECTION_V5
+    // The crop has already been checked against the base clip-space matrix.
+    // Do not use validatepersp: it rejects any nonzero lens shift.
+    if (!std::isfinite(perspective.wk) || !std::isfinite(perspective.hk) ||
+        !std::isfinite(perspective.zn) || !std::isfinite(perspective.zf) ||
+        !std::isfinite(perspective.ox) || !std::isfinite(perspective.oy) ||
+        perspective.wk <= 0.f || perspective.hk <= 0.f ||
+        perspective.zn <= 0.f || perspective.zf <= perspective.zn)
+    {
+      debug("[KE] AVF_NATIVE_FAIL stage=projection_parameters");
+      return false;
+    }
+    TMatrix4 checkedProjection;
+    if (!d3d::calcproj(perspective, checkedProjection))
+    {
+      debug("[KE] AVF_NATIVE_FAIL stage=projection_calculation");
+      return false;
+    }
+    for (int row=0; row<4; ++row)
+      for (int col=0; col<4; ++col)
+        if (!std::isfinite(checkedProjection[row][col]))
+        {
+          debug("[KE] AVF_NATIVE_FAIL stage=projection_nonfinite");
+          return false;
+        }
+    if (checkedProjection[0][0] == 0.f || checkedProjection[1][1] == 0.f ||
+        checkedProjection[2][2] == 0.f || checkedProjection[3][2] == 0.f)
+    {
+      debug("[KE] AVF_NATIVE_FAIL stage=projection_degenerate");
+      return false;
+    }""",
+)
+BUILD_FIXES["render"] += (PROJECTION_FIX,)
+
+
+
+def reverse_build_fixes(src, key):
+    # An older checkout may lack later chained edits. Undo only present
+    # successors, then validate the original GPU source anchors.
+    for old, new in reversed(BUILD_FIXES[key]):
+        count = src.count(new)
+        if count > 1:
+            raise ValueError(f"Ambiguous AVF GPU build fix: {key}")
+        if count == 1:
+            src = src.replace(new, old, 1)
+    return src
+
 
 def apply_build_fixes(src, key):
+    src = reverse_build_fixes(src, key)
     for old, new in BUILD_FIXES[key]:
         if src.count(new) == 1:
             continue
@@ -285,11 +345,7 @@ def apply_build_fixes(src, key):
 def normalize_gpu(src, key):
     if MARKER not in src and ("collectKolobanovEyeProbe" not in src if key == "header" else True):
         return src
-    for old, new in reversed(BUILD_FIXES[key]):
-        if src.count(new) == 1:
-            src = src.replace(new, old, 1)
-        elif src.count(old) != 1:
-            raise ValueError(f"Partial AVF GPU build fix: {key}")
+    src = reverse_build_fixes(src, key)
     for old, new in reversed(EDITS[key]):
         if src.count(new) != 1:
             raise ValueError(f"Partial AVF GPU queue {key}")
