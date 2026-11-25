@@ -892,6 +892,8 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
     install_visibility_reject(dagor)
     from tools.ke_dagor_avf_probe import install_avf_probe
     install_avf_probe(dagor)
+    from tools.ke_dagor_avf_gpu import install_avf_gpu
+    install_avf_gpu(dagor)
     from tools.ke_placement_reject import install_placement_reject
     install_placement_reject(capture_cpp)
     from tools.ke_stability_reject import install_stability_reject
@@ -1273,6 +1275,8 @@ def build(dagor, ooz=None):
     if use_ooz and ooz is None:
         verify_vendor_ooz()
     apply_dagor_patches(dagor, with_ooz=use_ooz)
+    from tools.ke_avf_shader import prepare_avf_shader
+    prepare_avf_shader(dagor)
 
     logs = HERE / "build-logs"
     logs.mkdir(exist_ok=True)
