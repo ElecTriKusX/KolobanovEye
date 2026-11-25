@@ -453,7 +453,8 @@ def collect_frame(cfg, run, raw, task, idx, blk):
     visibility = (read_capture_masks(raw, image_path.name, blk, cfg["width"], cfg["height"])
                   if cfg["capture_visibility_masks"] else None)
     occlusion = (read_occlusion_proxy(blk, task["occlusion_targets"][idx], cfg["camera_attempts"], visibility,
-                                      probe_size=cfg.get('avf_probe_size', 0))
+                                      probe_size=cfg.get('avf_probe_size', 0),
+                                      probe_region=cfg.get('avf_region', 'roi') if cfg.get('avf_probe_size', 0) else None)
                  if cfg["search_occlusion"] else None)
     image_id = int(image_path.stem)
     scene_id = f'{run.name}:{task["index"]}:{task["stem"]}:{comp}'
