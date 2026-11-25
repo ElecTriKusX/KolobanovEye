@@ -3,8 +3,10 @@ import unittest
 from pathlib import Path
 
 from tools.ke_avf import plan_camera_field
-from tools.ke_dagor_avf_camera import EDITS, FIELD_EDITS, FIELD_LOOP_OLD, install_avf_camera, normalize_capture
-from tools.ke_dagor_avf_probe import BASE, EDITS as RENDER_EDITS, install_avf_probe
+from tools.ke_dagor_avf_camera import (EDITS, FIELD_EDITS, FIELD_LOOP_OLD, ROI_MARKER,
+    install_avf_camera, normalize_capture, normalize_roi)
+from tools.ke_dagor_avf_probe import (BASE, EDITS as RENDER_EDITS, install_avf_probe,
+    normalize_readback, paired_scene)
 from tools.ke_occlusion import read_occlusion_proxy, summarize_search
 
 
@@ -28,7 +30,7 @@ class AVFNativeContractTests(unittest.TestCase):
             self.assertEqual(len(plan_camera_field(1, 1, n, (18, 35), (10, 25), (4, 16))[0]), n)
 
     def test_camera_patch_idempotence_and_upgrade(self):
-        original = "\n".join(old for old, _ in EDITS) + "\n" + FIELD_LOOP_OLD
+        original = "#include <cmath>\n" + "\n".join(old for old, _ in EDITS) + "\n" + FIELD_LOOP_OLD
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "capture.cpp"
             path.write_text(original, encoding="utf-8")
@@ -40,6 +42,12 @@ class AVFNativeContractTests(unittest.TestCase):
             for old, new in EDITS:
                 v1 = v1.replace(old, new, 1)
             path.write_text(v1, encoding="utf-8")
+            self.assertTrue(install_avf_camera(path))
+            self.assertEqual(path.read_text(encoding="utf-8"), installed)
+            self.assertIn(ROI_MARKER, installed)
+            v2 = normalize_roi(installed)
+            self.assertNotIn(ROI_MARKER, v2)
+            path.write_text(v2, encoding="utf-8")
             self.assertTrue(install_avf_camera(path))
             self.assertEqual(path.read_text(encoding="utf-8"), installed)
 
@@ -57,6 +65,19 @@ class AVFNativeContractTests(unittest.TestCase):
             once = (header.read_bytes(), render.read_bytes())
             self.assertFalse(install_avf_probe(root))
             self.assertEqual(once, (header.read_bytes(), render.read_bytes()))
+            render.write_text(normalize_readback(render.read_text(encoding='utf-8')), encoding='utf-8')
+            self.assertTrue(install_avf_probe(root))
+            self.assertEqual(once, (header.read_bytes(), render.read_bytes()))
+
+    def test_both_draws_and_staging_requests_precede_first_map(self):
+        code = paired_scene()
+        first_request = code.index("request_readback_nosyslock(sceneTex, 0)")
+        model_draw = code.index("render_model(Point3::ZERO)")
+        second_request = code.index("request_readback_nosyslock(modelTex, 0)")
+        first_map = code.index("if (!read(sceneTex, sceneDepth)")
+        self.assertLess(first_request, model_draw)
+        self.assertLess(model_draw, second_request)
+        self.assertLess(second_request, first_map)
 
     def test_probe_telemetry(self):
         base = ('occlusion_target_bin:t="moderate"\n'
@@ -68,6 +89,13 @@ class AVFNativeContractTests(unittest.TestCase):
         truth = {"visible_fraction": .55, "visibility_bin": "moderate"}
         result = read_occlusion_proxy(base, "moderate", 8, truth, probe_size=128)
         self.assertAlmostEqual(result["avf"]["absolute_error"], .05)
+        roi_blk = base + 'avf_probe_region:t="roi"\n'
+        roi = read_occlusion_proxy(roi_blk, "moderate", 8, truth, probe_size=128, probe_region="roi")
+        self.assertEqual(roi["avf"]["region"], "roi")
+        with self.assertRaises(ValueError):
+            read_occlusion_proxy(roi_blk, "moderate", 8, truth, probe_size=128, probe_region="full")
+        with self.assertRaises(ValueError):
+            read_occlusion_proxy(base, "moderate", 8, truth, probe_size=128, probe_region="roi")
         self.assertAlmostEqual(summarize_search([{"occlusion_search": result}])["avf"]["mean_absolute_error"], .05)
         with self.assertRaises(ValueError):
             read_occlusion_proxy(base.replace("avf_probe_fraction:r=0.5", "avf_probe_fraction:r=0.9"),
