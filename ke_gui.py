@@ -93,7 +93,7 @@ class App:
             elif key == 'guided_prerender':
                 widget = ttk.Combobox(parent, textvariable=self.values[key], values=('off', 'conservative'), state='readonly', width=12)
             elif key == 'guided_sampling':
-                widget = ttk.Combobox(parent, textvariable=self.values[key], values=('off', 'obstacle'), state='readonly', width=12)
+                widget = ttk.Combobox(parent, textvariable=self.values[key], values=('off', 'obstacle', 'fixed_camera'), state='readonly', width=12)
             elif key == 'avf_backend':
                 widget = ttk.Combobox(parent, textvariable=self.values[key], values=('gpu', 'cpu', 'verify'), state='readonly', width=12)
             elif key == 'avf_batch_size':
