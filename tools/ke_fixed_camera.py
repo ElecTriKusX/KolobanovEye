@@ -195,3 +195,31 @@ def depth_edge_hits(scene,model,width,height,zn=.2,zf=20000.):
             if x+1<width: count+=int(crosses(i,i+1))
             if y+1<height: count+=int(crosses(i,i+width))
     return count
+
+
+def read_fixed_gpu_metadata(blk,fixed,expected_backend):
+    """A GPU result cannot be credited without a submitted measurement."""
+    import re
+    def field(name,kind):
+        matches=re.findall(r"^"+name+":"+kind+r"=([^\r\n]+)",blk,re.M)
+        if len(matches)!=1:
+            raise ValueError("Missing or duplicate fixed GPU metadata: "+name)
+        return matches[0].strip().strip('"')
+    backend=field("fixed_group_backend","t")
+    submitted=int(field("fixed_group_gpu_submitted","i"))
+    verified=int(field("fixed_group_gpu_verified","i"))
+    if backend!=expected_backend or backend not in ("cpu","gpu","verify"):
+        raise ValueError("Unexpected fixed GPU backend")
+    if not 0<=verified<=submitted<=fixed["valid_placements"]:
+        raise ValueError("Invalid fixed GPU counters")
+    if submitted and fixed["environment_passes"]!=1:
+        raise ValueError("GPU dispatch without environment depth")
+    if backend=="cpu":
+        if submitted or verified:
+            raise ValueError("Unexpected GPU work in CPU reference mode")
+    elif fixed["valid_probes"]>submitted:
+        raise ValueError("Fixed GPU result lacks a dispatch")
+    if (backend=="gpu" and verified) or (backend=="verify" and verified!=submitted):
+        raise ValueError("Invalid fixed GPU verification evidence")
+    return {"method":"fixed_camera_depth_"+backend+"_v6","backend":backend,
+            "gpu_submitted":submitted,"gpu_verified":verified}
