@@ -48,7 +48,71 @@ EDITS = (
 '''),
 )
 
+
+EDGE_MARKER = "// [KE] FIXED_EDGE_RANK_V3"
+EDGE_EDITS = (
+    ("  Point3 keFixedEye(0.f,0.f,0.f),keFixedLookAt(0.f,0.f,0.f);\n",
+     """  Point3 keFixedEye(0.f,0.f,0.f),keFixedLookAt(0.f,0.f,0.f);
+  // [KE] FIXED_EDGE_RANK_V3
+  int keFixedEdgeHits=0;
+"""),
+    ("""        const Point3 fixedAim(anchor.x,aimGround+keFixedPlaces[0].point.y-bounds[0].y+
+          (bounds[0].y+bounds[1].y)*.5f,anchor.y);
+        if (lengthSq(Point3(0,1,0)%(fixedAim-fixedEye))>.01f)
+        {""",
+     """        Point3 fixedAim(anchor.x,aimGround+keFixedPlaces[0].point.y-bounds[0].y+
+          (bounds[0].y+bounds[1].y)*.5f,anchor.y);
+        if (lengthSq(Point3(0,1,0)%(fixedAim-fixedEye))>.01f)
+        {
+          // Apply the planned composition to the group's anchor. Individual
+          // translated poses have different actual screen positions.
+          char screenKey[48];
+          snprintf(screenKey,sizeof(screenKey),"screen_offset_%d",sceneIndex);
+          const Point2 offset=config.getPoint2(screenKey,Point2(0.f,0.f));
+          if (!std::isfinite(offset.x) || !std::isfinite(offset.y) ||
+              fabsf(offset.x)>.5f || fabsf(offset.y)>.5f)
+            return fail("FIXED_CAMERA","Invalid screen composition");
+          const Point3 toward=normalize(fixedAim-fixedEye);
+          const Point3 horizontal=normalize(Point3(0,1,0)%toward);
+          const Point3 up=toward%horizontal;
+          const float halfWidth=tanf(fov*DEG_TO_RAD*.5f)*length(fixedAim-fixedEye);
+          const float halfHeight=halfWidth*float(height)/width;
+          fixedAim=fixedAim-horizontal*(2.f*offset.x*halfWidth)+up*(2.f*offset.y*halfHeight);"""),
+    ("""            float fractions[6]={-1.f,-1.f,-1.f,-1.f,-1.f,-1.f};
+            const bool measured=renderer->probeKolobanovEyeFixed(&fixedModel,fixedCamera,perspective,pw,ph,
+              keFixedFound,prepare,fractions,keFixedPasses);""",
+     """            float fractions[6]={-1.f,-1.f,-1.f,-1.f,-1.f,-1.f};
+            int edges[6]={};
+            const bool measured=renderer->probeKolobanovEyeFixed(&fixedModel,fixedCamera,perspective,pw,ph,
+              keFixedFound,prepare,fractions,edges,keFixedPasses);"""),
+    ("                const float score=fabsf(fractions[i]-centers[keSmartTarget]);\n",
+     """                // Prefer a measured real depth boundary only as a small
+                // tie-breaker. Visibility remains the primary criterion.
+                const float score=fabsf(fractions[i]-centers[keSmartTarget])-
+                  fminf(.015f,.001f*float(edges[i]));
+"""),
+    ("                  keFixedEye=fixedEye; keFixedLookAt=fixedAim;\n",
+     """                  keFixedEye=fixedEye; keFixedLookAt=fixedAim;
+                  keFixedEdgeHits=edges[i];
+"""),
+    ('    result.setBool("fixed_camera_selected",keFixedSelected);\n',
+     '''    result.setBool("fixed_camera_selected",keFixedSelected);
+    result.setInt("fixed_group_edge_hits",keFixedEdgeHits);
+'''),
+)
+
+def normalize_edge_capture(src):
+    if EDGE_MARKER not in src:
+        return src
+    for old,new in reversed(EDGE_EDITS):
+        if src.count(new)!=1:
+            raise ValueError("Partial fixed depth edge capture")
+        src=src.replace(new,old,1)
+    return src
+
+
 def normalize_fixed_final(src):
+    src=normalize_edge_capture(src)
     if MARKER not in src:
         return src
     for old,new in reversed(EDITS):
@@ -63,10 +127,18 @@ def install_fixed_final(source: Path):
     src=raw.replace(b"\r\n",b"\n").decode("utf-8")
     if MARKER in src:
         normalize_fixed_final(src)
-        return False
-    for old,new in EDITS:
+    else:
+        for old,new in EDITS:
+            if src.count(old)!=1:
+                raise ValueError(f"Missing fixed final anchor: {old[:100]!r}")
+            src=src.replace(old,new,1)
+    src=normalize_edge_capture(src)
+    for old,new in EDGE_EDITS:
         if src.count(old)!=1:
-            raise ValueError(f"Missing fixed final anchor: {old[:100]!r}")
+            raise ValueError(f"Missing fixed edge capture anchor: {old[:100]!r}")
         src=src.replace(old,new,1)
-    source.write_bytes(src.encode("utf-8").replace(b"\n",b"\r\n" if b"\r\n" in raw else b"\n"))
+    updated=src.encode("utf-8").replace(b"\n",b"\r\n" if b"\r\n" in raw else b"\n")
+    if updated==raw:
+        return False
+    source.write_bytes(updated)
     return True
