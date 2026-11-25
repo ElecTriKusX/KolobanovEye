@@ -214,7 +214,7 @@ COLLECT=r'''      // Group boundary: all pose dispatches already submitted.
                 result.sumX!=ref.sumX || result.sumY!=ref.sumY ||
                 result.minX!=ref.minX || result.minY!=ref.minY ||
                 result.maxX!=ref.maxX || result.maxY!=ref.maxY ||
-                fabs(result.sumZ-ref.sumZ)>max(0.001,0.00001*ref.sumZ))))
+                fabs(result.sumZ-ref.sumZ)>fmax(0.001,0.00001*ref.sumZ))))
             {
               debug("[KE] FIXED_GPU_VERIFY_FAIL pose=%d cpu=%d,%d,%d,%d,%d gpu=%d,%d,%d,%d,%d",
                 pose,ref.amodal,ref.visible,ref.invalid,ref.edges,ref.apertures,
@@ -264,8 +264,10 @@ CAPTURE_EDITS=(
     ("              keFixedFound,prepare,fractions,edges,apertures,keWorldEdges,keWorldEdgeCount,keFixedPasses);",
      """              keFixedFound,prepare,fractions,edges,apertures,keWorldEdges,keWorldEdgeCount,keFixedPasses,
               keFixedBackendId,keFixedGpuSubmitted,keFixedGpuVerified);
-            if (!measured && keFixedBackendId==2 && keFixedGpuSubmitted)
-              return fail("FIXED_GPU_VERIFY","Fixed-depth GPU reference failed");"""),
+            if (!measured && keFixedBackendId==2)
+              return fail("FIXED_GPU_VERIFY","Fixed-depth GPU reference failed");
+            if (!measured && keFixedBackendId==1)
+              debug("[KE] FIXED_GPU_FALLBACK submitted=%d env_passes=%d",keFixedGpuSubmitted,keFixedPasses);"""),
     ('    result.setInt("fixed_group_aperture_hits",keFixedApertureHits);\n',
      '''    result.setInt("fixed_group_aperture_hits",keFixedApertureHits);
     result.setStr("fixed_group_backend",keFixedBackend);
