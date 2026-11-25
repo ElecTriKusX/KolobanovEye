@@ -73,7 +73,7 @@ def generate_online(cfg, run, raw, *, executor=None):
     samplers, bank_info, occluders = {}, {}, {}
     guided = cfg.get("guided_sampling", "off") == "obstacle"
     if guided:
-        from tools.ke_guided_sampling import OccluderIndex, candidate_fields, fields_block
+        from tools.ke_guided_sampling import OccluderIndex, candidate_fields, fields_block, prioritize_points
     if cfg["smart_placement_cache"]:
         for mid in map_targets:
             bank = load_pool(cfg["smart_placement_cache"],mid)
@@ -177,6 +177,8 @@ def generate_online(cfg, run, raw, *, executor=None):
                 selected_fields = {}
                 def publish_points(frame_index, requested):
                     points = sampler.choose(requested,cfg["placement_attempts"])
+                    if guided and frame_index % 5 != 4:
+                        points = prioritize_points(occluders[mid],sampler.bounds,points,requested,cfg)
                     task["smart_points"][frame_index] = points
                     block = frame_block(frame_index,requested,points,cfg["ground_offset"])
                     if guided:
@@ -253,11 +255,16 @@ def generate_online(cfg, run, raw, *, executor=None):
                         match = re.search(r"^guided_placement_index:i=(\d+)\s*$",blk,re.M)
                         if not match or int(match.group(1)) != smart["attempt"]:
                             raise ValueError("Guided camera bank does not match selected placement")
+                        original_field = task["cameras"][idx]
                         field = guided_fields[idx][smart["attempt"]]
                         task["cameras"][idx] = field
                         selected_fields[idx] = field
                     candidate = collect_frame(cfg, run, raw, task, idx, blk)
                     record = candidate[0]
+                    if guided:
+                        record["guided_sampling"] = {"method":"obstacle_edge_v1", "placement_index":smart["attempt"],
+                            "camera_bank_changed": field != original_field}
+                        candidate[1]["ke_guided_sampling"] = record["guided_sampling"]
                     if sampler:
                         record["smart_placement"] = smart
                         candidate[1]["ke_smart_placement"] = smart
