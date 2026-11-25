@@ -13,7 +13,7 @@ def plan_occlusion_targets(seed, count, weights):
     return plan
 
 
-def read_occlusion_proxy(blk, target, attempts, visibility, *, probe_size=0, probe_region=None):
+def read_occlusion_proxy(blk, target, attempts, visibility, *, probe_size=0, probe_region=None, probe_backend=None, probe_batch_size=None):
     def field(name, kind):
         match = re.search(r"^" + name + ":" + kind + r"=([^\r\n]+)", blk, re.MULTILINE)
         if not match:
@@ -35,6 +35,10 @@ def read_occlusion_proxy(blk, target, attempts, visibility, *, probe_size=0, pro
         if probe_region is not None and (region not in ('roi', 'full') or
                 (probe_region == 'full' and region != 'full')):
             raise ValueError('Invalid AVF probe region')
+        backend = field('avf_backend', 't') if probe_backend is not None else None
+        batch = int(field('avf_batch_size', 'i')) if probe_backend is not None else None
+        if probe_backend is not None and (backend != probe_backend or batch != (1 if backend == 'cpu' else probe_batch_size)):
+            raise ValueError('Invalid AVF backend/batch telemetry')
         tried = int(field('avf_probe_attempts', 'i'))
         valid = int(field('avf_probe_valid', 'i'))
         method = field('avf_probe_method', 't')
@@ -55,6 +59,7 @@ def read_occlusion_proxy(blk, target, attempts, visibility, *, probe_size=0, pro
         else:
             raise ValueError('Unknown AVF method')
         result['avf'] = {'method': method, 'size': size, 'region': region, 'requested_region': probe_region,
+                         'backend': backend, 'batch_size': batch,
                          'attempts': tried, 'valid': valid,
                          'estimated_fraction': estimate, 'amodal_pixels': amodal,
                          'visible_pixels': visible, 'missing_pixels': missing,
