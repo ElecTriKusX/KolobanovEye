@@ -111,6 +111,7 @@ def summarize_run(path, native_log=None):
             "guided_prerender_disabled_maps": manifest.get("guided_prerender_disabled_maps",{}),
             "fixed_camera": manifest.get("fixed_camera"),
             "scene_families": manifest.get("scene_families",{}),
+            "scene_family_routes": manifest.get("scene_family_routes",{}),
             "scene_cache": manifest.get("scene_cache",{"enabled":False}),
             "fixed_camera_native":fixed_native,
             "fixed_gpu_native":fixed_gpu,
