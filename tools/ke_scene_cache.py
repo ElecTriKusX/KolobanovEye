@@ -9,7 +9,6 @@ import json
 import math
 from pathlib import Path
 import sqlite3
-from collections import Counter
 
 VERSION=1
 BINS=("light","moderate","heavy")
@@ -117,14 +116,14 @@ class SceneCache:
         self.pending=[]
         self.used_sectors=set()
         self.entries={}
-        self.stats={"loaded":0,"replays":0,"hits":0,"misses":0,"technical_rejections":0,
+        self.stats={"loaded":0,"replays":0,"hits":0,"misses":0,"unmeasured_rejections":0,
                     "new_hints":0,"committed":False}
         self.path.parent.mkdir(parents=True,exist_ok=True)
         with self.connect() as db:
             db.execute("""CREATE TABLE IF NOT EXISTS hints_v1(
                 scope TEXT NOT NULL, target TEXT NOT NULL, sx INTEGER NOT NULL, sz INTEGER NOT NULL,
                 hint TEXT NOT NULL, hits INTEGER NOT NULL DEFAULT 0, misses INTEGER NOT NULL DEFAULT 0,
-                technical INTEGER NOT NULL DEFAULT 0, uses INTEGER NOT NULL DEFAULT 0,
+                unmeasured INTEGER NOT NULL DEFAULT 0, uses INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY(scope,target,sx,sz))""")
             for mid,scope in scopes.items():
                 rows=db.execute("""SELECT target,sx,sz,hint,hits,misses,uses FROM hints_v1
@@ -174,8 +173,8 @@ class SceneCache:
         if key is None:
             return
         if record is None:
-            outcome="technical"
-            self.stats["technical_rejections"]+=1
+            outcome="unmeasured"
+            self.stats["unmeasured_rejections"]+=1
         elif (fixed and fixed["final_view"]["selected"] and
               fixed["selected_index"]<fixed["camera"]["count"] and
               record["visibility_measurement"]["visibility_bin"]==key[1]):
@@ -206,7 +205,7 @@ class SceneCache:
                         DO UPDATE SET hits=hits+1""",(*key,json.dumps(value,allow_nan=False)))
                 else:
                     column=value
-                    if column not in ("hits","misses","technical"):
+                    if column not in ("hits","misses","unmeasured"):
                         raise ValueError("Invalid cache outcome")
                     db.execute(f"UPDATE hints_v1 SET {column}={column}+1,uses=uses+1 WHERE scope=? AND target=? AND sx=? AND sz=?",key)
             for scope in set(self.scopes.values()):
