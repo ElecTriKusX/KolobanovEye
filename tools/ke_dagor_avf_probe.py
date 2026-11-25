@@ -263,8 +263,9 @@ def install_avf_probe(dagor: Path) -> bool:
                            "  void closeIsolatedTargets()\n  {\n    keProbeTarget.reset();\n"),)}
     marked = [MARKER in v for v in src.values()]
     if all(marked):
-        checked = dict(src)
-        checked["render"] = normalize_readback(src["render"])
+        from tools.ke_dagor_avf_gpu import normalize_gpu
+        checked = {k: normalize_gpu(v, k) for k, v in src.items()}
+        checked["render"] = normalize_readback(checked["render"])
         if not all(checked[k].count(new) == 1 for k, pairs in changes.items() for _, new in pairs):
             raise ValueError("Partial AVF probe installation")
         if READBACK_MARKER in src["render"]:
