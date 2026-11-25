@@ -63,6 +63,7 @@ def summarize_run(path, native_log=None):
     probe_stats = None
     loads = None
     fixed_native = None
+    fixed_gpu = None
     actual_loads = reuses = None
     if native_log is not None:
         native = Path(native_log).read_text(encoding="utf-8", errors="replace")
@@ -86,6 +87,12 @@ def summarize_run(path, native_log=None):
             fixed_native = {"groups":len(fixed_rows),"valid_placements":sum(int(x[0]) for x in fixed_rows),
                             "valid_probes":sum(int(x[1]) for x in fixed_rows),
                             "environment_passes":sum(int(x[2]) for x in fixed_rows)}
+        gpu_rows = re.findall(r"\[KE\] FIXED_GPU_GROUP backend=(\d+) submitted=(\d+) verified=(\d+) env_reads=(\d+) model_reads=(\d+)",native)
+        fixed_gpu = {"successful_groups":len(gpu_rows), "submitted":sum(int(x[1]) for x in gpu_rows),
+                     "verified":sum(int(x[2]) for x in gpu_rows), "environment_reads":sum(int(x[3]) for x in gpu_rows),
+                     "model_reads":sum(int(x[4]) for x in gpu_rows),
+                     "verify_fail":len(re.findall(r"\[KE\] FIXED_GPU_VERIFY_FAIL\b",native)),
+                     "fallbacks":len(re.findall(r"\[KE\] FIXED_GPU_FALLBACK\b",native))}
         actions = re.findall(r"\[KE\] MAP_RESIDENCY action=(load|reuse)\b", events)
         if actions:
             actual_loads, reuses = actions.count("load"), actions.count("reuse")
@@ -106,6 +113,7 @@ def summarize_run(path, native_log=None):
             "scene_families": manifest.get("scene_families",{}),
             "scene_cache": manifest.get("scene_cache",{"enabled":False}),
             "fixed_camera_native":fixed_native,
+            "fixed_gpu_native":fixed_gpu,
             "reuse_map_enabled": config.get("avf_reuse_map"),
             "probe_size": config.get("avf_probe_size", 0), "region": config.get("avf_region"),
             "host_turnaround_ms": distribution([r["python_turnaround_ms"] for r in timing
