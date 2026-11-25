@@ -82,7 +82,7 @@ def generate_online(cfg, run, raw, *, executor=None):
     cache_attempts = dict.fromkeys(map_targets,0)
     from tools.ke_depth_feedback import DepthFeedback, read_world_edges
     depth_feedback = DepthFeedback()
-    from tools.ke_fixed_camera import fixed_camera_group, fixed_block, read_fixed_metadata, read_fixed_final
+    from tools.ke_fixed_camera import fixed_camera_group, fixed_block, read_fixed_metadata, read_fixed_final, read_fixed_gpu_metadata
     if guided:
         from tools.ke_guided_sampling import OccluderIndex, candidate_fields, fields_block, prioritize_points
     if cfg["smart_placement_cache"]:
@@ -124,7 +124,7 @@ def generate_online(cfg, run, raw, *, executor=None):
     report["guided_prerender_probes"] = 0
     report["guided_prerender_disabled_maps"] = {}
     report["fixed_camera"] = {"planned_groups":0,"measured_groups":0,"environment_passes":0,"valid_probes":0,
-                              "selected_fixed_views":0,"aperture_witness_groups":0,"world_edge_proposals":0,"depth_feedback_offered":0,"depth_feedback_used":0,
+                              "gpu_submitted":0,"gpu_verified":0,"selected_fixed_views":0,"aperture_witness_groups":0,"world_edge_proposals":0,"depth_feedback_offered":0,"depth_feedback_used":0,
                               "measurement_scope":"validated_full_frames_only; native FIXED_PRESELECT includes rejected frames"}
     report["scene_families"] = {}
     report["scene_cache"] = {"enabled":False}
@@ -370,6 +370,11 @@ def generate_online(cfg, run, raw, *, executor=None):
                         if fixed_mode:
                             fixed = read_fixed_metadata(blk,fixed_groups.get(idx),smart["attempt"])
                             if fixed is not None:
+                                gpu = read_fixed_gpu_metadata(blk,fixed,cfg["avf_backend"])
+                                fixed.update(gpu)
+                                stats = report["fixed_camera"]
+                                stats["gpu_submitted"] += gpu["gpu_submitted"]
+                                stats["gpu_verified"] += gpu["gpu_verified"]
                                 final = read_fixed_final(blk,fixed)
                                 fixed["final_view"] = final
                                 edges = read_world_edges(blk,fixed["estimate"] is not None)
