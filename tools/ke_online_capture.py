@@ -26,6 +26,14 @@ def publish(path, content):
     os.replace(temporary, path)
 
 
+def read_ready_acknowledgement(path):
+    """Retry only immutable ready files; never retry a consumed journal record."""
+    try:
+        return path.read_bytes() == b"ok\n"
+    except (FileNotFoundError, PermissionError):
+        return False
+
+
 def await_value(process, read, timeout, description):
     deadline = time.monotonic() + timeout
     while True:
@@ -178,14 +186,7 @@ def generate_online(cfg, run, raw, *, executor=None):
             for idx in range(cap):
                 ready = feedback / f"ready_{idx}.txt"
                 def completed_record():
-                    # Windows can temporarily deny reads of a freshly renamed
-                    # acknowledgement (sharing violation / indexer). Retry only
-                    # this immutable mailbox file, not a consumed journal record.
-                    try:
-                        acknowledgement = ready.read_bytes()
-                    except (FileNotFoundError, PermissionError):
-                        return None
-                    if acknowledgement != b"ok\n":
+                    if not read_ready_acknowledgement(ready):
                         return None
                     # Native acknowledgement follows PNG and journal close.
                     # A ready marker with a missing record is a protocol error.
