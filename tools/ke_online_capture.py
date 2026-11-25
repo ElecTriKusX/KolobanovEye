@@ -7,6 +7,7 @@ a fixed number of expensive renders. A single immutable command is in flight.
 import json
 import os
 import subprocess
+import sqlite3
 import time
 from pathlib import Path
 
@@ -77,6 +78,8 @@ def generate_online(cfg, run, raw, *, executor=None):
     diverse = cfg.get("guided_sampling") == "diverse"
     from tools.ke_scene_families import SceneIndexes, family_for, prepare_family, family_fields, count_family, read_aperture_hits
     family_indexes, family_attempts = {}, {}
+    scene_cache = None
+    cache_attempts = dict.fromkeys(map_targets,0)
     from tools.ke_depth_feedback import DepthFeedback, read_world_edges
     depth_feedback = DepthFeedback()
     from tools.ke_fixed_camera import fixed_camera_group, fixed_block, read_fixed_metadata, read_fixed_final
@@ -124,6 +127,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                               "selected_fixed_views":0,"aperture_witness_groups":0,"world_edge_proposals":0,"depth_feedback_offered":0,"depth_feedback_used":0,
                               "measurement_scope":"validated_full_frames_only; native FIXED_PRESELECT includes rejected frames"}
     report["scene_families"] = {}
+    report["scene_cache"] = {"enabled":False}
     consecutive_unstable = 0
     report["attempted_candidates"] = 0
     # A single miss is not stagnation. Allow several map-sized windows of
@@ -144,6 +148,19 @@ def generate_online(cfg, run, raw, *, executor=None):
             model, skeleton = choose_resources(resources, GRP.stem, None, None)
         else:
             model, skeleton = "pzkpfw_VI_ausf_h1_tiger", "pzkpfw_VI_ausf_h1_tiger_skeleton"
+        if cfg.get("scene_cache"):
+            from tools.ke_scene_cache import SceneCache, scope_key
+            from tools.ke_smart_positions import digest
+            folder = Path(cfg["scene_cache"]).resolve()
+            database = (folder/"scene-hints.sqlite3").resolve()
+            if any(p == forbidden or p.is_relative_to(forbidden) for p in (folder,database)
+                   for forbidden in (game,dagor,run,raw)):
+                raise ValueError("Кэш сцен должен находиться вне игры, Dagor и текущего запуска")
+            asset_digest = digest(game/GRP)
+            scopes = {mid:scope_key(cfg,mid,bank_info[mid],model,skeleton,digest(game/mid),asset_digest,
+                       digest(Path(cfg["smart_placement_cache"])/Path(mid).stem/"objects.jsonl")) for mid in map_targets}
+            scene_cache = SceneCache(database,scopes)
+            report["scene_cache"] = {"enabled":True,"scopes":scopes,"stats":scene_cache.stats}
         (run / "probe.level.blk").write_text("lastUniqueId:i=1\n", encoding="ascii")
         (run / "probe.level.local.blk").write_text(
             'viewport0 { currentProjection:t="Perspective"; orthogonalProjection:b=no; wireframe:b=no }\n'
@@ -194,6 +211,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                 task["guided_skip"] = {}
                 fixed_groups = {}
                 families = {}
+                cache_keys = {}
                 guided_fields = {}
                 selected_fields = {}
                 def publish_points(frame_index, requested):
@@ -215,14 +233,26 @@ def generate_online(cfg, run, raw, *, executor=None):
                             family,points,group,index,profile=prepare_family(family_indexes[mid],index,sampler.bounds,
                                 points,requested,cfg,f'{task["seed"]}:family:{frame_index}',requested_family)
                         report["fixed_camera"]["depth_feedback_used"]=depth_feedback.used
-                        families[frame_index]=(requested_family,family)
-                        count_family(report["scene_families"],family,requested)
                     elif fixed_mode and planner.attempts[mid]%5!=0:
                         points,group = depth_feedback.take(mid,requested,points,sampler.bounds,cfg)
                         if group is None:
                             points,group = fixed_camera_group(occluders[mid],sampler.bounds,points,requested,cfg,
                                 f'{task["seed"]}:fixed:{frame_index}')
                         report["fixed_camera"]["depth_feedback_used"] = depth_feedback.used
+                    if scene_cache is not None and requested!="open":
+                        cache_attempts[mid]+=1
+                        # At most one replay per six non-open requests. Preserve the
+                        # explicit broad-exploration family, even on a cache slot.
+                        if cache_attempts[mid]%6==0 and requested_family!="explore":
+                            bank,cached,key=scene_cache.take(mid,requested,points,sampler.bounds,cfg)
+                            if cached is not None:
+                                points,group=bank,cached
+                                family="scene_cache"
+                                index,profile=occluders[mid],cfg
+                                cache_keys[frame_index]=key
+                    if diverse:
+                        families[frame_index]=(requested_family,family)
+                        count_family(report["scene_families"],family,requested)
                     if group is not None:
                         report["fixed_camera"]["planned_groups"] += 1
                     fixed_groups[frame_index] = group
@@ -247,7 +277,8 @@ def generate_online(cfg, run, raw, *, executor=None):
                         stream.write(json.dumps({"task":number,"index":frame_index,"map_id":mid,
                             "target":requested,"points":points,
                             "guided_skip_open":task["guided_skip"].get(frame_index,False),
-                            "fixed_camera_group":group,"requested_family":requested_family,"proposal_family":family})+"\n")
+                            "fixed_camera_group":group,"requested_family":requested_family,"proposal_family":family,
+                            "scene_cache_key":cache_keys.get(frame_index)})+"\n")
                 publish_points(0,target)
             publish(feedback / "decision_0.txt", f"{VISIBILITY_BINS.index(target)}\n")
             attempt_started = time.monotonic()
@@ -366,6 +397,14 @@ def generate_online(cfg, run, raw, *, executor=None):
                         candidate[1]["ke_smart_placement"] = smart
                         sources = report["smart_placement"]["validated_sources"]
                         sources[smart["source"]] = sources.get(smart["source"],0)+1
+                    if scene_cache is not None:
+                        fixed=record.get("fixed_camera_preselection")
+                        key=cache_keys.get(idx)
+                        scene_cache.observe(key,record,fixed)
+                        scene_cache.learn(mid,record,fixed,target)
+                        if key is not None:
+                            record["scene_cache_replay"]={"key":key,"proposal_only":True}
+                            candidate[1]["ke_scene_cache_replay"]=record["scene_cache_replay"]
                     validated[record["image_id"]] = candidate
                     records.append(record)
                     planner.finish(record)
@@ -390,7 +429,13 @@ def generate_online(cfg, run, raw, *, executor=None):
                                     "actual_bin":measured,"actual_fraction":record["visibility_measurement"]["visible_fraction"]}
                                 print(f"[KE] GUIDED_PREFILTER_DISABLED map={mid} reason=open_prediction_mismatch",flush=True)
                     journal_name = "candidate-pool.jsonl"
+                if scene_cache is not None and (unstable is not None or placement is not None or rejection is not None or prefilter is not None):
+                    key=cache_keys.get(idx)
+                    scene_cache.observe(key)
+                    if key is not None:
+                        record["scene_cache_replay"]={"key":key,"proposal_only":True}
                 if guided:
+                    cache_keys.pop(idx,None)
                     guided_fields.pop(idx,None)
                     fixed_groups.pop(idx,None)
                     families.pop(idx,None)
@@ -496,6 +541,12 @@ def generate_online(cfg, run, raw, *, executor=None):
         selected, quota = choose_candidates(pool[0], targets, map_targets)
         if len(selected) != planner.report["selected"]:
             raise ValueError("Online planner disagrees with final full-pool selection")
+        if scene_cache is not None:
+            try:
+                scene_cache.commit()
+            except (OSError, sqlite3.Error) as exc:
+                report["scene_cache"]["write_error"]=str(exc)
+                print(f"[KE] SCENE_CACHE_WRITE_WARNING {exc}",flush=True)
         quota.update(status="COMPLETE" if quota["complete"] else "INCOMPLETE",
                      stop_reason=stop_reason, attempts_by_map=dict(planner.attempts),
                      candidate_budget=sum(budget.values()), tasks=len(tasks),
@@ -506,6 +557,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                      guided_prerender_disabled_maps=report["guided_prerender_disabled_maps"],
                      fixed_camera=report["fixed_camera"],
                      scene_families=report["scene_families"],
+                     scene_cache=report["scene_cache"],
                      attempted_candidates=report["attempted_candidates"], rendered_candidates=report["candidate_frames"])
         write_json(run / "visibility-quotas.json", quota)
         report["stop_reason"] = stop_reason
