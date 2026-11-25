@@ -108,6 +108,102 @@ SERVICE = r'''  // [KE] FIXED_CAMERA_DEPTH_SERVICE_V1
   }
 
 '''
+
+# Preserve the V1 literal for existing Windows checkouts. V2 detects true
+# projected depth boundaries and counts only edges crossing the model's
+# visible/occluded silhouette, rather than unrelated background edges.
+EDGE_MARKER = "// [KE] FIXED_DEPTH_EDGES_V2"
+def edge_scene_method():
+    text=scene_method()
+    text=text.replace("float *fractions, int &environment_passes)",
+                      "float *fractions, int *edge_hits, int &environment_passes)")
+    text=text.replace("    if (!fractions || pose_count < 2 || pose_count > 6)",
+                      "    if (!fractions || !edge_hits || pose_count < 2 || pose_count > 6)")
+    text=text.replace("    for (int i=0; i<pose_count; ++i) fractions[i]=-1.f;",
+                      "    for (int i=0; i<pose_count; ++i) { fractions[i]=-1.f; edge_hits[i]=0; }")
+    anchor="""      if (!read(sceneDepth))
+        return false;
+      for (int pose=0; pose<pose_count; ++pose)"""
+    replacement=r'''      if (!read(sceneDepth))
+        return false;
+      // [KE] FIXED_DEPTH_EDGES_V2
+      // Reconstruct metric view-space depth before thresholding reverse-Z.
+      // This preserves useful distance discontinuities far from the camera.
+      Tab<unsigned char> edgeFlags(tmpmem);
+      edgeFlags.resize(width*height);
+      memset(edgeFlags.data(),0,width*height);
+      auto validEnv=[](float z) { return std::isfinite(z) && z>=0.f && z<=1.f; };
+      auto validModel=[](float z) { return std::isfinite(z) && z>0.f && z<=1.f; };
+      auto linearDepth=[&](float z) {
+        return perspective.zn*perspective.zf/(perspective.zn+z*(perspective.zf-perspective.zn));
+      };
+      auto depthEdge=[&](int i,int j) {
+        const float a=sceneDepth[i],b=sceneDepth[j];
+        if (!validEnv(a) || !validEnv(b)) return false;
+        const float za=linearDepth(a),zb=linearDepth(b);
+        return fabsf(za-zb)>max(.6f,.06f*min(za,zb));
+      };
+      int environmentEdges=0;
+      for (int y=0;y<height;++y)
+        for (int x=0;x<width;++x)
+        {
+          const int i=y*width+x;
+          if (x+1<width && depthEdge(i,i+1)) { edgeFlags[i]|=1; ++environmentEdges; }
+          if (y+1<height && depthEdge(i,i+width)) { edgeFlags[i]|=2; ++environmentEdges; }
+        }
+      auto unobstructed=[&](int i) {
+        const float m=modelDepth[i],e=sceneDepth[i];
+        return e<=m+max(1e-7f,1e-4f*max(m,e));
+      };
+      debug("[KE] FIXED_DEPTH_EDGES width=%d height=%d edges=%d",width,height,environmentEdges);
+      for (int pose=0; pose<pose_count; ++pose)'''
+    if text.count(anchor)!=1:
+        raise ValueError("Depth edge anchor missing")
+    text=text.replace(anchor,replacement,1)
+    anchor="""        if (amodal>=16 && invalid==0)
+          fractions[pose]=float(visible)/amodal;"""
+    replacement=r'''        if (amodal>=16 && invalid==0)
+        {
+          fractions[pose]=float(visible)/amodal;
+          int hits=0;
+          // Both pixels must lie on the isolated tank. Count only a real
+          // environment depth boundary separating its visible and hidden parts.
+          auto crossing=[&](int i,int j) {
+            return validModel(modelDepth[i]) && validModel(modelDepth[j]) &&
+              validEnv(sceneDepth[i]) && validEnv(sceneDepth[j]) && unobstructed(i)!=unobstructed(j);
+          };
+          for (int y=0;y<height;++y)
+            for (int x=0;x<width;++x)
+            {
+              const int i=y*width+x;
+              if ((edgeFlags[i]&1) && crossing(i,i+1)) ++hits;
+              if ((edgeFlags[i]&2) && crossing(i,i+width)) ++hits;
+            }
+          edge_hits[pose]=hits;
+          debug("[KE] FIXED_DEPTH_POSE pose=%d amodal=%d visible=%d edge_hits=%d",pose,amodal,visible,hits);
+        }'''
+    if text.count(anchor)!=1:
+        raise ValueError("Depth edge output anchor missing")
+    return text.replace(anchor,replacement,1)
+
+
+HEADER_V2=HEADER.replace("float *, int &)","float *, int *, int &)")
+SERVICE_V2=SERVICE.replace("float *fractions, int &passes)", "float *fractions, int *edges, int &passes)").replace("},fractions,passes);","},fractions,edges,passes);")
+
+def edge_edits(key):
+    return {"header":((HEADER,HEADER_V2),),
+            "render":((scene_method(),edge_scene_method()),(SERVICE,SERVICE_V2))}[key]
+
+
+def normalize_edge_renderer(src,key):
+    for old,new in reversed(edge_edits(key)):
+        if src.count(new)==1:
+            src=src.replace(new,old,1)
+        elif src.count(old)!=1:
+            raise ValueError(f"Partial fixed depth edges renderer: {key}")
+    return src
+
+
 def renderer_edits(key):
     return {"header":((HEADER_ANCHOR,HEADER_ANCHOR+HEADER),),
             "render":((SCENE_ANCHOR,scene_method()+SCENE_ANCHOR),
@@ -117,6 +213,7 @@ def renderer_edits(key):
 def normalize_fixed_renderer(src,key):
     if MARKER not in src and "FIXED_CAMERA_DEPTH_SERVICE_V1" not in src:
         return src
+    src=normalize_edge_renderer(src,key)
     for old,new in reversed(renderer_edits(key)):
         if src.count(new)!=1:
             raise ValueError("Partial fixed camera renderer")
@@ -125,11 +222,17 @@ def normalize_fixed_renderer(src,key):
 
 
 def add_fixed_renderer(src,key):
+    if MARKER in src or "FIXED_CAMERA_DEPTH_SERVICE_V1" in src:
+        src=normalize_fixed_renderer(src,key)
     for old,new in renderer_edits(key):
         if src.count(new)==1:
             continue
         if src.count(old)!=1:
             raise ValueError(f"Fixed renderer anchor missing/ambiguous: {key}")
+        src=src.replace(old,new,1)
+    for old,new in edge_edits(key):
+        if src.count(old)!=1:
+            raise ValueError(f"Missing fixed-depth edge anchor: {key}")
         src=src.replace(old,new,1)
     return src
 
