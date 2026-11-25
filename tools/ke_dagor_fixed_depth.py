@@ -197,6 +197,10 @@ def edge_edits(key):
 
 def normalize_edge_renderer(src,key):
     from tools.ke_dagor_depth_proposals import renderer_successors, reverse_successors
+    from tools.ke_dagor_aperture import renderer_edits as aperture_edits
+    aperture=aperture_edits(key)
+    if any(new in src for _,new in aperture):
+        src=reverse_successors(src,aperture)
     successors=renderer_successors(key)
     if any(new in src for _,new in successors):
         src=reverse_successors(src,successors)
@@ -239,7 +243,9 @@ def add_fixed_renderer(src,key):
             raise ValueError(f"Missing fixed-depth edge anchor: {key}")
         src=src.replace(old,new,1)
     from tools.ke_dagor_depth_proposals import renderer_successors, apply_successors
-    return apply_successors(src,renderer_successors(key))
+    from tools.ke_dagor_aperture import renderer_edits as aperture_edits
+    src=apply_successors(src,renderer_successors(key))
+    return apply_successors(src,aperture_edits(key))
 
 
 def install_fixed_renderer(dagor: Path):
