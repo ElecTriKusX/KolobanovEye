@@ -178,7 +178,14 @@ def generate_online(cfg, run, raw, *, executor=None):
             for idx in range(cap):
                 ready = feedback / f"ready_{idx}.txt"
                 def completed_record():
-                    if not ready.is_file() or ready.read_bytes() != b"ok\n":
+                    # Windows can temporarily deny reads of a freshly renamed
+                    # acknowledgement (sharing violation / indexer). Retry only
+                    # this immutable mailbox file, not a consumed journal record.
+                    try:
+                        acknowledgement = ready.read_bytes()
+                    except (FileNotFoundError, PermissionError):
+                        return None
+                    if acknowledgement != b"ok\n":
                         return None
                     # Native acknowledgement follows PNG and journal close.
                     # A ready marker with a missing record is a protocol error.
