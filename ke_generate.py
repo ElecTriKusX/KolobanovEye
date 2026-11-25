@@ -26,7 +26,7 @@ DEFAULTS = {
     'enforce_visibility_quotas': False, 'visibility_weights': DEFAULT_VISIBILITY_WEIGHTS.copy(),
     'visibility_candidate_multiplier': 5, 'search_occlusion': False, 'avf_probe_size': 0, 'avf_region': 'roi', 'avf_reuse_map': True, 'avf_backend': 'gpu', 'avf_batch_size': 4, 'guided_sampling': 'off', 'guided_prerender': 'off',
     'refill_batch_per_map': 256, 'refill_stall_rounds': 3, 'refill_max_rounds': 10000,
-    'visibility_quota_mode': 'refill', 'smart_placement_cache': '',
+    'visibility_quota_mode': 'refill', 'smart_placement_cache': '', 'scene_cache': '',
     'keep_open': False, 'render_debug': False, 'capture_last_clip': False, 'clipmap_feedback': 'software', 'timeout': 360,
 }
 INTS = {'avf_batch_size', 'avf_probe_size', 'count', 'seed', 'width', 'height', 'timeout', 'placement_attempts', 'camera_attempts', 'frames_per_position', 'min_warmup_renders', 'tank_map_resolution', 'visibility_candidate_multiplier', 'refill_batch_per_map', 'refill_stall_rounds', 'refill_max_rounds'}
@@ -63,6 +63,11 @@ def validate_config(raw):
     if not isinstance(c['smart_placement_cache'], str):
         raise ValueError('smart_placement_cache: требуется путь или пустая строка')
     c['smart_placement_cache'] = c['smart_placement_cache'].strip()
+    if not isinstance(c['scene_cache'],str):
+        raise ValueError('scene_cache: требуется путь или пустая строка')
+    c['scene_cache']=c['scene_cache'].strip()
+    if c['scene_cache'] and c['guided_sampling'] not in ('fixed_camera','diverse'):
+        raise ValueError('Кэш сцен требует fixed_camera или diverse')
     if c['smart_placement_cache']:
         if not (c['enforce_visibility_quotas'] and c['visibility_quota_mode']=='online' and c['search_occlusion']
                 and c['placement_mode']=='tank_map' and c['frames_per_position']==1):
