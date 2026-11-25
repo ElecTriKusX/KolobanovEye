@@ -47,3 +47,57 @@ Then evaluate map residency and bounded queue scheduling separately. Existing
 quotas remain authoritative; avoid repeated map reloads without sacrificing
 feasible exact quota completion. Windows build and game asset validation
 are not available in the chat environment.
+
+
+## 2.8.b–c — native implementation (code written, Windows acceptance pending)
+
+The pinned Dagor opaque deferred pass uses renderGeomOpaque(), while
+AcesScene::beforeRender prepares clipmaps, impostors and scene visibility.
+The new renderer probe keeps that preparation, reuses a small separate
+DeferredRenderTarget, draws scene plus model and then model alone, compares
+the D32 reverse-Z buffers, and skips the lighting resolve, cascaded-shadow
+rendering, atmosphere, postfx and image writes. This is an **opaque G-buffer
+probe**, not a pure depth-only shader pass or asynchronous GPU reduction.
+Two small buffers are currently read synchronously on the CPU.
+
+avf_probe_size = 0 (default, baseline) / 64 / 128 / 256, specifying the
+long side of the probe; the aspect and output projection are preserved.
+The probe is experimental; requires smart placement, online strict quotas,
+search_occlusion and mask capture, without render_debug. GUI exposes the
+same option. The live camera bank has up to 64 candidates, 1–3 rings
+with stratified distance and requested height, a seed-dependent phase, and
+far-apart angles first. The native loop covers broad directions, then
+prioritizes untested candidates between valid angular neighbours bracketing
+the target, with periodic exploration. It may stop when a valid estimate
+lies within 0.04 of the desired bin center. It preserves original camera
+indices and the existing terrain/projection checks.
+
+The native probe can be invalid (streaming, absent LOD, undersampled
+silhouette, missing depth). Only a valid probe outranks the old collision
+estimate. If all probes are invalid, the existing collision-ranked camera
+is explicitly labeled collision_fallback; its GPU fraction is unknown,
+not 0. Full-size masks remain authoritative. This is NOT evidence of
+acceleration or a correct alternative final annotation.
+
+Metadata records attempts, valid probes, selected method, counts, fraction
+and error against full-size masks; AVF_PROBE logs also contain duration and
+actual candidate index. Summary separates valid-probe accuracy from fallback
+frequency. The adaptive online quota scheduler can retain a useful map
+for up to 16 attempts (strong preference ends earlier after six consecutive
+no-gain candidates); existing capacity and budget constraints remain.
+Journal cursor avoids repeated reads, and host timing remains enabled.
+
+Known limitations: native compilation and real map coverage unverified;
+scene preparation still has costs, small full-frame buffers can undersample
+distant models, renderer-global state restoration requires Windows validation.
+ROI cropping, asynchronous GPU reduction, speculative multi-frame feedback
+and full map-lifetime reuse across task boundaries are not implemented.
+The initial bank is finite, so adaptive ordering does not guarantee finding
+all narrow occlusion regions. Current GUI option is deliberately off by default.
+No new test run has been requested during this implementation stage.
+
+Final acceptance: build once on Windows and compare matched configurations
+with size=0, then AVF enabled. Review per-bin actual hits, invalid/fallback
+rates, probe mean absolute error, p50/p95 probe latency, map loads, host
+turnaround, total seconds per accepted image, exact quotas and final masks.
+Do not merge until the real tests succeed.
