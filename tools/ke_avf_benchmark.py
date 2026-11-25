@@ -103,6 +103,7 @@ def summarize_run(path, native_log=None):
             "guided_prerender_probes": manifest.get("guided_prerender_probes",0),
             "guided_prerender_disabled_maps": manifest.get("guided_prerender_disabled_maps",{}),
             "fixed_camera": manifest.get("fixed_camera"),
+            "scene_families": manifest.get("scene_families",{}),
             "fixed_camera_native":fixed_native,
             "reuse_map_enabled": config.get("avf_reuse_map"),
             "probe_size": config.get("avf_probe_size", 0), "region": config.get("avf_region"),
