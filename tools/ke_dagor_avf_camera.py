@@ -202,8 +202,99 @@ def normalize_field(src):
     return src
 
 
+
+ROI_MARKER = "// [KE] AVF_ROI_V3"
+ROI_SETUP_OLD = "  int keProbeAttempts = 0, keProbeValid = 0;\n"
+ROI_SETUP_NEW = r'''  // [KE] AVF_ROI_V3
+  const bool keProbeRoi = config.getBool("avf_roi", true);
+  bool keBestProbeRoi = false;
+  auto keCropProjection = [&](const Point4 &bbox, Driver3dPerspective &p) -> bool {
+    // Crop in the original screenshot pixel coordinates. Keep camera,
+    // near/far and depth convention unchanged. Padding covers AABB edge
+    // rasterization and small discrepancies in the approximate envelope.
+    const float pad = fmaxf(4.f, .15f*fmaxf(bbox.z,bbox.w));
+    const float x0 = fmaxf(0.f, bbox.x-pad), y0 = fmaxf(0.f, bbox.y-pad);
+    const float x1 = fminf(float(width), bbox.x+bbox.z+pad);
+    const float y1 = fminf(float(height), bbox.y+bbox.w+pad);
+    const float sx = (x1-x0)/width, sy = (y1-y0)/height;
+    const float cx = (x0+x1)/width-1.f, cy = 1.f-(y0+y1)/height;
+    if (!(sx>0.f && sy>0.f) || sx>1.f || sy>1.f)
+      return false;
+    TMatrix4 base, unit, actual;
+    if (!d3d::calcproj(p,base)) return false;
+    Driver3dPerspective cropped = p;
+    cropped.wk /= sx; cropped.hk /= sy;
+    cropped.ox = cropped.oy = 1.f;
+    if (!d3d::calcproj(cropped,unit)) return false;
+    // Determine Dagor's actual offset sign rather than assuming a DX
+    // convention. Verify the generated matrix before it is ever used.
+    const float signX = unit[2][0], signY = unit[2][1];
+    if (fabsf(fabsf(signX)-1.f)>1e-5f || fabsf(fabsf(signY)-1.f)>1e-5f)
+      return false;
+    cropped.ox = (base[2][0]-cx)/(sx*signX);
+    cropped.oy = (base[2][1]-cy)/(sy*signY);
+    if (!d3d::calcproj(cropped,actual)) return false;
+    for (int row=0; row<4; ++row)
+      for (int col=0; col<4; ++col)
+      {
+        float want=base[row][col];
+        if (col==0) want=(want-cx*base[row][3])/sx;
+        if (col==1) want=(want-cy*base[row][3])/sy;
+        if (!std::isfinite(actual[row][col]) ||
+            fabsf(actual[row][col]-want)>1e-5f*fmaxf(1.f,fabsf(want)))
+          return false;
+      }
+    p=cropped;
+    return true;
+  };
+''' + ROI_SETUP_OLD
+
+ROI_SIZE_OLD = r'''        const int probeW = int(float(keProbeSize)*width/longSide+.5f);
+        const int probeH = int(float(keProbeSize)*height/longSide+.5f);
+'''
+ROI_SIZE_NEW = r'''        int probeW = int(float(keProbeSize)*width/longSide+.5f);
+        int probeH = int(float(keProbeSize)*height/longSide+.5f);
+        Driver3dPerspective probePerspective(candidateWk, candidateWk*float(width)/height,
+          .2f, 20000.f, 0.f, 0.f);
+        probeUsedRoi = keProbeRoi && keCropProjection(candidateBbox,probePerspective);
+        // Fixed square ROI avoids reallocating targets on each candidate.
+        // Anisotropic resampling affects sampling density, not the depth test.
+        if (probeUsedRoi)
+          probeW = probeH = keProbeSize;
+        else if (keProbeRoi)
+          debug("[KE] AVF_ROI_FALLBACK index=%d attempt=%d", frameIndex, cameraAttempt);
+'''
+ROI_EDITS = (
+    (ROI_SETUP_OLD, ROI_SETUP_NEW),
+    ("      float probeFraction = -1.f;\n", "      float probeFraction = -1.f;\n      bool probeUsedRoi = false;\n"),
+    (ROI_SIZE_OLD, ROI_SIZE_NEW),
+    ("            const Driver3dPerspective probePerspective(candidateWk, candidateWk*float(width)/height,\n              .2f, 20000.f, 0.f, 0.f);\n", ""),
+    ('size=%d valid=%d fraction=%.6f', 'size=%d region=%s valid=%d fraction=%.6f'),
+    ("frameIndex, cameraAttempt, keProbeSize, int(probeFraction>=0.f)", 'frameIndex, cameraAttempt, keProbeSize, probeUsedRoi ? "roi" : "full", int(probeFraction>=0.f)'),
+    ("      keBestProbe = probeFraction;\n", "      keBestProbe = probeFraction;\n      keBestProbeRoi = probeUsedRoi;\n"),
+    ('      result.setInt("avf_probe_size", keProbeSize);\n', '      result.setInt("avf_probe_size", keProbeSize);\n      result.setStr("avf_probe_region", keBestProbeRoi ? "roi" : "full");\n'),
+)
+
+
+def normalize_roi(src):
+    if ROI_MARKER not in src:
+        return src
+    # A deletion has no unique reverse anchor; restore it at the call site.
+    call = "            const bool probeOk = renderer->probeKolobanovEyeOpaque"
+    for old, new in reversed(ROI_EDITS):
+        if not new:
+            if src.count(call) != 1:
+                raise ValueError("Partial AVF ROI projection")
+            src = src.replace(call, old + call, 1)
+        else:
+            if src.count(new) != 1:
+                raise ValueError("Partial AVF ROI installation")
+            src = src.replace(new, old, 1)
+    return src
+
+
 def normalize_capture(src):
-    src = normalize_field(src)
+    src = normalize_field(normalize_roi(src))
     if MARKER not in src:
         return src
     for old, new in EDITS:
@@ -218,11 +309,11 @@ def install_avf_camera(source: Path):
     src = raw.replace(b"\r\n", b"\n").decode("utf-8")
     if MARKER in src:
         normalize_capture(src)
-        if FIELD_MARKER in src:
+        if ROI_MARKER in src:
             return False
-        edits = FIELD_EDITS
+        edits = ROI_EDITS if FIELD_MARKER in src else FIELD_EDITS + ROI_EDITS
     else:
-        edits = EDITS + FIELD_EDITS
+        edits = EDITS + FIELD_EDITS + ROI_EDITS
     for old, new in edits:
         if src.count(old) != 1:
             raise ValueError(f"AVF camera anchor missing/ambiguous: {old[:90]!r}")
