@@ -1,7 +1,7 @@
 name: Python unit tests
 on:
   push:
-    branches: [main, feature/avg-map-catalog-whitelist, feature/visibility-quotas, feature/smart-placement, feature/adaptive-visibility-field]
+    branches: [main, feature/avg-map-catalog-whitelist, feature/visibility-quotas, feature/smart-placement, feature/adaptive-visibility-field, feature/occluder-guided-sampling]
   pull_request:
   workflow_dispatch:
 permissions:
