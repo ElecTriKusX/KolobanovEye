@@ -433,3 +433,9 @@ eye/look-at, карта метрических перепадов environment-on
 Добавлены пять регрессий, GUI и A/B отчёт. Windows не проверен. GPU
 environment-only и комплексная приёмка остаются незавершёнными. Main
 и рабочая ветка AVF не изменялись.
+
+
+Проверка 2.9.7: из GitHub извлечены точные файлы tools/ke_scene_cache.py
+(blob 598d4892127dda159609b23a737026ba3998b1e1) и tests/test_scene_cache.py
+(blob 0409a5993f57f3fdd16bf6bf7595453762ba3d8d); изолированный unittest
+в Linux: 5/5 OK. Это не проверка online-интеграции или нативной сборки.
