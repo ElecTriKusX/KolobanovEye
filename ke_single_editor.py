@@ -9,7 +9,6 @@ import math
 import json
 import os
 import re
-import subprocess
 from pathlib import Path
 
 from ke_generate import validate_config, validate_dataset_config
@@ -22,10 +21,8 @@ from tools.ke_visibility import read_capture_masks, mask_decoder_name, VISIBILIT
 from tools.ke_occlusion import plan_occlusion_targets, read_occlusion_proxy, summarize_search
 from tools.ke_frame_journal import read_journal
 from kolobanoveye import (
-    BIN, GRP, inspect, choose_resources, parse_resources, require_file,
-    dagor_path, run_logged, numbers, plan_articulation, plan_camera_orbits,
-    plan_map_compositions, plan_compositions, select_camera_attempt,
-    read_articulation, verify_png, editor_failure,
+    BIN, GRP, require_file, dagor_path, numbers,
+    plan_map_compositions, select_camera_attempt, verify_png,
 )
 
 
@@ -392,7 +389,7 @@ def read_depth_rejection(cfg, raw, task, idx, blk):
 
 
 def collect_frame(cfg, run, raw, task, idx, blk):
-    """Validate one completed frame; shared by fixed and online capture."""
+    """Validate a completed online frame using its mandatory full-resolution masks."""
     image_path = task["outputs"][idx]
     verify_png(image_path, cfg["width"], cfg["height"])
     validate_rgb_png(image_path, cfg["width"], cfg["height"])
@@ -404,7 +401,6 @@ def collect_frame(cfg, run, raw, task, idx, blk):
     comp = idx // task["frames_per_position"]
     if not re.search(rf"^composition_index:i={comp}\s*$", blk, re.MULTILINE):
         raise ValueError("Неверный индекс расстановки техники")
-    articulation = read_articulation(blk, task["poses"][idx]) if task["poses"] else {}
     position = task["screen_positions"][idx]
     screen_bin = re.search(r'^screen_bin_planned:t="([^"\r\n]+)"', blk, re.MULTILINE)
     if not screen_bin or screen_bin.group(1) != position["bin"]:
@@ -416,14 +412,10 @@ def collect_frame(cfg, run, raw, task, idx, blk):
     if len(actual_uv) != 2 or any(abs(a - b) > 1e-4 for a, b in
                                   zip(actual_uv, position["offset_uv"])):
         raise ValueError("Native Dagor camera offset differs from the capture plan")
-    visibility = (read_capture_masks(raw, image_path.name, blk, cfg["width"], cfg["height"])
-                  if cfg["capture_visibility_masks"] else None)
-    occlusion = (read_occlusion_proxy(blk, task["occlusion_targets"][idx], cfg["camera_attempts"], visibility,
-                                      probe_size=cfg.get('avf_probe_size', 0),
-                                      probe_region=cfg.get('avf_region', 'roi') if cfg.get('avf_probe_size', 0) else None,
-                                      probe_backend=cfg.get('avf_backend', 'gpu') if cfg.get('avf_probe_size', 0) else None,
-                                      probe_batch_size=cfg.get('avf_batch_size', 4))
-                 if cfg["search_occlusion"] else None)
+    visibility = read_capture_masks(raw, image_path.name, blk, cfg["width"], cfg["height"])
+    occlusion = read_occlusion_proxy(blk, task["occlusion_targets"][idx], cfg["camera_attempts"], visibility,
+                                     probe_size=cfg["avf_probe_size"], probe_region=cfg["avf_region"],
+                                     probe_backend=cfg["avf_backend"], probe_batch_size=cfg["avf_batch_size"])
     image_id = int(image_path.stem)
     scene_id = f'{run.name}:{task["index"]}:{task["stem"]}:{comp}'
     group = group_for(blk, 256)
@@ -439,25 +431,25 @@ def collect_frame(cfg, run, raw, task, idx, blk):
         "annotation": annotation, "visibility_measurement": visibility,
         "occlusion_search": occlusion,
         "dagor_frame_metadata_blk": blk,
-        "sha256": hashlib.sha256(image_path.read_bytes()).hexdigest(), **articulation,
+        "sha256": hashlib.sha256(image_path.read_bytes()).hexdigest(),
     }
     image = {
         "id": image_id, "file_name": record["image"],
         "width": cfg["width"], "height": cfg["height"], "map_id": task["map_id"],
         "scene_id": scene_id, "scene_group": group, "scene_group_id": group,
         "ke_scene": scene_metadata(blk),
-        **({"ke_visibility": visibility} if visibility is not None else {}),
+        "ke_visibility": visibility,
     }
-    box = annotation["bbox_xywh"] if visibility is None else visibility["bbox_visible_xywh"]
+    box = visibility["bbox_visible_xywh"]
     coco_annotation = None
     if box is not None:
         x, y, w, h = box
         coco_annotation = {
             "id": image_id, "image_id": image_id, "category_id": 1,
             "bbox": [x, y, w, h], "area": w * h, "iscrowd": 0,
-            "bbox_kind": annotation["bbox_kind"] if visibility is None else "visible_opaque",
-            "bbox_method": annotation["bbox_method"] if visibility is None else visibility["method"],
-            **({"ke_visibility": visibility} if visibility is not None else {}),
+            "bbox_kind": "visible_opaque",
+            "bbox_method": visibility["method"],
+            "ke_visibility": visibility,
         }
     return record, image, coco_annotation
 
@@ -471,7 +463,7 @@ def collect_candidates(cfg, run, raw, tasks, *, prevalidated=None, rejected=None
     shadow_quality = read_impostor_quality(source, len(tasks))
     images, annotations, records, scenes, maps = [], [], [], {}, []
     expected = sum(task["count"] for task in tasks)
-    decoder = mask_decoder_name() if cfg["capture_visibility_masks"] else "none"
+    decoder = mask_decoder_name()
     print(f"[KE] FINALIZE_BEGIN frames={expected} maps={len(tasks)} mask_decoder={decoder}", flush=True)
     for task, map_log, quality in zip(tasks, map_logs, shadow_quality):
         print(f'[KE] FINALIZE_MAP map={task["map_id"]} completed={len(images)}/{expected}', flush=True)
@@ -481,12 +473,11 @@ def collect_candidates(cfg, run, raw, tasks, *, prevalidated=None, rejected=None
         bounds = parse_tank_bounds_log(map_log, task["map_id"])
         overview_name = f'{task["stem"]}.bin-tank.png'
         overview = run / "maps" / overview_name
-        if cfg["capture_tank_map"]:
-            if bounds["status"] != "available":
-                raise ValueError(f'Нет координат танкового поля: {task["map_id"]}')
-            verify_png(overview, cfg["tank_map_resolution"], cfg["tank_map_resolution"])
+        if bounds["status"] != "available":
+            raise ValueError(f'Нет координат танкового поля: {task["map_id"]}')
+        verify_png(overview, cfg["tank_map_resolution"], cfg["tank_map_resolution"])
         maps.append({"map_id": task["map_id"], "frames": task["count"] - len(task.get("rejected_indices", ())) - len(task.get("placement_rejected_indices", ())) - len(task.get("stability_rejected_indices", ())), "tank_bounds": bounds,
-                     "overview": f"maps/{overview_name}" if cfg["capture_tank_map"] else None,
+                     "overview": f"maps/{overview_name}",
                      "render_quality_flags": (["impostor_preshadow_incomplete"]
                                               if quality["skipped_updates"] else []),
                      "impostor_shadow_skipped_updates": quality["skipped_updates"],
@@ -530,10 +521,9 @@ def collect_candidates(cfg, run, raw, tasks, *, prevalidated=None, rejected=None
 def export_candidates(cfg, run, raw, pool, *, selection, editor_processes=1):
     """Export once from the validated accumulated pool."""
     records, images, annotations, scenes, maps = pool
-    occlusion_report = summarize_search(records) if cfg["search_occlusion"] else None
-    if occlusion_report is not None:
-        write_json(run / "occlusion-search.json", occlusion_report)
-        print("[KE] OCCLUSION_SEARCH " + json.dumps(occlusion_report), flush=True)
+    occlusion_report = summarize_search(records)
+    write_json(run / "occlusion-search.json", occlusion_report)
+    print("[KE] OCCLUSION_SEARCH " + json.dumps(occlusion_report), flush=True)
     selected, quota_report = selection
     write_json(run / "visibility-quotas.json", quota_report)
     print("[KE] VISIBILITY_QUOTAS " + json.dumps(quota_report, ensure_ascii=False), flush=True)
@@ -547,6 +537,8 @@ def export_candidates(cfg, run, raw, pool, *, selection, editor_processes=1):
     records = [r for r in records if r["image_id"] in selected]
     images = [i for i in images if i["id"] in selected]
     annotations = [a for a in annotations if a["image_id"] in selected]
+    if not len(records) == len(images) == len(annotations) == cfg["count"]:
+        raise ValueError("Final selection must contain exactly one validated annotation per requested image")
     for scene in scenes.values():
         scene["image_ids"] = [i for i in scene["image_ids"] if i in selected]
     scenes = {k: s for k, s in scenes.items() if s["image_ids"]}
@@ -557,7 +549,7 @@ def export_candidates(cfg, run, raw, pool, *, selection, editor_processes=1):
     (raw / "metadata").mkdir()
     write_json(raw / "annotations" / "instances.json", {
         "info": {"description": "KolobanovEye raw, validated opaque depth masks, unsplit",
-                 "unsplit": True, "visibility_diagnostic": cfg["capture_visibility_masks"]},
+                 "unsplit": True, "visibility_diagnostic": True},
         "images": images, "annotations": annotations, "categories": [{"id": 1, "name": "tank"}],
     })
     for name, rows in (("images.jsonl", records), ("scenes.jsonl", scenes.values())):
@@ -571,11 +563,10 @@ def export_candidates(cfg, run, raw, pool, *, selection, editor_processes=1):
         "schema_version": 2, "kind": "raw", "split": None,
         "run_id": run.name, "images": len(images), "annotations": len(annotations),
         "scenes": len(scenes), "maps": len(maps), "editor_processes": editor_processes,
-        "visibility_diagnostic": cfg["capture_visibility_masks"],
+        "visibility_diagnostic": True,
         "visibility_quotas": quota_report, "occlusion_search": occlusion_report,
-        "visibility_bins": ({name: sum(r["visibility_measurement"]["visibility_bin"] == name for r in records)
-                             for name in ("open", "light", "moderate", "heavy", "reject_too_occluded")}
-                            if cfg["capture_visibility_masks"] else None),
+        "visibility_bins": {name: sum(r["visibility_measurement"]["visibility_bin"] == name for r in records)
+                            for name in ("open", "light", "moderate", "heavy", "reject_too_occluded")},
         "render_quality": {
             "impostor_shadow_skipped_updates": sum(m["impostor_shadow_skipped_updates"] for m in maps),
             "maps_requiring_visual_review": sum(bool(m["render_quality_flags"]) for m in maps),
