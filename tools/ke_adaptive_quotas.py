@@ -47,12 +47,14 @@ class AdaptiveQuotaPlanner:
                     + self.outcomes[mid, requested, b])
         return sum(weight(b) for b in helpful) / sum(weight(b) for b in outcomes)
 
-    def next_request(self, *, current_map=None):
+    def next_request(self, *, current_map=None, prefer_current=False):
         """Return (map_id, requested_bin), or None at completion/budget limit.
 
         Prefer the loaded map if it is within 15% of the best estimated gain,
         reducing reload churn. The native caller can group work by map.
         Feedback is consumed between requests, not in fixed large batches.
+        A caller may temporarily prefer a useful resident map even below
+        the normal 85% score threshold; never override capacity or budget.
         """
         if self.pending is not None:
             raise RuntimeError("Finish the current request first")
@@ -84,7 +86,8 @@ class AdaptiveQuotaPlanner:
             return (-x[0], -x[1], -x[2], -x[3], x[4], VISIBILITY_BINS.index(x[5]))
         best = min(choices, key=rank)
         loaded = current_map if current_map is not None else self.last_map
-        local = [x for x in choices if x[4] == loaded and x[0] >= .85 * best[0]]
+        local = [x for x in choices if x[4] == loaded and
+                 ((prefer_current and not exploring) or x[0] >= .85 * best[0])]
         if local:
             best = min(local, key=rank)
         self.pending = best[4], best[5]
