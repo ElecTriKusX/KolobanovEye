@@ -113,3 +113,65 @@ def search_visibility(probe_batch, target, *, rings=3, coarse=12,
     best = min(valid, key=lambda p: (not matches(p.fraction),
                                     distance(p.fraction), p.view)) if valid else None
     return SearchResult(best, bool(best and matches(best.fraction)), tuple(ordered))
+
+
+def plan_camera_field(seed, count, attempts, distance_range, elevation_range, height_range):
+    """Deterministic finite angular bank for the native adaptive scheduler.
+
+    Rings share fixed horizontal distance and requested height above ground.
+    Far-apart directions are listed first. The renderer may reorder indices,
+    but metadata always refers to the original immutable bank.
+    """
+    if not 1 <= attempts <= 64 or count < 0:
+        raise ValueError("Invalid field dimensions")
+    for lo, hi in (distance_range, elevation_range, height_range):
+        if not math.isfinite(lo) or not math.isfinite(hi) or lo > hi:
+            raise ValueError("Invalid field range")
+    if not 2 <= distance_range[0] <= distance_range[1] <= 10000:
+        raise ValueError("Invalid distance range")
+    if not 0 <= elevation_range[0] <= elevation_range[1] <= 80 or height_range[0] < 0:
+        raise ValueError("Invalid camera height/elevation")
+    rng = random.Random(f"avf-bank-v1:{seed}")
+    rings = min(3, max(1, attempts // 8))
+    sizes = [attempts // rings + int(r < attempts % rings) for r in range(rings)]
+
+    def stratified_angles(n):
+        # Maximize angular distance to the already proposed directions.
+        remaining = list(range(n))
+        chosen = []
+        while remaining:
+            i = max(remaining, key=lambda k: (
+                min((min(abs(k-j), n-abs(k-j)) for j in chosen), default=n),
+                -k))
+            chosen.append(i)
+            remaining.remove(i)
+        return chosen
+
+    orders = [stratified_angles(n) for n in sizes]
+    frames = []
+    for _ in range(count):
+        phase = rng.uniform(-180, 180)
+        ring_data = []
+        heights = list(range(rings))
+        rng.shuffle(heights)
+        for r in range(rings):
+            d = distance_range[0] + (distance_range[1]-distance_range[0])*(r+rng.random())/rings
+            h = height_range[0] + (height_range[1]-height_range[0])*(heights[r]+rng.random())/rings
+            e = rng.uniform(*elevation_range)
+            ring_data.append((round(d, 4), round(h, 5), round(e, 4)))
+        views = []
+        for j in range(max(sizes)):
+            for r, n in enumerate(sizes):
+                if j >= n:
+                    continue
+                azimuth = round((phase+360*orders[r][j]/n+180) % 360-180, 4)
+                d, h, e = ring_data[r]
+                angle = math.radians(azimuth)
+                views.append({"avf_ring": r, "azimuth_deg": azimuth,
+                              "horizontal_distance": d, "elevation_deg": e,
+                              "height_above_ground": h,
+                              "offset": (round(d*math.sin(angle), 6),
+                                         round(d*math.tan(math.radians(e)), 6),
+                                         round(d*math.cos(angle), 6))})
+        frames.append(views)
+    return frames
