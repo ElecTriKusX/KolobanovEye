@@ -912,8 +912,8 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
     install_avf_residency(capture_cpp)
     from tools.ke_dagor_guided import install_guided
     install_guided(capture_cpp)
-    from tools.ke_guided_prerender import install_prerender
-    install_prerender(capture_cpp)
+    from tools.ke_guided_prerender import remove_prerender
+    remove_prerender(capture_cpp)
     from tools.ke_dagor_fixed_depth import install_fixed_renderer
     from tools.ke_dagor_fixed_camera import install_fixed_capture
     install_fixed_renderer(dagor)

@@ -311,20 +311,18 @@ def extract_map_logs(log, tasks, *, stability=True):
         rejected = task.get("rejected_indices", set())
         placement = task.get("placement_rejected_indices", set())
         unstable = task.get("stability_rejected_indices", set())
-        guided = task.get("guided_rejected_indices", set())
-        native_guided = [int(n) for n in re.findall(r"\[KE\] FRAME_REJECT index=(\d+) reason=redundant_open_probe", section)]
+        if "reason=redundant_open_probe" in section:
+            raise ValueError("Retired pre-render rejection in native log; rebuild Dagor")
         native_unstable = [int(n) for n in re.findall(r"\[KE\] FRAME_REJECT index=(\d+) reason=frame_stability_timeout", section)]
         native_rejected = [int(n) for n in re.findall(r"\[KE\] FRAME_REJECT index=(\d+) reason=depth_pass_mismatch", section)]
         native_placement = [int(n) for n in re.findall(r"\[KE\] FRAME_REJECT index=(\d+) reason=heightmap_candidates_exhausted", section)]
-        if (len(native_guided) != len(guided) or set(native_guided) != guided or
-                guided & (rejected | placement | unstable) or
-                len(native_rejected) != len(rejected) or set(native_rejected) != rejected or
+        if (len(native_rejected) != len(rejected) or set(native_rejected) != rejected or
                 len(native_placement) != len(placement) or set(native_placement) != placement or
                 len(native_unstable) != len(unstable) or set(native_unstable) != unstable or
                 rejected & placement or rejected & unstable or placement & unstable or
-                section.count("[KE] FRAME_OK ") != task["count"] - len(rejected) - len(placement) - len(unstable) - len(guided)):
+                section.count("[KE] FRAME_OK ") != task["count"] - len(rejected) - len(placement) - len(unstable)):
             raise ValueError(f'Не получены все кадры карты {task["map_id"]}')
-        if stability and (section.count("[KE] FRAME_STABILITY_FINAL enabled=1 stable=1") != task["count"] - len(placement) - len(unstable) - len(guided) or
+        if stability and (section.count("[KE] FRAME_STABILITY_FINAL enabled=1 stable=1") != task["count"] - len(placement) - len(unstable) or
                           section.count("[KE] FRAME_STABILITY_FINAL enabled=1 stable=0") != len(unstable)):
             raise ValueError(f'Нет подтверждения стабильности {task["map_id"]}')
         markers = ("MODEL_OK", "WATER_GROUND_FILTER")
@@ -503,7 +501,7 @@ def collect_frame(cfg, run, raw, task, idx, blk):
     return record, image, coco_annotation
 
 
-def collect_candidates(cfg, run, raw, tasks, *, prevalidated=None, rejected=None, placement_rejected=None, stability_rejected=None, guided_rejected=None):
+def collect_candidates(cfg, run, raw, tasks, *, prevalidated=None, rejected=None, placement_rejected=None, stability_rejected=None):
     """Validate one native batch once; do not select or delete any files."""
     log, source = read_editor_log(run)
     if f'[KE] MAP_BATCH_OK maps={len(tasks)}' not in log:
@@ -526,7 +524,7 @@ def collect_candidates(cfg, run, raw, tasks, *, prevalidated=None, rejected=None
             if bounds["status"] != "available":
                 raise ValueError(f'Нет координат танкового поля: {task["map_id"]}')
             verify_png(overview, cfg["tank_map_resolution"], cfg["tank_map_resolution"])
-        maps.append({"map_id": task["map_id"], "frames": task["count"] - len(task.get("rejected_indices", ())) - len(task.get("placement_rejected_indices", ())) - len(task.get("stability_rejected_indices", ())) - len(task.get("guided_rejected_indices", ())), "tank_bounds": bounds,
+        maps.append({"map_id": task["map_id"], "frames": task["count"] - len(task.get("rejected_indices", ())) - len(task.get("placement_rejected_indices", ())) - len(task.get("stability_rejected_indices", ())), "tank_bounds": bounds,
                      "overview": f"maps/{overview_name}" if cfg["capture_tank_map"] else None,
                      "render_quality_flags": (["impostor_preshadow_incomplete"]
                                               if quality["skipped_updates"] else []),
@@ -537,11 +535,6 @@ def collect_candidates(cfg, run, raw, tasks, *, prevalidated=None, rejected=None
                   f'impostor_shadow_skipped={quality["skipped_updates"]} '
                   f'assets={len(quality["assets"])}; visual review required', flush=True)
         for idx, image_path in enumerate(task["outputs"]):
-            if idx in task.get("guided_rejected_indices", ()):
-                from tools.ke_guided_prerender import read_prerender_rejection
-                if guided_rejected is None or int(image_path.stem) not in guided_rejected or guided_rejected[int(image_path.stem)] != read_prerender_rejection(cfg,raw,task,idx,journal[idx]):
-                    raise ValueError("Guided rejection journal changed after online validation")
-                continue
             if idx in task.get("stability_rejected_indices", ()):
                 if stability_rejected is None or int(image_path.stem) not in stability_rejected or stability_rejected[int(image_path.stem)] != read_stability_rejection(cfg, raw, task, idx, journal[idx]):
                     raise ValueError("Stability rejection journal changed after online validation")

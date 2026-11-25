@@ -1,7 +1,5 @@
-"""Conservative pre-render rejection of redundant nearly-open game scenes."""
-import math
+"""Migration only: remove the retired pre-render rejection from old Dagor checkouts."""
 from pathlib import Path
-import re
 
 MARKER = "// [KE] GUIDED_PRERENDER_V1"
 ANCHOR = "  if (keGpuProbe && keQueuedCount) keDrainProbes();\n"
@@ -73,60 +71,13 @@ def normalize_prerender(src):
     return src.replace(REPLACEMENT,ANCHOR,1)
 
 
-def install_prerender(source):
+
+def remove_prerender(source: Path):
     raw=source.read_bytes()
-    src=raw.replace(b"\r\n",b"\n").decode("utf-8")
-    if MARKER in src:
-        normalize_prerender(src)
+    text=raw.replace(b"\r\n",b"\n").decode("utf-8")
+    updated=normalize_prerender(text)
+    if updated==text:
         return False
-    if src.count(ANCHOR)!=1:
-        raise ValueError("Missing guided pre-render anchor")
-    src=src.replace(ANCHOR,REPLACEMENT,1)
-    source.write_bytes(src.encode("utf-8").replace(b"\n",b"\r\n" if b"\r\n" in raw else b"\n"))
+    source.write_bytes(updated.encode("utf-8").replace(b"\n",b"\r\n" if b"\r\n" in raw else b"\n"))
+    print("[KE] Removed retired guided pre-render rejection",flush=True)
     return True
-
-
-def allow_skip(planner, mid, target):
-    """Only saturated map/bin cells, with at least every fifth request audited."""
-    if target=="open" or planner.attempts[mid]%5==0:
-        return False
-    cap=min(planner.targets["open"],planner.map_targets[mid])
-    return (planner.capacity[mid]["open"]>=cap and
-            "open" not in planner.report["useful_next_bins_by_map"][mid])
-
-
-def read_prerender_rejection(cfg, raw, task, idx, blk):
-    if not re.search(r"^guided_rejection:",blk,re.M):
-        return None
-    if cfg.get("guided_prerender","off")!="conservative" or not task.get("guided_skip",{}).get(idx):
-        raise ValueError("Unrequested guided pre-render rejection")
-    def field(name, kind):
-        matches=re.findall(r"^"+name+":"+kind+r"=([^\r\n]+)",blk,re.M)
-        if len(matches)!=1:
-            raise ValueError("Missing or duplicate guided rejection field: "+name)
-        return matches[0].strip().strip('"')
-    if field("guided_rejection","t")!="redundant_open_probe":
-        raise ValueError("Unknown guided rejection")
-    if Path(field("level","t")).name.casefold()!=Path(task["map_id"]).name.casefold():
-        raise ValueError("Guided rejection map mismatch")
-    if int(field("composition_index","i"))!=idx:
-        raise ValueError("Guided rejection composition mismatch")
-    from tools.ke_visibility import VISIBILITY_BINS
-    target=task["occlusion_targets"][idx]
-    if target=="open" or int(field("guided_target","i"))!=VISIBILITY_BINS.index(target):
-        raise ValueError("Guided rejection target mismatch")
-    attempts=int(field("guided_probe_attempts","i"))
-    valid=int(field("guided_probe_valid","i"))
-    minimum=float(field("guided_min_fraction","r"))
-    placement=int(field("guided_placement_index","i"))
-    if not (8<=attempts==valid<=cfg["camera_attempts"] and
-            math.isfinite(minimum) and .98<=minimum<=1 and
-            0<=placement<len(task["smart_points"][idx])):
-        raise ValueError("Insufficient or invalid guided rejection evidence")
-    image=task["outputs"][idx]
-    if image.exists() or any((raw/"masks"/kind/image.name).exists() for kind in ("amodal","visible")):
-        raise ValueError("Pre-render rejection has published frame files")
-    return {"image_id":int(image.stem),"map_id":task["map_id"],"frame_index":idx,
-            "reason":"redundant_open_probe","probe_attempts":attempts,
-            "probe_valid":valid,"minimum_fraction":minimum,
-            "placement_index":placement,"dagor_frame_metadata_blk":blk}
