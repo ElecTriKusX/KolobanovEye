@@ -58,6 +58,22 @@ class AVFCompletionContracts(unittest.TestCase):
             self.assertEqual([p.read_text(encoding="utf-8") for p in (header, render)], v3)
             self.assertFalse(install_avf_gpu(root))
 
+    def test_asymmetric_projection_migrates_previous_diagnostic_build(self):
+        from tools.ke_dagor_avf_gpu import PROJECTION_FIX, apply_build_fixes, reverse_build_fixes
+        # Construct the base method and the exact pre-V5 diagnostic state.
+        from tools.ke_dagor_avf_gpu import MEMBERS
+        base = SCENE_NEW + SERVICE_NEW + MEMBERS
+        fixed = apply_build_fixes(base, "render")
+        old, new = PROJECTION_FIX
+        self.assertIn("AVF_ASYMMETRIC_PROJECTION_V5", fixed)
+        self.assertNotIn("!d3d::validatepersp(perspective)", fixed)
+        self.assertIn("!d3d::calcproj(perspective, checkedProjection)", fixed)
+        previous = fixed.replace(new, old, 1)
+        self.assertNotEqual(previous, fixed)
+        self.assertEqual(apply_build_fixes(previous, "render"), fixed)
+        self.assertEqual(apply_build_fixes(fixed, "render"), fixed)
+        self.assertEqual(reverse_build_fixes(fixed, "render"), base)
+
     def test_gpu_skips_cpu_depth_readback_and_verification_uses_same_buffers(self):
         self.assertIn("return keSubmitProbe(slot, sceneTex, modelTex, width, height);", SCENE_NEW)
         self.assertLess(SCENE_NEW.index("return keSubmitProbe(slot"), SCENE_NEW.index("if (!read(sceneTex"))
