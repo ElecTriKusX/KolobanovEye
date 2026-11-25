@@ -30,6 +30,9 @@ def predecessor_additions_present(dagor: Path, patch: Path) -> bool:
             if not target.is_file():
                 return False
             source = target.read_text(encoding="utf-8")
+            if name.endswith("/kolobanovEye.cpp"):
+                from tools.ke_dagor_fixed_camera import normalize_fixed_capture
+                source = normalize_fixed_capture(source)
             if name.endswith("/dynRender.cpp"):
                 if source.count(SCREEN_SNAPSHOT) == 1:
                     source = source.replace(SCREEN_SNAPSHOT, "", 1)
