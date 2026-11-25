@@ -89,9 +89,53 @@ EDITS = (
      '      result.setInt("avf_batch_size", keGpuProbe ? keBatchLimit : 1);\n'),
 )
 
+DIAGNOSTICS = (
+    ("""        if (ready() && probeW >= 16 && probeH >= 16)
+        {""",
+     """        if (!ready() || probeW < 16 || probeH < 16)
+          debug("[KE] AVF_CAMERA_FAIL index=%d attempt=%d stage=stream_ready ri=%d ssm_loading=%d size=%dx%d",
+            frameIndex,cameraAttempt,int(rendinst::isRIGenPrepareFinished()),
+            int(scene.getSsm() && scene.getSsm()->isLoading()),probeW,probeH);
+        if (ready() && probeW >= 16 && probeH >= 16)
+        {"""),
+    ("""          const int probeLod = model.getCurrentLodNo();
+          if (probeLod >= 0 && probeLod < lods->lods.size() && lods->lods[probeLod].scene)""",
+     """          const int probeLod = model.getCurrentLodNo();
+          if (!(probeLod >= 0 && probeLod < lods->lods.size() && lods->lods[probeLod].scene))
+            debug("[KE] AVF_CAMERA_FAIL index=%d attempt=%d stage=lod lod=%d",frameIndex,cameraAttempt,probeLod);
+          if (probeLod >= 0 && probeLod < lods->lods.size() && lods->lods[probeLod].scene)"""),
+    ("""            if (!keGpuProbe && probeOk && keReady)
+              probeFraction = float(probeVisible)/probeAmodal;""",
+     """            if (!probeOk || !keReady)
+              debug("[KE] AVF_CAMERA_FAIL index=%d attempt=%d stage=probe_result ok=%d draws=%d ready=%d pending=%d lod=%d backend=%s",
+                frameIndex,cameraAttempt,int(probeOk),int(plugin->getKolobanovEyeDrawCount()),int(ready()),
+                int(get_managed_textures_streaming_pending_count()),probeLod,keBackend);
+            if (!keGpuProbe && probeOk && keReady)
+              probeFraction = float(probeVisible)/probeAmodal;"""),
+)
+
+def normalize_diagnostics(src):
+    for old, new in reversed(DIAGNOSTICS):
+        if src.count(new) == 1:
+            src = src.replace(new, old, 1)
+        elif src.count(old) != 1:
+            raise ValueError("Partial AVF camera diagnostics")
+    return src
+
+def apply_diagnostics(src):
+    for old, new in DIAGNOSTICS:
+        if src.count(new) == 1:
+            continue
+        if src.count(old) != 1:
+            raise ValueError("Missing AVF camera diagnostic anchor")
+        src = src.replace(old, new, 1)
+    return src
+
+
 def normalize_batch(src):
     if MARKER not in src:
         return src
+    src = normalize_diagnostics(src)
     for old,new in reversed(EDITS):
         if src.count(new)!=1:
             raise ValueError("Partial AVF camera queue")
@@ -103,10 +147,14 @@ def install_avf_batch(source: Path):
     src=raw.replace(b"\r\n",b"\n").decode("utf-8")
     if MARKER in src:
         normalize_batch(src)
+    else:
+        for old,new in EDITS:
+            if src.count(old)!=1:
+                raise ValueError(f"AVF camera queue anchor missing: {old[:90]!r}")
+            src=src.replace(old,new,1)
+    src = apply_diagnostics(src)
+    updated = src.encode("utf-8").replace(b"\n", b"\r\n" if b"\r\n" in raw else b"\n")
+    if updated == raw:
         return False
-    for old,new in EDITS:
-        if src.count(old)!=1:
-            raise ValueError(f"AVF camera queue anchor missing: {old[:90]!r}")
-        src=src.replace(old,new,1)
-    source.write_bytes(src.encode("utf-8").replace(b"\n",b"\r\n" if b"\r\n" in raw else b"\n"))
+    source.write_bytes(updated)
     return True
