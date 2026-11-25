@@ -22,8 +22,8 @@ def scene_gpu(old):
         perspective.ox!=0.f || perspective.oy!=0.f)
       return false;
     environment_passes = 0;""")
-    s=change(s,'          deferred_mrt_cnt, deferred_mrt_fmts, TEXFMT_DEPTH32);\n      curView.itm',
-        '''          deferred_mrt_cnt, deferred_mrt_fmts, TEXFMT_DEPTH32);
+    s=change(s,'        deferred_mrt_cnt, deferred_mrt_fmts, TEXFMT_DEPTH32);\n      curView.itm',
+        '''        deferred_mrt_cnt, deferred_mrt_fmts, TEXFMT_DEPTH32);
       auto modelTarget = eastl::make_unique<DeferredRenderTarget>("deferred_shadow_to_buffer",
         "ke_fixed_model_depth", width, height, DeferredRT::StereoMode::MonoOrMultipass, 0,
         deferred_mrt_cnt, deferred_mrt_fmts, TEXFMT_DEPTH32);
@@ -45,11 +45,10 @@ def scene_gpu(old):
     cpu=s[cpu_start:world_start]
     # CPU code declares amodal/visible/invalid and hits/openings inside
     # the validity branch. Export a summary for same-input comparison.
-    cpu=cpu.replace("        int amodal=0, visible=0, invalid=0;",
-        "        int amodal=0, visible=0, invalid=0;")
     cpu=change(cpu,"          fractions[pose]=float(visible)/amodal;","          // Reference only; publish after GPU verification.")
     cpu=change(cpu,"          edge_hits[pose]=hits;","          ref.edges=hits;")
     cpu=change(cpu,"          aperture_hits[pose]=openings;","          ref.apertures=openings;")
+    cpu=change(cpu,'          debug("[KE] FIXED_APERTURE pose=%d scanlines=%d",pose,openings);\n','')
     cpu+=r'''          for (int y=0;y<height;++y)
             for (int x=0;x<width;++x)
               if (validModel(modelDepth[y*width+x]))
