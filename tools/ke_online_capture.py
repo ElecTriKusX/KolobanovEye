@@ -74,7 +74,7 @@ def generate_online(cfg, run, raw, *, executor=None):
     samplers, bank_info, occluders = {}, {}, {}
     guided = cfg.get("guided_sampling", "off") in ("obstacle","fixed_camera")
     fixed_mode = cfg.get("guided_sampling") == "fixed_camera"
-    from tools.ke_fixed_camera import fixed_camera_group, fixed_block, read_fixed_metadata
+    from tools.ke_fixed_camera import fixed_camera_group, fixed_block, read_fixed_metadata, read_fixed_final
     if guided:
         from tools.ke_guided_sampling import OccluderIndex, candidate_fields, fields_block, prioritize_points
     if cfg["smart_placement_cache"]:
@@ -113,6 +113,7 @@ def generate_online(cfg, run, raw, *, executor=None):
     report["guided_prerender_probes"] = 0
     report["guided_prerender_disabled_maps"] = {}
     report["fixed_camera"] = {"planned_groups":0,"measured_groups":0,"environment_passes":0,"valid_probes":0,
+                              "selected_fixed_views":0,
                               "measurement_scope":"validated_full_frames_only; native FIXED_PRESELECT includes rejected frames"}
     consecutive_unstable = 0
     report["attempted_candidates"] = 0
@@ -303,9 +304,18 @@ def generate_online(cfg, run, raw, *, executor=None):
                         if fixed_mode:
                             fixed = read_fixed_metadata(blk,fixed_groups.get(idx),smart["attempt"])
                             if fixed is not None:
+                                final = read_fixed_final(blk,fixed)
+                                fixed["final_view"] = final
+                                if final["selected"]:
+                                    # The immutable angular bank was only a fallback for slot zero.
+                                    # Do not report its unrelated azimuth/distance as the actual view.
+                                    record["camera_azimuth_deg"] = final["actual_azimuth_deg"]
+                                    record["camera_horizontal_distance"] = final["actual_horizontal_distance"]
+                                    record["camera_plan_kind"] = "fixed_camera_native_override"
                                 record["fixed_camera_preselection"] = fixed
                                 candidate[1]["ke_fixed_camera_preselection"] = fixed
                                 stats = report["fixed_camera"]
+                                stats["selected_fixed_views"] += int(final["selected"])
                                 stats["measured_groups"] += int(fixed["valid_probes"]>0)
                                 stats["environment_passes"] += fixed["environment_passes"]
                                 stats["valid_probes"] += fixed["valid_probes"]
