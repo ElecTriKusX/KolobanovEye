@@ -180,7 +180,9 @@ def generate_online(cfg, run, raw, *, executor=None):
                     if idx not in journal:
                         raise ValueError("Ready marker has no matching frame journal record")
                     return journal[idx]
+                wait_started = time.monotonic()
                 blk = await_value(process, completed_record, cfg["timeout"], f"task {number} frame {idx}")
+                ready_observed = time.monotonic()
                 if cfg["search_occlusion"]:
                     task["occlusion_targets"][idx] = target
                 unstable = read_stability_rejection(cfg, raw, task, idx, blk)
@@ -188,6 +190,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                 rejection = read_depth_rejection(cfg, raw, task, idx, blk)
                 if unstable is None and placement is None:
                     consecutive_unstable = 0
+                rejection_checked = time.monotonic()
                 before = planner.report["selected"]
                 if unstable is not None:
                     record = unstable
@@ -233,6 +236,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                     consecutive_mismatch = 0
                     measured = record["visibility_measurement"]["visibility_bin"]
                     journal_name = "candidate-pool.jsonl"
+                validation_finished = time.monotonic()
                 after = planner.report["selected"]
                 no_gain = no_gain + 1 if after == before else 0
                 with (run / journal_name).open("a", encoding="utf-8") as stream:
@@ -263,6 +267,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                 if consecutive_mismatch >= 5 or (report["candidate_frames"] >= 30 and
                         5 * len(rejected) > report["candidate_frames"]):
                     raise ValueError("VISIBILITY: systematic depth-pass mismatch (5 consecutive or >20% after 30 attempts)")
+                bookkeeping_finished = time.monotonic()
                 if planner.report["complete"]:
                     stop_reason, request = "exact_target", None
                 elif no_gain >= stall_limit:
@@ -272,12 +277,25 @@ def generate_online(cfg, run, raw, *, executor=None):
                     if request is None:
                         stop_reason = "candidate_budget"
                 same = request is not None and request[0] == mid and idx + 1 < cap
+                scheduler_finished = time.monotonic()
                 attempt_started = time.monotonic()
                 if idx + 1 < cap:
                     if same and sampler:
                         publish_points(idx+1,request[1])
                     publish(feedback / f"decision_{idx+1}.txt",
                             f"{VISIBILITY_BINS.index(request[1]) if same else -1}\n")
+                decision_published = time.monotonic()
+                with (run / "online-timing.jsonl").open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps({"task": number, "index": idx, "map_id": mid,
+                        "requested_bin": target, "measured_bin": measured,
+                        "native_wait_ms": round(1000*(ready_observed-wait_started), 3),
+                        "rejection_checks_ms": round(1000*(rejection_checked-ready_observed), 3),
+                        "validation_and_credit_ms": round(1000*(validation_finished-rejection_checked), 3),
+                        "bookkeeping_ms": round(1000*(bookkeeping_finished-validation_finished), 3),
+                        "scheduler_ms": round(1000*(scheduler_finished-bookkeeping_finished), 3),
+                        "decision_publish_ms": round(1000*(decision_published-scheduler_finished), 3),
+                        "python_turnaround_ms": round(1000*(decision_published-ready_observed), 3),
+                        "continue_same_task": same, "switch_map": request is not None and request[0] != mid}) + "\n")
                 if not same:
                     task["count"] = idx + 1
                     task["outputs"] = task["outputs"][:idx+1]
