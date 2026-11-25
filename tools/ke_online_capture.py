@@ -72,7 +72,9 @@ def generate_online(cfg, run, raw, *, executor=None):
     budget = {m: n * cfg["visibility_candidate_multiplier"] for m, n in target_jobs}
     planner = AdaptiveQuotaPlanner(targets, map_targets, budget)
     samplers, bank_info, occluders = {}, {}, {}
-    guided = cfg.get("guided_sampling", "off") == "obstacle"
+    guided = cfg.get("guided_sampling", "off") in ("obstacle","fixed_camera")
+    fixed_mode = cfg.get("guided_sampling") == "fixed_camera"
+    from tools.ke_fixed_camera import fixed_camera_group, fixed_block, read_fixed_metadata
     if guided:
         from tools.ke_guided_sampling import OccluderIndex, candidate_fields, fields_block, prioritize_points
     if cfg["smart_placement_cache"]:
@@ -110,6 +112,7 @@ def generate_online(cfg, run, raw, *, executor=None):
     report["guided_prerender_rejections"] = 0
     report["guided_prerender_probes"] = 0
     report["guided_prerender_disabled_maps"] = {}
+    report["fixed_camera"] = {"planned_groups":0,"measured_groups":0,"environment_passes":0,"valid_probes":0}
     consecutive_unstable = 0
     report["attempted_candidates"] = 0
     # A single miss is not stagnation. Allow several map-sized windows of
@@ -178,14 +181,22 @@ def generate_online(cfg, run, raw, *, executor=None):
                                  f'smart_bounds_max:p2={xmax:.9f},{zmax:.9f}\n')
                 task["smart_points"] = {}
                 task["guided_skip"] = {}
+                fixed_groups = {}
                 guided_fields = {}
                 selected_fields = {}
                 def publish_points(frame_index, requested):
                     points = sampler.choose(requested,cfg["placement_attempts"])
                     if guided and frame_index % 5 != 4:
                         points = prioritize_points(occluders[mid],sampler.bounds,points,requested,cfg)
+                    group = None
+                    if fixed_mode and planner.attempts[mid]%5!=0:
+                        points,group = fixed_camera_group(occluders[mid],sampler.bounds,points,requested,cfg,
+                            f'{task["seed"]}:fixed:{frame_index}')
+                    if group is not None:
+                        report["fixed_camera"]["planned_groups"] += 1
+                    fixed_groups[frame_index] = group
                     task["smart_points"][frame_index] = points
-                    block = frame_block(frame_index,requested,points,cfg["ground_offset"])
+                    block = frame_block(frame_index,requested,points,cfg["ground_offset"])+fixed_block(group)
                     if guided:
                         fields = candidate_fields(task["cameras"][frame_index],occluders[mid],sampler.bounds,
                             points,requested,cfg,f'{task["seed"]}:{frame_index}')
@@ -199,7 +210,8 @@ def generate_online(cfg, run, raw, *, executor=None):
                     with (run/"smart-placement-plans.jsonl").open("a",encoding="utf-8") as stream:
                         stream.write(json.dumps({"task":number,"index":frame_index,"map_id":mid,
                             "target":requested,"points":points,
-                            "guided_skip_open":task["guided_skip"].get(frame_index,False)})+"\n")
+                            "guided_skip_open":task["guided_skip"].get(frame_index,False),
+                            "fixed_camera_group":group})+"\n")
                 publish_points(0,target)
             publish(feedback / "decision_0.txt", f"{VISIBILITY_BINS.index(target)}\n")
             attempt_started = time.monotonic()
@@ -287,6 +299,15 @@ def generate_online(cfg, run, raw, *, executor=None):
                         record["guided_sampling"] = {"method":"obstacle_edge_v1", "placement_index":smart["attempt"],
                             "camera_bank_changed": field != original_field}
                         candidate[1]["ke_guided_sampling"] = record["guided_sampling"]
+                        if fixed_mode:
+                            fixed = read_fixed_metadata(blk,fixed_groups.get(idx),smart["attempt"])
+                            if fixed is not None:
+                                record["fixed_camera_preselection"] = fixed
+                                candidate[1]["ke_fixed_camera_preselection"] = fixed
+                                stats = report["fixed_camera"]
+                                stats["measured_groups"] += int(fixed["valid_probes"]>0)
+                                stats["environment_passes"] += fixed["environment_passes"]
+                                stats["valid_probes"] += fixed["valid_probes"]
                     if sampler:
                         record["smart_placement"] = smart
                         candidate[1]["ke_smart_placement"] = smart
@@ -310,6 +331,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                     journal_name = "candidate-pool.jsonl"
                 if guided:
                     guided_fields.pop(idx,None)
+                    fixed_groups.pop(idx,None)
                 validation_finished = time.monotonic()
                 after = planner.report["selected"]
                 no_gain = no_gain + 1 if after == before else 0
@@ -420,6 +442,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                      guided_prerender_rejections=len(guided_rejected),
                      guided_prerender_probes=report["guided_prerender_probes"],
                      guided_prerender_disabled_maps=report["guided_prerender_disabled_maps"],
+                     fixed_camera=report["fixed_camera"],
                      attempted_candidates=report["attempted_candidates"], rendered_candidates=report["candidate_frames"])
         write_json(run / "visibility-quotas.json", quota)
         report["stop_reason"] = stop_reason
