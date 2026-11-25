@@ -47,7 +47,7 @@ MEMBERS = r'''  // [KE] AVF_GPU_QUEUE_V3
       keProbeProgram = d3d::create_program_cs(src, CSPreloaded::No);
     }
     if (!q.counters)
-      q.counters = dag::create_ua_structured_readback(sizeof(uint32_t), 4, "ke_avf_counts");
+      q.counters = dag::buffers::create_ua_structured_readback(sizeof(uint32_t), 4, "ke_avf_counts");
     if (!q.event)
       q.event = d3d::create_event_query();
     if (keProbeProgram == BAD_PROGRAM || !q.counters || !q.event)
