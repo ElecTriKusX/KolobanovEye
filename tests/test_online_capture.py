@@ -164,6 +164,15 @@ class FakeOnlineEditor:
                     blk=re.sub(r'^tank_world:p3=.*$',f'tank_world:p3={128*u},123,{128*v}',blk,flags=re.M)
                     blk+=(f'placement_candidate:i=0\nsmart_placement_target:i={decision}\n'
                           f'smart_placement_source:t="{src}"\nsmart_placement_check:t="ri_collision_bounds_static_rays_v1"\n')
+                    if "guided_sampling:b=yes" in smart:
+                        blk+='guided_camera_plan:b=yes\nguided_placement_index:i=0\n'
+                    if not reject:
+                        backend=value("avf_backend")
+                        blk+=(f'avf_probe_size:i={value("avf_probe_size")}\navf_probe_region:t="roi"\n'
+                              f'avf_backend:t="{backend}"\navf_batch_size:i={value("avf_batch_size") if backend=="gpu" else 1}\n'
+                              'avf_probe_attempts:i=2\navf_probe_valid:i=2\navf_probe_method:t="opaque_probe_v1"\n'
+                              f'avf_probe_fraction:r={actual/4}\navf_probe_amodal_pixels:i=32\n'
+                              f'avf_probe_visible_pixels:i={actual*8}\navf_probe_missing_pixels:i=0\n')
                 payload = blk.encode("utf-8")
                 stream.write(f"KEFRAME {idx} {len(payload)}\n".encode("ascii") + payload)
                 stream.flush()
@@ -223,6 +232,7 @@ class OnlineCaptureTests(unittest.TestCase):
             bank=build_pool((0,128,0,128),[])
             bank.update(map_id=mid,source_sha256=digest(source))
             (folder/"placement-candidates.json").write_text(json.dumps(bank))
+            (folder/"objects.jsonl").write_text("")
         cfg=self.config_for(smart_placement_cache=str(cache),frames_per_position=1)
         result=run_dataset(cfg,self.dataset,executor=lambda cmd: FakeOnlineEditor(
             cmd,lambda mid,target,i: ("open","light","moderate","heavy")[target]))

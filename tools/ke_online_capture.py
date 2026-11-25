@@ -73,28 +73,21 @@ def generate_online(cfg, run, raw, *, executor=None):
     budget = {m: n * cfg["visibility_candidate_multiplier"] for m, n in target_jobs}
     planner = AdaptiveQuotaPlanner(targets, map_targets, budget)
     samplers, bank_info, occluders = {}, {}, {}
-    guided = cfg.get("guided_sampling", "off") in ("obstacle","fixed_camera","diverse")
-    fixed_mode = cfg.get("guided_sampling") in ("fixed_camera","diverse")
-    diverse = cfg.get("guided_sampling") == "diverse"
     from tools.ke_scene_families import SceneIndexes, family_for, prepare_family, family_fields, count_family, read_aperture_hits, reserve_aperture
     family_indexes, family_attempts = {}, {}
     scene_cache = None
     cache_attempts = dict.fromkeys(map_targets,0)
     from tools.ke_depth_feedback import DepthFeedback, read_world_edges
     depth_feedback = DepthFeedback()
-    from tools.ke_fixed_camera import fixed_camera_group, fixed_block, read_fixed_metadata, read_fixed_final, read_fixed_gpu_metadata
-    if guided:
-        from tools.ke_guided_sampling import OccluderIndex, candidate_fields, fields_block, prioritize_points
-    if cfg["smart_placement_cache"]:
-        for mid in map_targets:
-            bank = load_pool(cfg["smart_placement_cache"],mid)
-            samplers[mid] = CandidateSampler(bank,map_seed(cfg["seed"],mid),cfg["map_margin_percent"])
-            bank_info[mid] = {k:v for k,v in bank.items() if k!="pools"}
-            if guided:
-                occluders[mid] = OccluderIndex.load(cfg["smart_placement_cache"],mid)
-                if diverse:
-                    family_indexes[mid] = SceneIndexes.load(cfg["smart_placement_cache"],mid)
-                    family_attempts[mid] = 0
+    from tools.ke_fixed_camera import fixed_block, read_fixed_metadata, read_fixed_final, read_fixed_gpu_metadata
+    from tools.ke_guided_sampling import OccluderIndex, fields_block
+    for mid in map_targets:
+        bank = load_pool(cfg["smart_placement_cache"],mid)
+        samplers[mid] = CandidateSampler(bank,map_seed(cfg["seed"],mid),cfg["map_margin_percent"])
+        bank_info[mid] = {k:v for k,v in bank.items() if k!="pools"}
+        occluders[mid] = OccluderIndex.load(cfg["smart_placement_cache"],mid)
+        family_indexes[mid] = SceneIndexes.load(cfg["smart_placement_cache"],mid)
+        family_attempts[mid] = 0
     run.mkdir(parents=True)
     raw.mkdir(parents=True)
     for name in ("images", "masks/amodal", "masks/visible"):
@@ -108,9 +101,8 @@ def generate_online(cfg, run, raw, *, executor=None):
               "staging": str(raw), "candidate_frames": 0, "validated_candidates": 0,
               "maps": [{"map_id": m, "planned": n, "actual": 0, "status": "pending"}
                        for m, n in target_jobs], "tasks": 0}
-    if samplers:
-        report["smart_placement"] = {"banks":bank_info,"validated_sources":{}}
-        write_json(run/"smart-placement-banks.json",bank_info)
+    report["smart_placement"] = {"banks":bank_info,"validated_sources":{}}
+    write_json(run/"smart-placement-banks.json",bank_info)
     write_json(run / "generation-config.json", cfg)
     write_json(run / "manifest.json", report)
     tasks, validated, rejected, placement_rejected, stability_rejected = [], {}, {}, {}, {}
@@ -166,10 +158,7 @@ def generate_online(cfg, run, raw, *, executor=None):
         (run / "environment").mkdir()
         (run / "environment" / "environment.plugin.blk").write_text(
             'enviName:t="day"\nweatherType:t="clear"\n', encoding="ascii")
-        # Use the established command, flags and workspace, then switch its
-        # batch config to the online protocol before the process starts.
-        cmd = make_command(cfg, run, [{"capture": run / "unused.blk"}])
-        (run / "map-batch.blk").write_text(f'online_dir:t="{dagor_path(mailbox)}"\n', encoding="ascii")
+        cmd = make_command(cfg, run, mailbox)
         request = planner.next_request()
         next_id = 1
         native_started = time.monotonic()
@@ -199,84 +188,67 @@ def generate_online(cfg, run, raw, *, executor=None):
             feedback.mkdir()
             with task["capture"].open("a", encoding="ascii") as stream:
                 stream.write(f'online_feedback_dir:t="{dagor_path(feedback)}"\n')
-            sampler = samplers.get(mid)
-            if sampler:
-                xmin,xmax,zmin,zmax=sampler.bounds
-                with task["capture"].open("a",encoding="ascii") as stream:
-                    stream.write(f'smart_placement:b=yes\nsmart_bounds_min:p2={xmin:.9f},{zmin:.9f}\n'
-                                 f'smart_bounds_max:p2={xmax:.9f},{zmax:.9f}\n')
-                task["smart_points"] = {}
-                fixed_groups = {}
-                families = {}
-                cache_keys = {}
-                guided_fields = {}
-                selected_fields = {}
-                def publish_points(frame_index, requested):
-                    points = sampler.choose(requested,cfg["placement_attempts"])
-                    original_points=points
-                    if guided and not diverse and frame_index % 5 != 4:
-                        points = prioritize_points(occluders[mid],sampler.bounds,points,requested,cfg)
-                    group = None
-                    family, requested_family = "legacy", "legacy"
-                    protected_aperture = False
-                    index, profile = occluders.get(mid), cfg
-                    if diverse:
-                        if requested!="open":
-                            family_attempts[mid] += 1
-                        requested_family=family_for(requested,family_attempts[mid])
-                        protected_aperture=reserve_aperture(requested_family,family_attempts[mid])
-                        if requested_family=="aperture" and not protected_aperture:
-                            points,group=depth_feedback.take(mid,requested,points,sampler.bounds,cfg)
-                        if group is not None:
-                            family="depth_feedback"
-                        else:
-                            family,points,group,index,profile=prepare_family(family_indexes[mid],index,sampler.bounds,
-                                points,requested,cfg,f'{task["seed"]}:family:{frame_index}',requested_family)
-                        report["fixed_camera"]["depth_feedback_used"]=depth_feedback.used
-                    elif fixed_mode and planner.attempts[mid]%5!=0:
-                        points,group = depth_feedback.take(mid,requested,points,sampler.bounds,cfg)
-                        if group is None:
-                            points,group = fixed_camera_group(occluders[mid],sampler.bounds,points,requested,cfg,
-                                f'{task["seed"]}:fixed:{frame_index}')
-                        report["fixed_camera"]["depth_feedback_used"] = depth_feedback.used
-                    if scene_cache is not None and requested!="open":
-                        cache_attempts[mid]+=1
-                        # At most one replay per six non-open requests. Preserve the
-                        # explicit broad-exploration family, even on a cache slot.
-                        if cache_attempts[mid]%6==0 and requested_family!="explore" and not protected_aperture:
-                            bank,cached,key=scene_cache.take(mid,requested,original_points,sampler.bounds,cfg)
-                            if cached is not None:
-                                points,group=bank,cached
-                                family="scene_cache"
-                                index,profile=occluders[mid],cfg
-                                cache_keys[frame_index]=key
-                    if diverse:
-                        families[frame_index]=(requested_family,family)
-                        count_family(report["scene_families"],family,requested)
-                        routes=report["scene_family_routes"].setdefault(requested_family,{})
-                        routes[family]=routes.get(family,0)+1
-                    if group is not None:
-                        report["fixed_camera"]["planned_groups"] += 1
-                    fixed_groups[frame_index] = group
-                    task["smart_points"][frame_index] = points
-                    block = frame_block(frame_index,requested,points,cfg["ground_offset"])+fixed_block(group)
-                    if guided:
-                        if diverse:
-                            fields=family_fields(task["cameras"][frame_index],index,sampler.bounds,points,
-                                requested,profile,f'{task["seed"]}:{frame_index}',family)
-                            block += f'guided_scene_family:t="{family}"\n'
-                        else:
-                            fields = candidate_fields(task["cameras"][frame_index],occluders[mid],sampler.bounds,
-                                points,requested,cfg,f'{task["seed"]}:{frame_index}')
-                        guided_fields[frame_index] = fields
-                        block += "guided_sampling:b=yes\n"+fields_block(fields)
-                    publish(feedback/f"smart_{frame_index}.blk",block)
-                    with (run/"smart-placement-plans.jsonl").open("a",encoding="utf-8") as stream:
-                        stream.write(json.dumps({"task":number,"index":frame_index,"map_id":mid,
-                            "target":requested,"points":points,
-                            "fixed_camera_group":group,"requested_family":requested_family,"proposal_family":family,
-                            "scene_cache_key":cache_keys.get(frame_index)})+"\n")
-                publish_points(0,target)
+            sampler = samplers[mid]
+            xmin,xmax,zmin,zmax=sampler.bounds
+            with task["capture"].open("a",encoding="ascii") as stream:
+                stream.write(f'smart_placement:b=yes\nsmart_bounds_min:p2={xmin:.9f},{zmin:.9f}\n'
+                             f'smart_bounds_max:p2={xmax:.9f},{zmax:.9f}\n')
+            task["smart_points"] = {}
+            fixed_groups = {}
+            families = {}
+            cache_keys = {}
+            guided_fields = {}
+            selected_fields = {}
+            def publish_points(frame_index, requested):
+                points = sampler.choose(requested,cfg["placement_attempts"])
+                original_points=points
+                group = None
+                protected_aperture = False
+                index, profile = occluders.get(mid), cfg
+                if requested!="open":
+                    family_attempts[mid] += 1
+                requested_family=family_for(requested,family_attempts[mid])
+                protected_aperture=reserve_aperture(requested_family,family_attempts[mid])
+                if requested_family=="aperture" and not protected_aperture:
+                    points,group=depth_feedback.take(mid,requested,points,sampler.bounds,cfg)
+                if group is not None:
+                    family="depth_feedback"
+                else:
+                    family,points,group,index,profile=prepare_family(family_indexes[mid],index,sampler.bounds,
+                        points,requested,cfg,f'{task["seed"]}:family:{frame_index}',requested_family)
+                report["fixed_camera"]["depth_feedback_used"]=depth_feedback.used
+                if scene_cache is not None and requested!="open":
+                    cache_attempts[mid]+=1
+                    # At most one replay per six non-open requests. Preserve the
+                    # explicit broad-exploration family, even on a cache slot.
+                    if cache_attempts[mid]%6==0 and requested_family!="explore" and not protected_aperture:
+                        bank,cached,key=scene_cache.take(mid,requested,original_points,sampler.bounds,cfg)
+                        if cached is not None:
+                            points,group=bank,cached
+                            family="scene_cache"
+                            index,profile=occluders[mid],cfg
+                            cache_keys[frame_index]=key
+                families[frame_index]=(requested_family,family)
+                count_family(report["scene_families"],family,requested)
+                routes=report["scene_family_routes"].setdefault(requested_family,{})
+                routes[family]=routes.get(family,0)+1
+                if group is not None:
+                    report["fixed_camera"]["planned_groups"] += 1
+                fixed_groups[frame_index] = group
+                task["smart_points"][frame_index] = points
+                block = frame_block(frame_index,requested,points,cfg["ground_offset"])+fixed_block(group)
+                fields=family_fields(task["cameras"][frame_index],index,sampler.bounds,points,
+                    requested,profile,f'{task["seed"]}:{frame_index}',family)
+                block += f'guided_scene_family:t="{family}"\n'
+                guided_fields[frame_index] = fields
+                block += "guided_sampling:b=yes\n"+fields_block(fields)
+                publish(feedback/f"smart_{frame_index}.blk",block)
+                with (run/"smart-placement-plans.jsonl").open("a",encoding="utf-8") as stream:
+                    stream.write(json.dumps({"task":number,"index":frame_index,"map_id":mid,
+                        "target":requested,"points":points,
+                        "fixed_camera_group":group,"requested_family":requested_family,"proposal_family":family,
+                        "scene_cache_key":cache_keys.get(frame_index)})+"\n")
+            publish_points(0,target)
             publish(feedback / "decision_0.txt", f"{VISIBILITY_BINS.index(target)}\n")
             attempt_started = time.monotonic()
             publish(mailbox / f"task_{number}.blk", f'capture:t="{dagor_path(task["capture"])}"\n')
@@ -294,8 +266,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                 wait_started = time.monotonic()
                 blk = await_value(process, completed_record, cfg["timeout"], f"task {number} frame {idx}")
                 ready_observed = time.monotonic()
-                if cfg["search_occlusion"]:
-                    task["occlusion_targets"][idx] = target
+                task["occlusion_targets"][idx] = target
                 unstable = read_stability_rejection(cfg, raw, task, idx, blk)
                 placement = read_placement_rejection(cfg, raw, task, idx, blk)
                 rejection = read_depth_rejection(cfg, raw, task, idx, blk)
@@ -337,59 +308,55 @@ def generate_online(cfg, run, raw, *, executor=None):
                     print(f'[KE] ONLINE_REJECT task={number} index={idx} reason=depth_pass_mismatch '
                           f'missing={record["unmatched_pixels"]} amodal={record["amodal_pixels"]}', flush=True)
                 else:
-                    smart = verify_frame(blk,target,task["smart_points"][idx],sampler.bounds) if sampler else None
-                    if guided:
-                        if not re.search(r"^guided_camera_plan:b=(?:yes|true|1)\s*$",blk,re.M):
-                            raise ValueError("Missing guided camera metadata; rebuild Dagor")
-                        match = re.search(r"^guided_placement_index:i=(\d+)\s*$",blk,re.M)
-                        if not match or int(match.group(1)) != smart["attempt"]:
-                            raise ValueError("Guided camera bank does not match selected placement")
-                        original_field = task["cameras"][idx]
-                        field = guided_fields[idx][smart["attempt"]]
-                        task["cameras"][idx] = field
-                        selected_fields[idx] = field
+                    smart = verify_frame(blk,target,task["smart_points"][idx],sampler.bounds)
+                    if not re.search(r"^guided_camera_plan:b=(?:yes|true|1)\s*$",blk,re.M):
+                        raise ValueError("Missing guided camera metadata; rebuild Dagor")
+                    match = re.search(r"^guided_placement_index:i=(\d+)\s*$",blk,re.M)
+                    if not match or int(match.group(1)) != smart["attempt"]:
+                        raise ValueError("Guided camera bank does not match selected placement")
+                    original_field = task["cameras"][idx]
+                    field = guided_fields[idx][smart["attempt"]]
+                    task["cameras"][idx] = field
+                    selected_fields[idx] = field
                     candidate = collect_frame(cfg, run, raw, task, idx, blk)
                     record = candidate[0]
-                    if guided:
-                        record["guided_sampling"] = {"method":"obstacle_edge_v1", "placement_index":smart["attempt"],
-                            "camera_bank_changed": field != original_field}
-                        candidate[1]["ke_guided_sampling"] = record["guided_sampling"]
-                        if fixed_mode:
-                            fixed = read_fixed_metadata(blk,fixed_groups.get(idx),smart["attempt"])
-                            if fixed is not None:
-                                gpu = read_fixed_gpu_metadata(blk,fixed,cfg["avf_backend"])
-                                fixed.update(gpu)
-                                stats = report["fixed_camera"]
-                                stats["gpu_submitted"] += gpu["gpu_submitted"]
-                                stats["gpu_verified"] += gpu["gpu_verified"]
-                                final = read_fixed_final(blk,fixed)
-                                fixed["final_view"] = final
-                                edges = read_world_edges(blk,fixed["estimate"] is not None)
-                                fixed["world_edge_proposals"] = edges
-                                fixed["aperture_scanlines"] = read_aperture_hits(blk,fixed["estimate"] is not None)
-                                stats = report["fixed_camera"]
-                                stats["world_edge_proposals"] += len(edges)
-                                stats["aperture_witness_groups"] += int(fixed["aperture_scanlines"]>0)
-                                depth_feedback.offer(mid,target,fixed["camera"],edges,sampler.bounds,cfg)
-                                stats["depth_feedback_offered"] = depth_feedback.offered
-                                if final["selected"]:
-                                    # The immutable angular bank was only a fallback for slot zero.
-                                    # Do not report its unrelated azimuth/distance as the actual view.
-                                    record["camera_azimuth_deg"] = final["actual_azimuth_deg"]
-                                    record["camera_horizontal_distance"] = final["actual_horizontal_distance"]
-                                    record["camera_plan_kind"] = "fixed_camera_native_override"
-                                record["fixed_camera_preselection"] = fixed
-                                candidate[1]["ke_fixed_camera_preselection"] = fixed
-                                stats = report["fixed_camera"]
-                                stats["selected_fixed_views"] += int(final["selected"])
-                                stats["measured_groups"] += int(fixed["valid_probes"]>0)
-                                stats["environment_passes"] += fixed["environment_passes"]
-                                stats["valid_probes"] += fixed["valid_probes"]
-                    if sampler:
-                        record["smart_placement"] = smart
-                        candidate[1]["ke_smart_placement"] = smart
-                        sources = report["smart_placement"]["validated_sources"]
-                        sources[smart["source"]] = sources.get(smart["source"],0)+1
+                    record["guided_sampling"] = {"method":"obstacle_edge_v1", "placement_index":smart["attempt"],
+                        "camera_bank_changed": field != original_field}
+                    candidate[1]["ke_guided_sampling"] = record["guided_sampling"]
+                    fixed = read_fixed_metadata(blk,fixed_groups.get(idx),smart["attempt"])
+                    if fixed is not None:
+                        gpu = read_fixed_gpu_metadata(blk,fixed,cfg["avf_backend"])
+                        fixed.update(gpu)
+                        stats = report["fixed_camera"]
+                        stats["gpu_submitted"] += gpu["gpu_submitted"]
+                        stats["gpu_verified"] += gpu["gpu_verified"]
+                        final = read_fixed_final(blk,fixed)
+                        fixed["final_view"] = final
+                        edges = read_world_edges(blk,fixed["estimate"] is not None)
+                        fixed["world_edge_proposals"] = edges
+                        fixed["aperture_scanlines"] = read_aperture_hits(blk,fixed["estimate"] is not None)
+                        stats = report["fixed_camera"]
+                        stats["world_edge_proposals"] += len(edges)
+                        stats["aperture_witness_groups"] += int(fixed["aperture_scanlines"]>0)
+                        depth_feedback.offer(mid,target,fixed["camera"],edges,sampler.bounds,cfg)
+                        stats["depth_feedback_offered"] = depth_feedback.offered
+                        if final["selected"]:
+                            # The immutable angular bank was only a fallback for slot zero.
+                            # Do not report its unrelated azimuth/distance as the actual view.
+                            record["camera_azimuth_deg"] = final["actual_azimuth_deg"]
+                            record["camera_horizontal_distance"] = final["actual_horizontal_distance"]
+                            record["camera_plan_kind"] = "fixed_camera_native_override"
+                        record["fixed_camera_preselection"] = fixed
+                        candidate[1]["ke_fixed_camera_preselection"] = fixed
+                        stats = report["fixed_camera"]
+                        stats["selected_fixed_views"] += int(final["selected"])
+                        stats["measured_groups"] += int(fixed["valid_probes"]>0)
+                        stats["environment_passes"] += fixed["environment_passes"]
+                        stats["valid_probes"] += fixed["valid_probes"]
+                    record["smart_placement"] = smart
+                    candidate[1]["ke_smart_placement"] = smart
+                    sources = report["smart_placement"]["validated_sources"]
+                    sources[smart["source"]] = sources.get(smart["source"],0)+1
                     if scene_cache is not None:
                         fixed=record.get("fixed_camera_preselection")
                         key=cache_keys.get(idx)
@@ -401,14 +368,13 @@ def generate_online(cfg, run, raw, *, executor=None):
                     validated[record["image_id"]] = candidate
                     records.append(record)
                     planner.finish(record)
-                    if diverse:
-                        requested_family,family=families[idx]
-                        measured_family=record["visibility_measurement"]["visibility_bin"]
-                        family_meta={"requested":requested_family,"proposal":family,"is_ground_truth":False}
-                        record["scene_family"]=family_meta
-                        candidate[1]["ke_scene_family"]=family_meta
-                        count_family(report["scene_families"],family,target,measured_family,
-                                     planner.report["selected"]>before)
+                    requested_family,family=families[idx]
+                    measured_family=record["visibility_measurement"]["visibility_bin"]
+                    family_meta={"requested":requested_family,"proposal":family,"is_ground_truth":False}
+                    record["scene_family"]=family_meta
+                    candidate[1]["ke_scene_family"]=family_meta
+                    count_family(report["scene_families"],family,target,measured_family,
+                                 planner.report["selected"]>before)
                     consecutive_mismatch = 0
                     measured = record["visibility_measurement"]["visibility_bin"]
                     journal_name = "candidate-pool.jsonl"
@@ -417,18 +383,16 @@ def generate_online(cfg, run, raw, *, executor=None):
                     scene_cache.observe(key)
                     # Rejection records must remain byte-for-byte equivalent to
                     # the re-parsed native metadata during final audit.
-                if guided:
-                    cache_keys.pop(idx,None)
-                    guided_fields.pop(idx,None)
-                    fixed_groups.pop(idx,None)
-                    families.pop(idx,None)
+                cache_keys.pop(idx,None)
+                guided_fields.pop(idx,None)
+                fixed_groups.pop(idx,None)
+                families.pop(idx,None)
                 validation_finished = time.monotonic()
                 after = planner.report["selected"]
                 no_gain = no_gain + 1 if after == before else 0
                 residency_attempts += 1
                 residency_misses = residency_misses + 1 if after == before else 0
-                prefer_current = bool(cfg.get('avf_probe_size', 0) and
-                                      residency_attempts < 16 and residency_misses < 6)
+                prefer_current = residency_attempts < 16 and residency_misses < 6
                 with (run / journal_name).open("a", encoding="utf-8") as stream:
                     stream.write(json.dumps(record, ensure_ascii=False) + "\n")
                 report["depth_mismatch_rejections"] = len(rejected)
@@ -459,7 +423,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                 scheduler_finished = time.monotonic()
                 attempt_started = time.monotonic()
                 if idx + 1 < cap:
-                    if same and sampler:
+                    if same:
                         publish_points(idx+1,request[1])
                     publish(feedback / f"decision_{idx+1}.txt",
                             f"{VISIBILITY_BINS.index(request[1]) if same else -1}\n")
@@ -503,8 +467,7 @@ def generate_online(cfg, run, raw, *, executor=None):
             plan_path = run / "plans" / f'{task["index"]:03d}-{task["stem"]}.json'
             plan = json.loads(plan_path.read_text(encoding="utf-8"))
             plan["online_completed_frames"] = task["count"]
-            if guided:
-                plan["guided_selected_camera_fields"] = selected_fields
+            plan["guided_selected_camera_fields"] = selected_fields
             plan["online_occlusion_targets"] = task["occlusion_targets"][:task["count"]]
             write_json(plan_path, plan)
             done = mailbox / f"done_{number}.txt"

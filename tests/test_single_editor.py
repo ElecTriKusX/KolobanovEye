@@ -1,6 +1,5 @@
 """Offline end-to-end simulation: one DaEditor invocation for several maps."""
 import json
-import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,81 +7,8 @@ from pathlib import Path
 from ke_single_editor import jobs_for, extract_map_logs, make_command, read_editor_log, explain_batch_failure
 from ke_dataset import run_dataset
 from ke_generate import DEFAULTS
-from tools.ke_review import write_rgb_png
 from tools.ke_analysis import analyze_dataset
 from kolobanoveye import editor_failure
-
-
-def fake_editor(cmd):
-    """Mimic one native batch command that runs all maps in one process."""
-    editor = Path(cmd[0])
-    if editor.name != "daEditor3x-dev.exe":
-        raise AssertionError(f"Expected DaEditor executable, got {editor}")
-    run = Path(next(s.split(":", 1)[1] for s in cmd if str(s).startswith("-rootdir:")))
-    queue = (run / "probe.dcmd").read_text(encoding="ascii")
-    batch_commands = [line for line in queue.splitlines() if line.startswith("kolobanoveye.batch ")]
-    assert len(batch_commands) == 1, queue
-    batch_file = Path(batch_commands[0].partition(" ")[2])
-    config = batch_file.read_text(encoding="ascii")
-    count = int(re.search(r"^map_count:i=(\d+)$", config, re.MULTILINE).group(1))
-    capture_paths = re.findall(r'^map_\d+:t="([^"]+)"$', config, re.MULTILINE)
-    assert len(capture_paths) == count
-    log = [f"[KE] MAP_BATCH_BEGIN maps={count}"]
-    for map_index, capture_path in enumerate(capture_paths, 1):
-        path = Path(capture_path)
-        log.append(f"[KE] MAP_TASK_BEGIN index={map_index}/{count}")
-        data = path.read_text(encoding="ascii")
-        def value(name):
-            match = re.search(rf'^{name}:[a-z][0-9]?=(.*)$', data, re.MULTILINE)
-            if not match:
-                raise AssertionError(f"missing {name} in {path}")
-            return match.group(1).strip().strip('"')
-        mid, n = value("map_id"), int(value("frame_count"))
-        journal = Path(value("metadata_journal"))
-        log += [
-            f'[KE] MAP_BEGIN D:/game/{mid}', '[KE] MAP_OK terrain_y=123.456',
-            '[KE] MODEL_OK lod=0 nodes=206', '[KE] PLACEMENT_OK x=1 z=2',
-            '[KE] WATER_GROUND_FILTER enabled=1',
-            '[KE] TANK_BOUNDS min_x=0.000 max_x=4096.000 min_z=0.000 max_z=4096.000',
-        ]
-        with journal.open("wb") as stream:
-            for idx in range(n):
-                image = Path(value(f"output_{idx}"))
-                width, height = int(value("width")), int(value("height"))
-                write_rgb_png(image, width, height, bytes([10, 20, 30]) * (width * height))
-                blk = (f'level:t="{mid}"\nclass:t="tank"\nwidth:i={width}\nheight:i={height}\n'
-                       f'tank_world:p3={100+idx},123,100\nbbox_amodal_aabb_xywh:p4=4,5,20,25\n'
-                       f'camera_attempt:i=0\ncomposition_index:i={idx // int(value("frames_per_position"))}\n'
-                       f'screen_bin_planned:t="{value(f"screen_bin_{idx}")}"\n'
-                       f'screen_offset_uv:p2={value(f"screen_offset_{idx}")}\n')
-                if value("capture_visibility_masks") == "yes":
-                    amodal = bytearray(width * height * 3)
-                    visible = bytearray(width * height * 3)
-                    for x, y in ((2, 2), (3, 2), (2, 3), (3, 3)):
-                        off = (y * width + x) * 3
-                        amodal[off:off+3] = b'\xff\xff\xff'
-                        if idx % 2 == 0 and x == 2:
-                            visible[off:off+3] = b'\xff\xff\xff'
-                    write_rgb_png(Path(value(f"mask_amodal_{idx}")), width, height, amodal)
-                    write_rgb_png(Path(value(f"mask_visible_{idx}")), width, height, visible)
-                    actual = 2 if idx % 2 == 0 else 0
-                    blk += ('visibility_method:t="reverse_z_opaque_depth_compare_v1"\n'
-                            f'amodal_pixels:i=4\nvisible_pixels:i={actual}\n'
-                            f'unmatched_depth_pixels:i=0\nvisible_fraction:r={actual / 4}\n')
-                if value("search_occlusion") == "yes":
-                    target = ("open", "light", "moderate", "heavy")[int(value(f"occlusion_target_{idx}"))]
-                    blk += (f'occlusion_target_bin:t="{target}"\n'
-                            'occlusion_proxy_fraction:r=0.5\nocclusion_proxy_candidates:i=2\n')
-                payload = blk.encode("utf-8")
-                stream.write(f"KEFRAME {idx} {len(payload)}\n".encode("ascii") + payload)
-                log += ["[KE] FRAME_OK ", "[KE] FRAME_STABILITY_FINAL enabled=1 stable=1"]
-        log.append(f"[KE] SEQUENCE_OK frames={n}")
-        log.append(f"[KE] MAP_TASK_OK index={map_index}/{count}")
-        map_image = run / "maps" / (Path(mid).name + "-tank.png")
-        write_rgb_png(map_image, 256, 256, bytes([7, 11, 13]) * (256 * 256))
-    log.append(f"[KE] MAP_BATCH_OK maps={count}")
-    (run / "probe.dcmd.log").write_text("\n".join(log), encoding="utf-8")
-    return 0
 
 
 class SingleEditorTests(unittest.TestCase):
@@ -105,7 +31,19 @@ class SingleEditorTests(unittest.TestCase):
             "width": 64, "height": 64, "map_margin_percent": 0.0,
             "tank_map_resolution": 256, "capture_tank_map": True,
             "placement_mode": "tank_map",
-            "map_ids": ["levels/avg_normandy.bin", "levels/avg_finland.bin"]}
+            "map_ids": ["levels/avg_normandy.bin", "levels/avg_finland.bin"],
+            "timeout": 10, "visibility_weights":{"open":1,"light":0,"moderate":0,"heavy":0}}
+        from tools.ke_smart_positions import build_pool, digest
+        cache=self.root/"fixture-cache"
+        for mid in self.config["map_ids"]:
+            folder=cache/Path(mid).stem
+            folder.mkdir(parents=True)
+            source=folder/"objects-native.tsv"; source.write_bytes(b"fixture")
+            bank=build_pool((0,128,0,128),[])
+            bank.update(map_id=mid,source_sha256=digest(source))
+            (folder/"placement-candidates.json").write_text(json.dumps(bank))
+            (folder/"objects.jsonl").write_text("")
+        self.config["smart_placement_cache"]=str(cache)
 
     def test_native_fastfail_reports_last_debug_and_pre_map_stage(self):
         out = self.root / "failure"
@@ -124,191 +62,38 @@ class SingleEditorTests(unittest.TestCase):
         self.assertNotIn("Last useful debug line: '97.85 [D]'", message)
         self.assertIn(str(debug), message)
 
-    def test_sixty_maps_still_queue_one_native_command(self):
-        run = self.root / "many"
-        run.mkdir()
-        tasks = [{"capture": run / "capture" / f"{i:03d}.blk"} for i in range(60)]
-        command = make_command(self.config, run, tasks)
-        self.assertEqual(Path(command[0]).name, "daEditor3x-dev.exe")
-        script = (run / "probe.dcmd").read_text(encoding="ascii")
-        self.assertEqual(script.splitlines(), [
-            f"kolobanoveye.batch {(run / 'map-batch.blk').as_posix()}",
-            "exit no"])
-        self.assertNotIn("wait.frame", script)
-        manifest = (run / "map-batch.blk").read_text(encoding="ascii")
-        self.assertIn("map_count:i=60", manifest)
-        self.assertIn("map_59:t=", manifest)
-        self.assertNotIn("kolobanoveye.frame", script)
+    def test_online_queue_one_native_command(self):
+        run=self.root/"many"; run.mkdir()
+        command=make_command(self.config,run,run/"online")
+        self.assertEqual(Path(command[0]).name,"daEditor3x-dev.exe")
+        script=(run/"probe.dcmd").read_text(encoding="ascii")
+        self.assertEqual(script.splitlines(),[
+            f"kolobanoveye.batch {(run/'map-batch.blk').as_posix()}","exit no"])
+        self.assertIn('online_dir:t=',(run/"map-batch.blk").read_text())
+        self.assertNotIn("map_count:",(run/"map-batch.blk").read_text())
 
     def test_two_maps_one_editor_no_duplicate_png_or_coco(self):
-        commands = []
-        def single_invocation(cmd):
-            commands.append(cmd)
-            return fake_editor(cmd)
-        result = run_dataset(self.config, self.dataset, executor=single_invocation)
-        self.assertEqual(len(commands), 1)
-        self.assertEqual(result["editor_processes"], 1)
-        self.assertEqual(result["images"], 3)
-        raw = self.dataset / "raw"
-        self.assertEqual(len(list((raw / "images").glob("*.png"))), 3)
-        self.assertTrue((raw / "images" / "00000001.png").is_file())
-        coco = json.loads((raw / "annotations" / "instances.json").read_text())
-        self.assertEqual(len(coco["images"]), 3)
-        self.assertEqual({x["map_id"] for x in coco["images"]},
-                         {"levels/avg_normandy.bin", "levels/avg_finland.bin"})
-        self.assertTrue(all((raw / x["file_name"]).is_file() for x in coco["images"]))
-        run, = list((self.dataset / "runs").glob("run-*"))
-        self.assertFalse((run / "images").exists())
-        self.assertFalse((run / "coco").exists())
-        self.assertFalse((run / "runs").exists())
-        self.assertEqual(len(list((run / "maps").glob("*.png"))), 2)
-        self.assertEqual(len(list((run / "capture").glob("*.blk"))), 2)
-        self.assertEqual(len(list((run / "plans").glob("*.json"))), 2)
-        self.assertFalse(list((run / "journals").glob("*.jsonl")))
-        q = (run / "probe.dcmd").read_text()
-        self.assertEqual(q.count("kolobanoveye.batch "), 1)
-        self.assertEqual(q.count("kolobanoveye.frame "), 0)
-        self.assertIn("map_count:i=2", (run / "map-batch.blk").read_text())
-        self.assertEqual(q.count("exit no"), 1)
-
-    def test_visibility_capture_exports_mask_boxes_and_hidden_frame(self):
-        cfg = {**self.config, "count": 2, "map_ids": ["levels/avg_normandy.bin"],
-               "capture_visibility_masks": True}
-        result = run_dataset(cfg, self.dataset, executor=fake_editor)
-        raw = self.dataset / "raw"
-        self.assertTrue(result["visibility_diagnostic"])
-        self.assertEqual(result["images"], 2)
-        self.assertEqual(result["annotations"], 1)
-        self.assertEqual(result["visibility_bins"]["moderate"], 1)
-        self.assertEqual(result["visibility_bins"]["reject_too_occluded"], 1)
-        coco = json.loads((raw / "annotations/instances.json").read_text())
-        ann, = coco["annotations"]
-        self.assertEqual(ann["bbox_kind"], "visible_opaque")
-        self.assertEqual(ann["bbox"], [2, 2, 1, 2])
-        self.assertEqual(ann["ke_visibility"]["visible_fraction"], .5)
-        self.assertTrue((raw / ann["ke_visibility"]["amodal_mask"]).is_file())
-
-    def test_occlusion_search_reports_proxy_against_measured_masks(self):
-        cfg = {**self.config, "count": 2, "map_ids": ["levels/avg_normandy.bin"],
-               "capture_visibility_masks": True, "search_occlusion": True,
-               "visibility_weights": {"open": 0, "light": 0, "moderate": 1, "heavy": 0}}
-        result = run_dataset(cfg, self.dataset, executor=fake_editor)
-        report = result["occlusion_search"]
-        self.assertEqual(report["by_target"]["moderate"], {"attempted": 2, "matched": 1})
-        self.assertEqual(report["mean_absolute_error"], .25)
-        self.assertEqual(result["visibility_bins"]["reject_too_occluded"], 1)
-
-    def test_quota_selection_publishes_only_validated_accepted_frames(self):
-        cfg = {**self.config, "count": 2, "map_ids": ["levels/avg_normandy.bin"],
-               "capture_visibility_masks": True, "enforce_visibility_quotas": True,
-               "visibility_candidate_multiplier": 2,
-               "visibility_weights": {"open": 0, "light": 0, "moderate": 1, "heavy": 0}}
-        result = run_dataset(cfg, self.dataset, executor=fake_editor)
-        raw = self.dataset / "raw"
-        self.assertEqual(result["images"], 2)
-        self.assertEqual(result["annotations"], 2)
-        self.assertEqual(result["visibility_quotas"]["candidates"], 4)
-        self.assertTrue(result["visibility_quotas"]["complete"])
-        self.assertEqual(result["visibility_bins"]["moderate"], 2)
-        self.assertEqual(len(list((raw / "images").glob("*.png"))), 2)
-        self.assertEqual(len(list((raw / "masks" / "visible").glob("*.png"))), 2)
-        coco = json.loads((raw / "annotations/instances.json").read_text())
-        self.assertEqual({i["id"] for i in coco["images"]}, {1, 3})
-        self.assertEqual({a["image_id"] for a in coco["annotations"]}, {1, 3})
-
-    def test_quota_shortfall_preserves_old_raw_and_candidates(self):
-        run_dataset(self.config, self.dataset, executor=fake_editor)
-        old = (self.dataset / "raw/manifest.json").read_bytes()
-        cfg = {**self.config, "count": 2, "map_ids": ["levels/avg_normandy.bin"],
-               "capture_visibility_masks": True, "enforce_visibility_quotas": True,
-               "visibility_candidate_multiplier": 2,
-               "visibility_weights": {"open": 1, "light": 0, "moderate": 0, "heavy": 0}}
-        with self.assertRaisesRegex(ValueError, "Не набраны квоты"):
-            run_dataset(cfg, self.dataset, replace_raw=True, executor=fake_editor)
-        self.assertEqual((self.dataset / "raw/manifest.json").read_bytes(), old)
-        staging, = self.dataset.glob(".raw-staging-*")
-        self.assertEqual(len(list((staging / "images").glob("*.png"))), 4)
-        report, = (self.dataset / "runs").glob("*/visibility-quotas.json")
-        self.assertEqual(json.loads(report.read_text())["deficit"]["open"], 2)
-
-    def test_quota_selection_balances_maps_in_integrated_export(self):
-        cfg = {**self.config, "count": 4,
-               "capture_visibility_masks": True, "enforce_visibility_quotas": True,
-               "visibility_candidate_multiplier": 2,
-               "visibility_weights": {"open": 0, "light": 0, "moderate": 1, "heavy": 0}}
-        result = run_dataset(cfg, self.dataset, executor=fake_editor)
-        report = result["visibility_quotas"]
-        self.assertEqual(report["selected_by_map"], {m: 2 for m in cfg["map_ids"]})
-        self.assertEqual(report["deficit_by_map"], {m: 0 for m in cfg["map_ids"]})
-        coco = json.loads((self.dataset / "raw/annotations/instances.json").read_text())
-        self.assertEqual(len(coco["images"]), 4)
-        self.assertEqual({m: sum(i["map_id"] == m for i in coco["images"])
-                          for m in cfg["map_ids"]}, report["selected_by_map"])
-
-    def test_refill_accumulates_rounds_and_balances_final_maps(self):
-        calls = []
+        from tests.test_online_capture import FakeOnlineEditor
+        processes=[]
         def execute(cmd):
-            calls.append(cmd)
-            return fake_editor(cmd)
-        cfg = {**self.config, "count": 4, "capture_visibility_masks": True,
-               "enforce_visibility_quotas": True, "visibility_candidate_multiplier": 4,
-               "refill_batch_per_map": 2,
-               "visibility_weights": {"open": 0, "light": 0, "moderate": 1, "heavy": 0}}
-        result = run_dataset(cfg, self.dataset, executor=execute)
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(result["editor_processes"], 2)
-        self.assertEqual(result["images"], 4)
-        self.assertEqual(result["visibility_quotas"]["candidates"], 8)
-        self.assertEqual(result["visibility_quotas"]["selected_by_map"], dict.fromkeys(cfg["map_ids"], 2))
-        raw = self.dataset / "raw"
-        coco = json.loads((raw / "annotations/instances.json").read_text())
-        self.assertEqual({x["id"] for x in coco["images"]}, {1, 3, 5, 7})
-        self.assertEqual(len({x["scene_id"] for x in coco["images"]}), 4)
-        self.assertEqual(len(list((raw / "images").glob("*.png"))), 4)
-        run, = (self.dataset / "runs").iterdir()
-        plans = [json.loads(p.read_text()) for p in sorted(run.glob("rounds/*/plans/*.json"))]
-        for mid in cfg["map_ids"]:
-            self.assertEqual(len({p["seed"] for p in plans if p["map_id"] == mid}), 2)
-        self.assertEqual(len((run / "candidate-pool.jsonl").read_text().splitlines()), 8)
-        self.assertEqual(len(list((run / "maps").glob("*.png"))), 2)
+            p=FakeOnlineEditor(cmd,lambda *args:"open")
+            processes.append(p)
+            return p
+        result=run_dataset(self.config,self.dataset,executor=execute)
+        self.assertEqual(len(processes),1)
+        self.assertEqual(result["editor_processes"],1)
+        self.assertEqual(result["images"],3)
+        raw=self.dataset/"raw"
+        coco=json.loads((raw/"annotations/instances.json").read_text())
+        self.assertEqual(len(coco["images"]),3)
+        self.assertEqual(len(coco["annotations"]),3)
+        self.assertEqual({x["map_id"] for x in coco["images"]},set(self.config["map_ids"]))
+        self.assertTrue(all((raw/x["file_name"]).is_file() for x in coco["images"]))
+        self.assertTrue(all(x["bbox_kind"]=="visible_opaque" for x in coco["annotations"]))
+        run,=list((self.dataset/"runs").glob("run-*"))
+        self.assertFalse((run/"images").exists())
+        self.assertFalse((run/"coco").exists())
         self.assertFalse(list(run.glob("**/journals/*.jsonl")))
-
-    def test_refill_stall_preserves_pool_and_old_raw(self):
-        run_dataset(self.config, self.dataset, executor=fake_editor)
-        old = (self.dataset / "raw/manifest.json").read_bytes()
-        cfg = {**self.config, "count": 2, "map_ids": [self.config["map_ids"][0]],
-               "capture_visibility_masks": True, "enforce_visibility_quotas": True,
-               "visibility_candidate_multiplier": 20, "refill_batch_per_map": 2,
-               "refill_stall_rounds": 2,
-               "visibility_weights": {"open": 1, "light": 0, "moderate": 0, "heavy": 0}}
-        with self.assertRaisesRegex(ValueError, "stall"):
-            run_dataset(cfg, self.dataset, replace_raw=True, executor=fake_editor)
-        self.assertEqual((self.dataset / "raw/manifest.json").read_bytes(), old)
-        staging, = self.dataset.glob(".raw-staging-*")
-        self.assertEqual(len(list((staging / "images").glob("*.png"))), 4)
-        report, = (self.dataset / "runs").glob("*/visibility-quotas.json")
-        report = json.loads(report.read_text())
-        self.assertEqual(report["status"], "INCOMPLETE")
-        self.assertEqual(report["stop_reason"], "stall")
-        self.assertEqual(report["selected"], 0)
-
-    def test_refill_native_failure_is_not_a_quota_miss(self):
-        calls = []
-        def execute(cmd):
-            calls.append(cmd)
-            return fake_editor(cmd) if len(calls) == 1 else 9
-        cfg = {**self.config, "count": 4, "capture_visibility_masks": True,
-               "enforce_visibility_quotas": True, "visibility_candidate_multiplier": 4,
-               "refill_batch_per_map": 2,
-               "visibility_weights": {"open": 0, "light": 0, "moderate": 1, "heavy": 0}}
-        with self.assertRaisesRegex(RuntimeError, "кодом 9"):
-            run_dataset(cfg, self.dataset, executor=execute)
-        self.assertEqual(len(calls), 2)
-        self.assertFalse((self.dataset / "raw").exists())
-        staging, = self.dataset.glob(".raw-staging-*")
-        self.assertEqual(len(list((staging / "images").glob("*.png"))), 4)
-        run, = (self.dataset / "runs").iterdir()
-        self.assertEqual(json.loads((run / "manifest.json").read_text())["status"], "FAILED")
 
     def test_visibility_failure_includes_native_reason(self):
         run = self.root / "failed-visibility"
@@ -319,21 +104,25 @@ class SingleEditorTests(unittest.TestCase):
         self.assertIn("reason=depth_pass_mismatch", error)
 
     def test_replace_preserves_old_raw_when_batch_fails(self):
+        from tests.test_online_capture import FakeOnlineEditor
+        fake_editor=lambda cmd: FakeOnlineEditor(cmd,lambda *args:"open")
         run_dataset(self.config, self.dataset, executor=fake_editor)
         old_manifest = (self.dataset / "raw" / "manifest.json").read_bytes()
         with self.assertRaisesRegex(ValueError, "--replace-raw"):
             run_dataset(self.config, self.dataset, executor=fake_editor)
-        with self.assertRaisesRegex(RuntimeError, "кодом 9"):
-            run_dataset(self.config, self.dataset, replace_raw=True, executor=lambda _: 9)
+        with self.assertRaises((OSError,ValueError)):
+            run_dataset(self.config, self.dataset, replace_raw=True,
+                        executor=lambda cmd: FakeOnlineEditor(cmd,lambda *args:"open",corrupt=True))
         self.assertEqual((self.dataset / "raw" / "manifest.json").read_bytes(), old_manifest)
-        self.assertFalse(any(self.dataset.glob(".raw-staging-*")))
+        self.assertTrue(any(self.dataset.glob(".raw-staging-*")))
         result = run_dataset({**self.config, "count": 1}, self.dataset,
                              replace_raw=True, executor=fake_editor)
         self.assertEqual(result["images"], 1)
         self.assertEqual(len(list((self.dataset / "raw" / "images").glob("*.png"))), 1)
 
     def test_scenes_and_metadata_no_splits(self):
-        run_dataset(self.config, self.dataset, executor=fake_editor)
+        from tests.test_online_capture import FakeOnlineEditor
+        run_dataset(self.config,self.dataset,executor=lambda cmd: FakeOnlineEditor(cmd,lambda *args:"open"))
         raw = self.dataset / "raw"
         rows = [json.loads(l) for l in (raw / "metadata" / "images.jsonl").read_text().splitlines()]
         self.assertEqual(len(rows), 3)
@@ -344,7 +133,8 @@ class SingleEditorTests(unittest.TestCase):
         self.assertFalse((raw / "train").exists())
 
     def test_analysis_is_generated_only_on_request(self):
-        run_dataset(self.config, self.dataset, executor=fake_editor)
+        from tests.test_online_capture import FakeOnlineEditor
+        run_dataset(self.config,self.dataset,executor=lambda cmd: FakeOnlineEditor(cmd,lambda *args:"open"))
         self.assertFalse((self.dataset / "analysis").exists())
         report = analyze_dataset(self.dataset)
         self.assertEqual(len(report["maps"]), 2)
@@ -415,8 +205,8 @@ class SingleEditorTests(unittest.TestCase):
             self.assertIn("stream type=12", error)
             self.assertNotIn("File missing", error)
             with self.assertRaisesRegex(ValueError, "ooz: decode failed"):
-                from ke_single_editor import finalize
-                finalize(self.config, run, run / "raw", [{"map_id": "levels/avg_abandoned_factory.bin"}])
+                from ke_single_editor import collect_candidates
+                collect_candidates(self.config, run, run / "raw", [{"map_id": "levels/avg_abandoned_factory.bin"}])
 
     def test_batch_detects_incomplete_map(self):
         tasks = [{"map_id": "levels/avg_a.bin", "count": 2}]

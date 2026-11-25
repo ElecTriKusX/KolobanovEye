@@ -156,6 +156,11 @@ def validate_config(raw):
     return c
 
 
+def validate_dataset_config(raw):
+    from tools.ke_pipeline import pipeline_config
+    return validate_config(pipeline_config(raw))
+
+
 def command(c):
     c = validate_config(c)
     if c['capture_visibility_masks']:
@@ -186,9 +191,8 @@ def main():
                         help="Подтвердить замену dataset/raw после успешной генерации")
     args = parser.parse_args()
     try:
-        cfg = validate_config(json.loads(args.config.read_text(encoding="utf-8")))
         from ke_dataset import run_dataset
-        run_dataset(cfg, replace_raw=args.replace_raw)
+        run_dataset(json.loads(args.config.read_text(encoding="utf-8")), replace_raw=args.replace_raw)
         return 0
     except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
         print(f"[KE] ERROR {exc}", file=sys.stderr)

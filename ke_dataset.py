@@ -12,7 +12,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ke_generate import validate_config
+from ke_generate import validate_dataset_config
+from tools.ke_pipeline import migrated_keys
 from ke_single_editor import generate
 
 ROOT = Path(__file__).resolve().parent
@@ -20,7 +21,10 @@ DATASET = ROOT / "dataset"
 
 
 def run_dataset(config, dataset_root=DATASET, *, replace_raw=False, executor=None):
-    cfg = validate_config(config)
+    cfg = validate_dataset_config(config)
+    changed = migrated_keys(config,cfg)
+    if changed:
+        print('[KE] PIPELINE_MIGRATED fields=' + ','.join(changed),flush=True)
     dataset_root = Path(dataset_root).resolve()
     raw = dataset_root / "raw"
     if raw.exists() and not replace_raw:
