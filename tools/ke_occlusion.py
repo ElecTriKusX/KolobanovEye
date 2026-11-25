@@ -13,7 +13,7 @@ def plan_occlusion_targets(seed, count, weights):
     return plan
 
 
-def read_occlusion_proxy(blk, target, attempts, visibility, *, probe_size=0):
+def read_occlusion_proxy(blk, target, attempts, visibility, *, probe_size=0, probe_region=None):
     def field(name, kind):
         match = re.search(r"^" + name + ":" + kind + r"=([^\r\n]+)", blk, re.MULTILINE)
         if not match:
@@ -31,6 +31,10 @@ def read_occlusion_proxy(blk, target, attempts, visibility, *, probe_size=0):
               "absolute_error": abs(fraction - visibility["visible_fraction"])}
     if probe_size:
         size = int(field('avf_probe_size', 'i'))
+        region = field('avf_probe_region', 't') if probe_region is not None else None
+        if probe_region is not None and (region not in ('roi', 'full') or
+                (probe_region == 'full' and region != 'full')):
+            raise ValueError('Invalid AVF probe region')
         tried = int(field('avf_probe_attempts', 'i'))
         valid = int(field('avf_probe_valid', 'i'))
         method = field('avf_probe_method', 't')
@@ -50,7 +54,8 @@ def read_occlusion_proxy(blk, target, attempts, visibility, *, probe_size=0):
             estimate = None
         else:
             raise ValueError('Unknown AVF method')
-        result['avf'] = {'method': method, 'size': size, 'attempts': tried, 'valid': valid,
+        result['avf'] = {'method': method, 'size': size, 'region': region, 'requested_region': probe_region,
+                         'attempts': tried, 'valid': valid,
                          'estimated_fraction': estimate, 'amodal_pixels': amodal,
                          'visible_pixels': visible, 'missing_pixels': missing,
                          'absolute_error': abs(estimate-visibility['visible_fraction']) if estimate is not None else None}
@@ -61,6 +66,7 @@ def summarize_search(records):
     by_target = {name: {"attempted": 0, "matched": 0} for name in VISIBILITY_BINS}
     errors = []
     avf_errors, avf_attempts, avf_valid, avf_fallbacks = [], 0, 0, 0
+    avf_regions = {}
     avf_by_target = {name: {'valid_selected': 0, 'predicted_target': 0, 'matched': 0,
                             'fallbacks': 0} for name in VISIBILITY_BINS}
     for record in records:
@@ -71,6 +77,12 @@ def summarize_search(records):
         errors.append(item["absolute_error"])
         avf = item.get("avf")
         if avf is not None:
+            region_key = avf.get("region") or "unknown"
+            group_region = avf_regions.setdefault(region_key, {"selected": 0, "valid": 0, "error_sum": 0.0})
+            group_region["selected"] += 1
+            if avf["absolute_error"] is not None:
+                group_region["valid"] += 1
+                group_region["error_sum"] += avf["absolute_error"]
             avf_attempts += avf["attempts"]
             avf_valid += avf["valid"]
             group = avf_by_target[item["target"]]
@@ -88,5 +100,8 @@ def summarize_search(records):
         result["avf"] = {"method": "opaque_probe_v1", "probes_attempted": avf_attempts,
                          "probes_valid": avf_valid, "fallback_frames": avf_fallbacks,
                          "valid_selected_frames": len(avf_errors), "by_target": avf_by_target,
+                         "by_region": {k: {"selected": v["selected"], "valid": v["valid"],
+                                           "mean_absolute_error": v["error_sum"]/v["valid"] if v["valid"] else None}
+                                       for k, v in avf_regions.items()},
                          "mean_absolute_error": sum(avf_errors)/len(avf_errors) if avf_errors else None}
     return result
