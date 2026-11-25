@@ -66,7 +66,7 @@ EDITS = (
         (keGuided ? keGuidedHit(keBestProbe) : fabsf(keBestProbe-keTargetCenters[keOcclusionTarget])<=.04f))
 '''),
     ('''    if (!keSearchOcclusion || (keProbeSize && keBestProbe >= 0.f &&
-         fabsf(keBestProbe-keTargetCenters[keOcclusionTarget]) <= .04f))
+        fabsf(keBestProbe-keTargetCenters[keOcclusionTarget]) <= .04f))
 ''',
      '''    if (!keSearchOcclusion || (keProbeSize && keBestProbe >= 0.f &&
          (keGuided ? keGuidedHit(keBestProbe) : fabsf(keBestProbe-keTargetCenters[keOcclusionTarget]) <= .04f)))
@@ -83,6 +83,8 @@ EDITS = (
 
 
 def normalize_guided(src):
+    from tools.ke_guided_prerender import normalize_prerender
+    src = normalize_prerender(src)
     if MARKER not in src:
         return src
     for old,new in reversed(EDITS):
