@@ -5,7 +5,7 @@ from pathlib import Path
 from tools.ke_avf import plan_camera_field
 from tools.ke_guided_sampling import OccluderIndex
 from tools.ke_scene_families import (
-    SceneIndexes, family_for, profile, prepare_family, family_fields,
+    SceneIndexes, family_for, reserve_aperture, profile, prepare_family, family_fields,
     count_family, aperture_scanlines, read_aperture_hits)
 from tools.ke_dagor_terrain_family import (
     EDITS, install_terrain_family, normalize_terrain_family)
@@ -32,6 +32,12 @@ class SceneFamilyTests(unittest.TestCase):
         self.assertEqual(family_for("open",0),"explore")
         with self.assertRaises(ValueError):
             family_for("heavy",0)
+
+    def test_reserve_direct_aperture_slots(self):
+        attempts = [i for i in range(1, 61) if family_for('heavy',i)=='aperture']
+        self.assertEqual([i for i in attempts if reserve_aperture('aperture',i)], [3,18,33,48])
+        self.assertFalse(reserve_aperture('terrain',4))
+        self.assertFalse(reserve_aperture('explore',0))
 
     def test_category_separation_and_missing_geometry_fallback(self):
         indexes=SceneIndexes([BUILDING,VEGETATION])
