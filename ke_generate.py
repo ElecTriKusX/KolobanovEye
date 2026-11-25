@@ -92,8 +92,8 @@ def validate_config(raw):
             raise ValueError(f'{key}: требуется целое число')
     if not isinstance(c['avf_reuse_map'], bool):
         raise ValueError('avf_reuse_map: требуется true или false')
-    if c['avf_backend'] not in ('cpu', 'gpu') or not 1 <= c['avf_batch_size'] <= 4:
-        raise ValueError('AVF: backend cpu/gpu, размер группы 1–4')
+    if c['avf_backend'] not in ('cpu', 'gpu', 'verify') or not 1 <= c['avf_batch_size'] <= 4:
+        raise ValueError('AVF: backend cpu/gpu/verify, размер группы 1–4')
     if c['avf_region'] not in ('full', 'roi'):
         raise ValueError('avf_region: full или roi')
     if c['avf_probe_size'] not in (0, 64, 128, 256):
