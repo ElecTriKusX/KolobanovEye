@@ -75,7 +75,7 @@ def generate_online(cfg, run, raw, *, executor=None):
     guided = cfg.get("guided_sampling", "off") in ("obstacle","fixed_camera","diverse")
     fixed_mode = cfg.get("guided_sampling") in ("fixed_camera","diverse")
     diverse = cfg.get("guided_sampling") == "diverse"
-    from tools.ke_scene_families import SceneIndexes, family_for, prepare_family, family_fields, count_family
+    from tools.ke_scene_families import SceneIndexes, family_for, prepare_family, family_fields, count_family, read_aperture_hits
     family_indexes, family_attempts = {}, {}
     from tools.ke_depth_feedback import DepthFeedback, read_world_edges
     depth_feedback = DepthFeedback()
@@ -121,7 +121,7 @@ def generate_online(cfg, run, raw, *, executor=None):
     report["guided_prerender_probes"] = 0
     report["guided_prerender_disabled_maps"] = {}
     report["fixed_camera"] = {"planned_groups":0,"measured_groups":0,"environment_passes":0,"valid_probes":0,
-                              "selected_fixed_views":0,"world_edge_proposals":0,"depth_feedback_offered":0,"depth_feedback_used":0,
+                              "selected_fixed_views":0,"aperture_witness_groups":0,"world_edge_proposals":0,"depth_feedback_offered":0,"depth_feedback_used":0,
                               "measurement_scope":"validated_full_frames_only; native FIXED_PRESELECT includes rejected frames"}
     report["scene_families"] = {}
     consecutive_unstable = 0
@@ -342,8 +342,10 @@ def generate_online(cfg, run, raw, *, executor=None):
                                 fixed["final_view"] = final
                                 edges = read_world_edges(blk,fixed["estimate"] is not None)
                                 fixed["world_edge_proposals"] = edges
+                                fixed["aperture_scanlines"] = read_aperture_hits(blk,fixed["estimate"] is not None)
                                 stats = report["fixed_camera"]
                                 stats["world_edge_proposals"] += len(edges)
+                                stats["aperture_witness_groups"] += int(fixed["aperture_scanlines"]>0)
                                 depth_feedback.offer(mid,target,fixed["camera"],edges,sampler.bounds,cfg)
                                 stats["depth_feedback_offered"] = depth_feedback.offered
                                 if final["selected"]:
