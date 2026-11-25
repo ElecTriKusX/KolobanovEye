@@ -28,6 +28,7 @@ FIELDS = [
  ('clipmap_feedback', 'Обратная связь clipmap'), ('timeout', 'Таймаут, с'),
  ('min_warmup_renders', 'Мин. проходов прогрева (8–64)'),
  ('visibility_candidate_multiplier', 'Общий лимит кандидатов, ×'),
+ ('avf_probe_size', 'AVF: размер пробы (0 — выкл.)'),
 ]
 
 
@@ -79,11 +80,13 @@ class App:
             ('Танк и место', [('placement_mode',), ('smart_placement_cache',), ('map_margin_percent',), ('tank_x','tank_z','Центр поиска: X / Z'), ('tank_yaw',), ('turret_yaw_min','turret_yaw_max','Башня относительно корпуса, °'), ('gun_pitch_min','gun_pitch_max','Наклон орудия, °'), ('placement_radius',), ('minimum_ground_y',), ('max_height_range',), ('ground_offset',)]),
             ('Камера', [('distance_min','distance_max','Дистанция по горизонтали: от / до'),
                         ('camera_height_min','camera_height_max','Высота над рельефом: от / до'), ('camera_clearance',)]),
-            ('Служебные параметры', [('camera_attempts',), ('placement_attempts',), ('clipmap_feedback',), ('timeout',), ('min_warmup_renders',), ('visibility_candidate_multiplier',)])]
+            ('Служебные параметры', [('camera_attempts',), ('placement_attempts',), ('clipmap_feedback',), ('timeout',), ('min_warmup_renders',), ('visibility_candidate_multiplier',), ('avf_probe_size',)])]
         self.widgets = {}
         def add_widget(parent, key):
             if key == 'placement_mode':
                 widget = ttk.Combobox(parent, textvariable=self.values[key], values=tuple(MODE_LABELS.values()), state='readonly', width=18)
+            elif key == 'avf_probe_size':
+                widget = ttk.Combobox(parent, textvariable=self.values[key], values=('0', '64', '128', '256'), state='readonly', width=12)
             elif key == 'clipmap_feedback':
                 widget = ttk.Combobox(parent, textvariable=self.values[key], values=('software', 'hardware'), state='readonly', width=12)
             else:
