@@ -69,3 +69,54 @@ def fixed_block(group):
     return (f'fixed_count:i={group["count"]}\n'
             f'fixed_eye:p3={x:.7f},{group["height"]:.7f},{z:.7f}\n'
             f'fixed_aim:p2={ax:.7f},{az:.7f}\n')
+
+
+def environment_visibility(scene,model):
+    """CPU reference for environment-only reverse-Z depth, not combined depth."""
+    if len(scene)!=len(model):
+        raise ValueError("Depth arrays differ in size")
+    amodal=visible=invalid=0
+    for env,depth in zip(scene,model):
+        if not math.isfinite(depth) or not 0<depth<=1:
+            continue
+        amodal+=1
+        if not math.isfinite(env) or not 0<=env<=1:
+            invalid+=1
+            continue
+        tolerance=max(1e-7,1e-4*max(depth,env))
+        visible+=int(env<=depth+tolerance)
+    return visible/amodal if amodal>=16 and not invalid else None
+
+
+def read_fixed_metadata(blk,group,selected):
+    import re
+    def field(name,kind):
+        matches=re.findall(r"^"+name+":"+kind+r"=([^\r\n]+)",blk,re.M)
+        if len(matches)!=1:
+            raise ValueError("Missing or duplicate fixed-camera metadata: "+name)
+        return matches[0].strip()
+    if group is None:
+        if re.search(r"^fixed_group_count:",blk,re.M):
+            raise ValueError("Unexpected fixed-camera group")
+        return None
+    count=int(field("fixed_group_count","i"))
+    placed=int(field("fixed_group_valid_placements","i"))
+    valid=int(field("fixed_group_valid_probes","i"))
+    passes=int(field("fixed_group_environment_passes","i"))
+    estimate=float(field("fixed_group_estimate","r"))
+    if not (count==group["count"] and 0<=valid<=placed<=count<=MAX_POSES and
+            passes in (0,1) and math.isfinite(estimate)):
+        raise ValueError("Invalid fixed camera counters")
+    if (placed>0) != (selected<count):
+        raise ValueError("Selected placement is inconsistent with local group")
+    if valid:
+        if placed<2 or passes!=1 or not 0<=estimate<=1:
+            raise ValueError("Invalid selected fixed-camera estimate")
+    elif estimate!=-1:
+        raise ValueError("Missing measurement must use -1")
+    if passes and placed<2:
+        raise ValueError("Depth pass without multiple placements")
+    return {"method":"fixed_camera_depth_cpu_v1","planned":count,
+            "valid_placements":placed,"valid_probes":valid,
+            "environment_passes":passes,"estimate":estimate if valid else None,
+            "selected_index":selected,"camera":group}
