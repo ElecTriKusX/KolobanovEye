@@ -439,3 +439,15 @@ environment-only и комплексная приёмка остаются не�
 (blob 598d4892127dda159609b23a737026ba3998b1e1) и tests/test_scene_cache.py
 (blob 0409a5993f57f3fdd16bf6bf7595453762ba3d8d); изолированный unittest
 в Linux: 5/5 OK. Это не проверка online-интеграции или нативной сборки.
+
+
+### 2.9.4 — GPU V6
+
+В feature/occluder-guided-sampling реализованы отдельный DX11 редуктор
+fixed-camera, до 6 GPU dispatch с общей неизменяемой глубиной окружения,
+компактными счётчиками/топологией/статистикой силуэта, CPU world-proposals,
+режимом same-texture verify и метаданными. GPU-only не читает полные
+model depth. Добавлены 5 регрессий, benchmark и обратимая миграция.
+Проверены текстовые anchors/структура генерируемого C++ статически;
+unit tests, HLSL/C++ сборка Windows и реальные GPU результаты ещё
+не подтверждены. 2.9.8 — комплексная приёмка. Main не менялся.
