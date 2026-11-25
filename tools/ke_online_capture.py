@@ -112,7 +112,8 @@ def generate_online(cfg, run, raw, *, executor=None):
     report["guided_prerender_rejections"] = 0
     report["guided_prerender_probes"] = 0
     report["guided_prerender_disabled_maps"] = {}
-    report["fixed_camera"] = {"planned_groups":0,"measured_groups":0,"environment_passes":0,"valid_probes":0}
+    report["fixed_camera"] = {"planned_groups":0,"measured_groups":0,"environment_passes":0,"valid_probes":0,
+                              "measurement_scope":"validated_full_frames_only; native FIXED_PRESELECT includes rejected frames"}
     consecutive_unstable = 0
     report["attempted_candidates"] = 0
     # A single miss is not stagnation. Allow several map-sized windows of
