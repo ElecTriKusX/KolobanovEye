@@ -37,7 +37,7 @@ def read_occlusion_proxy(blk, target, attempts, visibility, *, probe_size=0, pro
             raise ValueError('Invalid AVF probe region')
         backend = field('avf_backend', 't') if probe_backend is not None else None
         batch = int(field('avf_batch_size', 'i')) if probe_backend is not None else None
-        if probe_backend is not None and (backend != probe_backend or batch != (1 if backend == 'cpu' else probe_batch_size)):
+        if probe_backend is not None and (backend != probe_backend or batch != (probe_batch_size if backend == 'gpu' else 1)):
             raise ValueError('Invalid AVF backend/batch telemetry')
         tried = int(field('avf_probe_attempts', 'i'))
         valid = int(field('avf_probe_valid', 'i'))
