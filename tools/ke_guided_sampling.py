@@ -8,8 +8,6 @@ import math
 from pathlib import Path
 import random
 
-from tools.ke_avf import plan_camera_field
-
 LAYERS = {"building", "rock", "vegetation", "small", "unknown"}
 CELL = 32.0
 
@@ -75,6 +73,39 @@ class OccluderIndex:
                     yield wrap(center+off), minimum, h
 
 
+
+def ranked_edges(index, x, z, cfg):
+    # Approximate a low line of sight across a level patch. The true terrain
+    # height and silhouette are deliberately left to native validation.
+    def rank(edge):
+        _, minimum, height = edge
+        distance = max(cfg["distance_min"], minimum)
+        sight = 1.5 + (cfg["camera_height_min"]-1.5)*max(0.,minimum-2.)/distance
+        return (min(height-sight, 5.), -minimum)
+    return sorted(index.edges(x,z,cfg["distance_max"]),key=rank,reverse=True)
+
+
+def prioritize_points(index, bounds, points, target, cfg):
+    """Prefer feasible obstacle directions before costly native placement.
+
+    Leave the last quarter in their original order as a fallback. No point
+    is discarded by this approximate horizontal scoring.
+    """
+    if target == "open" or len(points)<4:
+        return points
+    xmin,xmax,zmin,zmax = bounds
+    def score(point):
+        u,v,_ = point
+        edges = ranked_edges(index,xmin+u*(xmax-xmin),zmin+v*(zmax-zmin),cfg)
+        if not edges:
+            return (0,0.)
+        return (1, min(len(edges),12) + min(edges[0][2],5.)/10.)
+    count = len(points)*3//4
+    ranked = sorted(range(len(points)),key=lambda i:score(points[i]),reverse=True)[:count]
+    chosen = set(ranked)
+    return [points[i] for i in ranked]+[p for i,p in enumerate(points) if i not in chosen]
+
+
 def guided_field(base, index, x, z, target, cfg, seed):
     """Replace up to two thirds of a camera bank with edge-oriented probes.
 
@@ -84,7 +115,7 @@ def guided_field(base, index, x, z, target, cfg, seed):
     """
     if target == "open" or len(base) < 8:
         return base
-    edges = list(index.edges(x,z,cfg["distance_max"]))
+    edges = ranked_edges(index,x,z,cfg)
     if not edges:
         return base
     rng = random.Random(seed)
@@ -98,7 +129,7 @@ def guided_field(base, index, x, z, target, cfg, seed):
     result = [dict(c) for c in base]
     for k,r in enumerate(replace_rings):
         ids = [i for i,c in enumerate(base) if c["avf_ring"]==r]
-        bearing, minimum, obstacle_height = edges[k % len(edges)]
+        bearing, minimum, _ = edges[k % len(edges)]
         lo = max(cfg["distance_min"], minimum)
         hi = cfg["distance_max"]
         dist = rng.uniform(lo, hi)
@@ -135,7 +166,7 @@ def fields_block(fields):
     rows = []
     for p, field in enumerate(fields):
         for i,c in enumerate(field):
-            rows += [f'guided_offset_{p}_{i}:p3='+",".join(str(v) for v in c["offset"]),
+            rows += [f'guided_offset_{p}_{i}:p3='+",".join(f"{v:.6f}" for v in c["offset"]),
                      f'guided_height_{p}_{i}:r={c["height_above_ground"]}',
                      f'guided_ring_{p}_{i}:i={c["avf_ring"]}',
                      f'guided_angle_{p}_{i}:r={c["azimuth_deg"]}']
