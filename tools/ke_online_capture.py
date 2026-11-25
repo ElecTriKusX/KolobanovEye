@@ -76,7 +76,7 @@ def generate_online(cfg, run, raw, *, executor=None):
     guided = cfg.get("guided_sampling", "off") in ("obstacle","fixed_camera","diverse")
     fixed_mode = cfg.get("guided_sampling") in ("fixed_camera","diverse")
     diverse = cfg.get("guided_sampling") == "diverse"
-    from tools.ke_scene_families import SceneIndexes, family_for, prepare_family, family_fields, count_family, read_aperture_hits
+    from tools.ke_scene_families import SceneIndexes, family_for, prepare_family, family_fields, count_family, read_aperture_hits, reserve_aperture
     family_indexes, family_attempts = {}, {}
     scene_cache = None
     cache_attempts = dict.fromkeys(map_targets,0)
@@ -127,6 +127,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                               "gpu_submitted":0,"gpu_verified":0,"selected_fixed_views":0,"aperture_witness_groups":0,"world_edge_proposals":0,"depth_feedback_offered":0,"depth_feedback_used":0,
                               "measurement_scope":"validated_full_frames_only; native FIXED_PRESELECT includes rejected frames"}
     report["scene_families"] = {}
+    report["scene_family_routes"] = {}
     report["scene_cache"] = {"enabled":False}
     consecutive_unstable = 0
     report["attempted_candidates"] = 0
@@ -221,12 +222,14 @@ def generate_online(cfg, run, raw, *, executor=None):
                         points = prioritize_points(occluders[mid],sampler.bounds,points,requested,cfg)
                     group = None
                     family, requested_family = "legacy", "legacy"
+                    protected_aperture = False
                     index, profile = occluders.get(mid), cfg
                     if diverse:
                         if requested!="open":
                             family_attempts[mid] += 1
                         requested_family=family_for(requested,family_attempts[mid])
-                        if requested_family=="aperture":
+                        protected_aperture=reserve_aperture(requested_family,family_attempts[mid])
+                        if requested_family=="aperture" and not protected_aperture:
                             points,group=depth_feedback.take(mid,requested,points,sampler.bounds,cfg)
                         if group is not None:
                             family="depth_feedback"
@@ -244,7 +247,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                         cache_attempts[mid]+=1
                         # At most one replay per six non-open requests. Preserve the
                         # explicit broad-exploration family, even on a cache slot.
-                        if cache_attempts[mid]%6==0 and requested_family!="explore":
+                        if cache_attempts[mid]%6==0 and requested_family!="explore" and not protected_aperture:
                             bank,cached,key=scene_cache.take(mid,requested,original_points,sampler.bounds,cfg)
                             if cached is not None:
                                 points,group=bank,cached
@@ -254,6 +257,8 @@ def generate_online(cfg, run, raw, *, executor=None):
                     if diverse:
                         families[frame_index]=(requested_family,family)
                         count_family(report["scene_families"],family,requested)
+                        routes=report["scene_family_routes"].setdefault(requested_family,{})
+                        routes[family]=routes.get(family,0)+1
                     if group is not None:
                         report["fixed_camera"]["planned_groups"] += 1
                     fixed_groups[frame_index] = group
@@ -563,6 +568,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                      guided_prerender_disabled_maps=report["guided_prerender_disabled_maps"],
                      fixed_camera=report["fixed_camera"],
                      scene_families=report["scene_families"],
+                     scene_family_routes=report["scene_family_routes"],
                      scene_cache=report["scene_cache"],
                      attempted_candidates=report["attempted_candidates"], rendered_candidates=report["candidate_frames"])
         write_json(run / "visibility-quotas.json", quota)
