@@ -101,3 +101,14 @@ with size=0, then AVF enabled. Review per-bin actual hits, invalid/fallback
 rates, probe mean absolute error, p50/p95 probe latency, map loads, host
 turnaround, total seconds per accepted image, exact quotas and final masks.
 Do not merge until the real tests succeed.
+
+
+## 2.8.d — ROI, paired readback and host feedback critical path (code written)
+
+- `avf_region=roi|full` (ROI default for enabled AVF). Native ROI uses a padded projected AABB, clamps it to the original image, and checks the crop matrix against the engine-generated perspective matrix before using it. The selected region is recorded; an invalid crop falls back to full-frame probing. Square ROI targets retain a fixed allocation size. Final RGB and full-resolution masks are unaffected.
+- The probe now maintains two reusable G-buffer targets and requests staging readback after each draw. Both passes are submitted before the first blocking map. The CPU depth comparison and final acceptance rules remain unchanged. This is **paired staging submission**, not GPU reduction and not fully asynchronous multi-camera probing.
+- The host publishes its next decision after the validated candidate journal, quota credit and abort guards, but before progress/manifest reporting. Reporting cost is recorded separately. This preserves the one-request feedback protocol; it does not implement a speculative queue.
+- `python -m tools.ke_avf_benchmark RUN_BASELINE RUN_FULL RUN_ROI` compares existing run folders without changing them. Optional repeated `--native-log PATH` arguments provide one native log per run for probe latency and map-load log counts. It reports incomplete runs separately, checks configuration comparability, and only computes relative speedup for completed, comparable runs.
+- Added regression contracts for v2-to-v3 camera upgrade, v1-to-v2 paired readback upgrade, ROI metadata and command ordering. No intermediate test run or Windows rebuild requested. Fresh C++ compilation, actual texture staging behavior, ROI accuracy and performance remain unverified.
+
+Pending: true GPU-side reduction, cross-candidate asynchronous scheduling and full map reuse across task boundaries. Before final acceptance, compare the legacy disabled-AVF baseline with full-frame and ROI AVF at the same seed, maps, count, quotas, resolution and other settings. Different camera sampling strategies are intrinsic to the algorithm; equal seed does not imply identical selected views.
