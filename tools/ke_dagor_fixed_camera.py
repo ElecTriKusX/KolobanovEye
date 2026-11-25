@@ -163,6 +163,8 @@ EDITS=(
 )
 
 def normalize_fixed_capture(src):
+    from tools.ke_dagor_fixed_final import normalize_fixed_final
+    src = normalize_fixed_final(src)
     if MARKER not in src:
         return src
     for old,new in reversed(EDITS):
