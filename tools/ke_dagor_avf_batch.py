@@ -133,6 +133,8 @@ def apply_diagnostics(src):
 
 
 def normalize_batch(src):
+    from tools.ke_dagor_guided import normalize_guided
+    src = normalize_guided(src)
     if MARKER not in src:
         return src
     src = normalize_diagnostics(src)
