@@ -46,7 +46,7 @@ SETUP=r'''  // [KE] TERRAIN_FAMILY_V1
         horizon=max(horizon,e.y+(terrain-e.y)/t);
       }
       if (!known) continue;
-      const float estimate=1.f-clamp((horizon-bottom)/modelHeight,0.f,1.f);
+      const float estimate=1.f-fmaxf(0.f,fminf(1.f,(horizon-bottom)/modelHeight));
       keTerrainRank[i]=fabsf(estimate-keTargetCenters[keOcclusionTarget]);
       ++keTerrainMeasured;
     }
