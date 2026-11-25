@@ -108,6 +108,8 @@ def generate_online(cfg, run, raw, *, executor=None):
     report["placement_rejections"] = 0
     report["stability_rejections"] = 0
     report["guided_prerender_rejections"] = 0
+    report["guided_prerender_probes"] = 0
+    report["guided_prerender_disabled_maps"] = {}
     consecutive_unstable = 0
     report["attempted_candidates"] = 0
     # A single miss is not stagnation. Allow several map-sized windows of
@@ -188,14 +190,16 @@ def generate_online(cfg, run, raw, *, executor=None):
                         fields = candidate_fields(task["cameras"][frame_index],occluders[mid],sampler.bounds,
                             points,requested,cfg,f'{task["seed"]}:{frame_index}')
                         guided_fields[frame_index] = fields
-                        skip = cfg.get("guided_prerender","off") == "conservative" and allow_skip(planner,mid,requested)
+                        skip = (cfg.get("guided_prerender","off") == "conservative" and
+                                mid not in report["guided_prerender_disabled_maps"] and allow_skip(planner,mid,requested))
                         task["guided_skip"][frame_index] = skip
                         block += "guided_sampling:b=yes\n"+fields_block(fields)
                         block += f"guided_skip_open:b={'yes' if skip else 'no'}\n"
                     publish(feedback/f"smart_{frame_index}.blk",block)
                     with (run/"smart-placement-plans.jsonl").open("a",encoding="utf-8") as stream:
                         stream.write(json.dumps({"task":number,"index":frame_index,"map_id":mid,
-                            "target":requested,"points":points})+"\n")
+                            "target":requested,"points":points,
+                            "guided_skip_open":task["guided_skip"].get(frame_index,False)})+"\n")
                 publish_points(0,target)
             publish(feedback / "decision_0.txt", f"{VISIBILITY_BINS.index(target)}\n")
             attempt_started = time.monotonic()
@@ -229,6 +233,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                 if prefilter is not None:
                     record = prefilter
                     guided_rejected[record["image_id"]] = record
+                    report["guided_prerender_probes"] += record["probe_attempts"]
                     task.setdefault("guided_rejected_indices",set()).add(idx)
                     planner.finish()
                     measured = "reject_guided_prerender"
@@ -292,6 +297,16 @@ def generate_online(cfg, run, raw, *, executor=None):
                     planner.finish(record)
                     consecutive_mismatch = 0
                     measured = record["visibility_measurement"]["visibility_bin"]
+                    if guided and cfg.get("guided_prerender","off")=="conservative":
+                        estimate = (record.get("occlusion_search") or {}).get("avf",{}).get("estimated_fraction")
+                        if estimate is not None and estimate >= .98 and measured != "open":
+                            # A strong disagreement falsifies our conservative open hypothesis.
+                            # Disable skipping for this map for the rest of the run.
+                            disabled = report["guided_prerender_disabled_maps"]
+                            if mid not in disabled:
+                                disabled[mid] = {"image_id":record["image_id"],"estimate":estimate,
+                                    "actual_bin":measured,"actual_fraction":record["visibility_measurement"]["visible_fraction"]}
+                                print(f"[KE] GUIDED_PREFILTER_DISABLED map={mid} reason=open_prediction_mismatch",flush=True)
                     journal_name = "candidate-pool.jsonl"
                 if guided:
                     guided_fields.pop(idx,None)
@@ -403,6 +418,8 @@ def generate_online(cfg, run, raw, *, executor=None):
                      depth_mismatch_rejections=len(rejected), placement_rejections=len(placement_rejected),
                      stability_rejections=len(stability_rejected),
                      guided_prerender_rejections=len(guided_rejected),
+                     guided_prerender_probes=report["guided_prerender_probes"],
+                     guided_prerender_disabled_maps=report["guided_prerender_disabled_maps"],
                      attempted_candidates=report["attempted_candidates"], rendered_candidates=report["candidate_frames"])
         write_json(run / "visibility-quotas.json", quota)
         report["stop_reason"] = stop_reason
