@@ -30,19 +30,21 @@ def prepare_avf_shader(dagor):
     fxc = find_fxc()
     if fxc is None:
         raise ValueError("AVF GPU build requires fxc.exe from Windows SDK (Developer PowerShell)")
-    with tempfile.TemporaryDirectory() as tmp:
-        out = Path(tmp) / "ke_avf_reduce.cso"
-        subprocess.run([str(fxc), "/nologo", "/T", "cs_5_0", "/E", "main",
-                        "/O3", "/Gis", "/Fo", str(out), str(SHADER)], check=True)
-        code = out.read_bytes()
-    if not code.startswith(b"DXBC") or len(code) < 32:
-        raise ValueError("Invalid AVF DXBC output")
-    lines = ["#pragma once", "#include <cstdint>",
-             "alignas(4) static constexpr uint8_t keAvfReduceBytecode[] = {"]
-    for i in range(0, len(code), 16):
-        lines.append("  " + ", ".join(f"0x{x:02x}" for x in code[i:i+16]) + ",")
-    lines.append("};")
+    lines = ["#pragma once", "#include <cstdint>"]
+    for shader, symbol in ((SHADER, "keAvfReduceBytecode"),
+                           (SHADER.with_name("ke_fixed_reduce.hlsl"), "keFixedReduceBytecode")):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "reduce.cso"
+            subprocess.run([str(fxc), "/nologo", "/T", "cs_5_0", "/E", "main",
+                            "/O3", "/Gis", "/Fo", str(out), str(shader)], check=True)
+            code = out.read_bytes()
+        if not code.startswith(b"DXBC") or len(code) < 32:
+            raise ValueError(f"Invalid DXBC output: {shader}")
+        lines.append(f"alignas(4) static constexpr uint8_t {symbol}[] = {{")
+        for i in range(0, len(code), 16):
+            lines.append("  " + ", ".join(f"0x{x:02x}" for x in code[i:i+16]) + ",")
+        lines.append("};")
+        print(f"[KE] AVF_SHADER_OK shader={shader.name} bytes={len(code)}", flush=True)
     data = ("\n".join(lines)+"\n").encode("ascii")
     if not target.exists() or target.read_bytes() != data:
         target.write_bytes(data)
-    print(f"[KE] AVF_SHADER_OK bytes={len(code)}", flush=True)
