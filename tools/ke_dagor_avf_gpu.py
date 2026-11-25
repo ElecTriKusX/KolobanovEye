@@ -365,6 +365,8 @@ def apply_build_fixes(src, key):
 
 
 def normalize_gpu(src, key):
+    from tools.ke_dagor_fixed_depth import normalize_fixed_renderer
+    src = normalize_fixed_renderer(src,key)
     if MARKER not in src and ("collectKolobanovEyeProbe" not in src if key == "header" else True):
         return src
     src = reverse_build_fixes(src, key)
@@ -379,6 +381,10 @@ def install_avf_gpu(dagor: Path):
              "render": dagor/BASE/"services/dynRenderSrv/dynRender.cpp"}
     raw = {k: p.read_bytes() for k,p in paths.items()}
     src = {k: v.replace(b"\r\n",b"\n").decode("utf-8") for k,v in raw.items()}
+    from tools.ke_dagor_fixed_depth import normalize_fixed_renderer, add_fixed_renderer
+    original = dict(src)
+    src = {k: normalize_fixed_renderer(v,k) for k,v in src.items()}
+    fixed = {k: original[k] != src[k] for k in paths}
     if MARKER in src["render"]:
         for k in paths:
             normalize_gpu(src[k], k)
@@ -390,6 +396,9 @@ def install_avf_gpu(dagor: Path):
                 src[k] = src[k].replace(old,new,1)
     for k in paths:
         src[k] = apply_build_fixes(src[k], k)
+    for k in paths:
+        if fixed[k]:
+            src[k] = add_fixed_renderer(src[k],k)
     changed = False
     for k,p in paths.items():
         updated = src[k].encode("utf-8").replace(b"\n",b"\r\n" if b"\r\n" in raw[k] else b"\n")
