@@ -62,6 +62,7 @@ def summarize_run(path, native_log=None):
     rate = (elapsed/selected if complete and selected and elapsed is not None else None)
     probe_stats = None
     loads = None
+    fixed_native = None
     actual_loads = reuses = None
     if native_log is not None:
         native = Path(native_log).read_text(encoding="utf-8", errors="replace")
@@ -80,6 +81,11 @@ def summarize_run(path, native_log=None):
         console = [line.split("CON: ", 1)[1] for line in native.splitlines() if "CON: [KE]" in line]
         events = "\n".join(console) if console else native
         loads = len(re.findall(r"\[KE\] MAP_BEGIN\b", events))
+        fixed_rows = re.findall(r"\[KE\] FIXED_PRESELECT index=\d+ placements=(\d+) valid=(\d+) env_passes=(\d+) selected=\d+ fraction=[-.\d]+",events)
+        if fixed_rows:
+            fixed_native = {"groups":len(fixed_rows),"valid_placements":sum(int(x[0]) for x in fixed_rows),
+                            "valid_probes":sum(int(x[1]) for x in fixed_rows),
+                            "environment_passes":sum(int(x[2]) for x in fixed_rows)}
         actions = re.findall(r"\[KE\] MAP_RESIDENCY action=(load|reuse)\b", events)
         if actions:
             actual_loads, reuses = actions.count("load"), actions.count("reuse")
@@ -96,6 +102,8 @@ def summarize_run(path, native_log=None):
             "guided_prerender_rejections": manifest.get("guided_prerender_rejections",0),
             "guided_prerender_probes": manifest.get("guided_prerender_probes",0),
             "guided_prerender_disabled_maps": manifest.get("guided_prerender_disabled_maps",{}),
+            "fixed_camera": manifest.get("fixed_camera"),
+            "fixed_camera_native":fixed_native,
             "reuse_map_enabled": config.get("avf_reuse_map"),
             "probe_size": config.get("avf_probe_size", 0), "region": config.get("avf_region"),
             "host_turnaround_ms": distribution([r["python_turnaround_ms"] for r in timing
