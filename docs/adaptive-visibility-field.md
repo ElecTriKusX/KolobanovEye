@@ -112,3 +112,74 @@ Do not merge until the real tests succeed.
 - Added regression contracts for v2-to-v3 camera upgrade, v1-to-v2 paired readback upgrade, ROI metadata and command ordering. No intermediate test run or Windows rebuild requested. Fresh C++ compilation, actual texture staging behavior, ROI accuracy and performance remain unverified.
 
 Pending: true GPU-side reduction, cross-candidate asynchronous scheduling and full map reuse across task boundaries. Before final acceptance, compare the legacy disabled-AVF baseline with full-frame and ROI AVF at the same seed, maps, count, quotas, resolution and other settings. Different camera sampling strategies are intrinsic to the algorithm; equal seed does not imply identical selected views.
+
+
+## 2.8.e–f — GPU reduction, grouped probes and native map residency
+
+Implementation committed on the experimental branch; no native acceptance yet.
+
+- Standalone `engine/shaders/ke_avf_reduce.hlsl`: 8×8 groups classify reverse-Z
+  pixels using the existing tolerance, reduce locally and add three counters
+  plus a group-completion witness to a 16-byte UAV. The local build compiles
+  shader model 5.0 DXBC with Windows SDK fxc.exe (PATH or WindowsSdkDir),
+  emits a static bytecode header into Dagor, and supplies the pinned DX11
+  SimpleHeader metadata. No game shader dump is edited.
+- `avf_backend=cpu|gpu|verify`: cpu is the previous paired readback reference;
+  gpu uses four independent counter/staging slots; verify compares exact
+  CPU and GPU counts for the same depth textures and logs AVF_GPU_VERIFY_OK
+  or AVF_GPU_VERIFY_FAIL. The verify mode is intentionally serial and not
+  a performance benchmark.
+- `avf_batch_size=1..4`, default 4. Adaptive camera selection submits a bounded
+  group before mapping counters; valid estimates update the next group's
+  order. The last partial group is drained; original camera indices and
+  strict final full-size mask credit are retained. GPU work is submitted
+  in order on the graphics queue, not parallel command-list recording or
+  a separate async-compute queue. Streaming/geometry prep stays serial.
+  Four uint32 counters (16 B) are mapped per probe instead of two D32 images.
+- `avf_reuse_map=true|false` (JSON config; default true for AVF). Scoped cache
+  in the native batch reuses only a consecutive matching level on the same
+  scene plugin with terrain available. A different level still uses normal
+  teardown/load. The scope resets when the batch ends. No multi-map VRAM
+  caching. MAP_BEGIN remains a logical task delimiter; MAP_RESIDENCY reports
+  actual load/reuse separately, including disabled AVF baselines.
+- Benchmark reports backend, batch size, actual map loads and verification
+  counters. Metadata validators reject wrong backend/group settings. Python
+  regression contracts cover migration, queue, map scope and telemetry.
+
+### Unified Windows acceptance (after implementation)
+
+1. Fetch the experimental branch, run Python tests and rebuild pinned Dagor
+   once in the developer PowerShell. Expect AVF_SHADER_OK and BUILD_OK.
+   Missing fxc.exe is an explicit build prerequisite failure. Do not reset
+   Dagor, disable antivirus, or change game assets.
+2. Preserve the existing published dataset and use a small disposable run
+   with the same working smart-placement setup, masks and exact online quotas.
+   Start with 128 ROI, verify backend; inspect native debug for nonzero
+   AVF_GPU_VERIFY_OK and zero AVF_GPU_VERIFY_FAIL. Review actual RGB/masks,
+   valid probe count, missing pixels, LOD/streaming and completed exact quotas.
+   A completed dataset obtained only through collision fallback is not AVF
+   acceptance. Verify is serial and not used to estimate speedup.
+3. Compare disabled AVF (size=0), CPU ROI (size=128, cpu), GPU ROI serial
+   (size=128, gpu, batch=1), and GPU ROI grouped (size=128, gpu, batch=4).
+   Keep maps, quotas, target count, seed, resolution, camera-attempt limit,
+   and other settings fixed; use the same machine. For ROI ablation change
+   only region to full. For residency ablation change only avf_reuse_map.
+   The configurations may yield different actual camera choices.
+4. Compare run folders with tools.ke_avf_benchmark and the matching native
+   debug log for each run. Acceptance: exact requested count, map and
+   visibility quotas, no regression in full-mask/COCO validation; nonzero
+   valid GPU estimates, zero verification failures; report measured MAE,
+   target hit/fallback rate, p50/p95 latency, actual map loads and seconds
+   per accepted frame. Target at least 2× end-to-end speedup and MAE ≤0.05,
+   but do not claim these until measured. If initial 20–40 frame smoke
+   checks succeed, repeat the established 600-frame test.
+5. Do not merge into main without Windows compilation, GPU parity and
+   real-map generation evidence.
+
+Limits: no Windows compiler, DX11 device or installed WT resources in the
+chat environment. Native shader compilation, migration on the actual
+long-lived checkout, DX11 resource binding/staging and cross-map stability
+are therefore unverified. The implementation batches GPU submission and
+moves host reporting off the critical path but keeps exact one-frame
+Python/C++ quota feedback; it deliberately does not speculatively accept
+multiple unvalidated frames. The final full-resolution masks are unchanged.
