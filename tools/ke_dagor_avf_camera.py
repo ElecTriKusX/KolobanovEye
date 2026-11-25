@@ -124,7 +124,86 @@ EDITS = ((SETUP_OLD, SETUP_NEW), (CHOICE_OLD, CHOICE_NEW),
          (STOP_OLD, STOP_NEW), (META_OLD, META_NEW))
 
 
+
+FIELD_MARKER = "// [KE] AVF_FIELD_V2"
+FIELD_SETUP_OLD = "  float keBestProbe = -1.f;\n"
+FIELD_SETUP_NEW = FIELD_SETUP_OLD + r'''  // [KE] AVF_FIELD_V2
+  int keFieldRing[64] = {}, keRingCount = 0;
+  float keFieldAngle[64] = {}, keFieldValue[64];
+  bool keFieldTried[64] = {};
+  for (int i=0; i<cameraAttempts; ++i)
+  {
+    keFieldValue[i] = -1.f;
+    if (!keProbeSize) continue;
+    char ringKey[48], angleKey[48];
+    snprintf(ringKey, sizeof(ringKey), "avf_ring_%d_%d", frameIndex, i);
+    snprintf(angleKey, sizeof(angleKey), "avf_angle_%d_%d", frameIndex, i);
+    keFieldRing[i] = config.getInt(ringKey, -1);
+    keFieldAngle[i] = config.getReal(angleKey, -1000.f);
+    if (keFieldRing[i]<0 || keFieldRing[i]>2 || !std::isfinite(keFieldAngle[i]) ||
+        fabsf(keFieldAngle[i])>180.f)
+      return fail("AVF_FIELD", "Missing or invalid camera field plan");
+    keRingCount = max(keRingCount, keFieldRing[i]+1);
+  }
+  auto keFieldNext = [&](int iteration) -> int {
+    int first = -1;
+    for (int i=0; i<cameraAttempts; ++i)
+      if (!keFieldTried[i]) { first=i; break; }
+    // First cover four broad directions per ring, then reserve periodic
+    // exploration. This prevents a single observed boundary monopolizing the search.
+    if (!keProbeSize || iteration<4*keRingCount || iteration%4==0)
+      return first;
+    int best = first;
+    float bestRank = 1e9f;
+    const float target = keTargetCenters[keOcclusionTarget];
+    for (int i=0; i<cameraAttempts; ++i)
+    {
+      if (keFieldTried[i]) continue;
+      float left=361.f, right=361.f, lv=-1.f, rv=-1.f;
+      for (int j=0; j<cameraAttempts; ++j)
+      {
+        if (keFieldRing[i]!=keFieldRing[j] || keFieldValue[j]<0.f) continue;
+        const float cw=fmodf(keFieldAngle[j]-keFieldAngle[i]+360.f,360.f);
+        const float ccw=fmodf(keFieldAngle[i]-keFieldAngle[j]+360.f,360.f);
+        if (cw<right) { right=cw; rv=keFieldValue[j]; }
+        if (ccw<left) { left=ccw; lv=keFieldValue[j]; }
+      }
+      if (lv<0.f || rv<0.f || left+right<=0.f) continue;
+      const bool bracket=fminf(lv,rv)<=target && fmaxf(lv,rv)>=target;
+      const float predicted=(lv*right+rv*left)/(left+right);
+      const float rank=(bracket?0.f:2.f)+fabsf(predicted-target)+.02f*fabsf(left-right)/(left+right);
+      if (rank<bestRank) { bestRank=rank; best=i; }
+    }
+    return best;
+  };
+'''
+
+FIELD_LOOP_OLD = "  for (int cameraAttempt = 0; cameraAttempt < cameraAttempts; ++cameraAttempt)\n  {\n"
+FIELD_LOOP_NEW = r'''  for (int keIteration=0; keIteration<cameraAttempts; ++keIteration)
+  {
+    const int cameraAttempt = keProbeSize ? keFieldNext(keIteration) : keIteration;
+    if (cameraAttempt<0 || cameraAttempt>=cameraAttempts)
+      return fail("AVF_FIELD", "Invalid adaptive camera index");
+    keFieldTried[cameraAttempt] = true;
+'''
+FIELD_VALUE_OLD = "          ++keProbeValid;\n"
+FIELD_VALUE_NEW = FIELD_VALUE_OLD + "          keFieldValue[cameraAttempt] = probeFraction;\n"
+FIELD_EDITS = ((FIELD_SETUP_OLD, FIELD_SETUP_NEW), (FIELD_LOOP_OLD, FIELD_LOOP_NEW),
+               (FIELD_VALUE_OLD, FIELD_VALUE_NEW))
+
+
+def normalize_field(src):
+    if FIELD_MARKER not in src:
+        return src
+    for old, new in FIELD_EDITS:
+        if src.count(new) != 1:
+            raise ValueError("Partial adaptive camera field")
+        src = src.replace(new, old, 1)
+    return src
+
+
 def normalize_capture(src):
+    src = normalize_field(src)
     if MARKER not in src:
         return src
     for old, new in EDITS:
@@ -139,8 +218,12 @@ def install_avf_camera(source: Path):
     src = raw.replace(b"\r\n", b"\n").decode("utf-8")
     if MARKER in src:
         normalize_capture(src)
-        return False
-    for old, new in EDITS:
+        if FIELD_MARKER in src:
+            return False
+        edits = FIELD_EDITS
+    else:
+        edits = EDITS + FIELD_EDITS
+    for old, new in edits:
         if src.count(old) != 1:
             raise ValueError(f"AVF camera anchor missing/ambiguous: {old[:90]!r}")
         src = src.replace(old, new, 1)
