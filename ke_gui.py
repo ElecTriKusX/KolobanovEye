@@ -2,6 +2,7 @@
 import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -47,7 +48,7 @@ class App:
         self.root = root
         root.title('KolobanovEye 2.0 — генератор датасета')
         root.geometry('1150x800')
-        root.minsize(920, 650)
+        root.minsize(1000, 680)
         self.events = queue.Queue()
         self.process = None
         self.running = False
@@ -206,6 +207,8 @@ class App:
         ttk.Button(buttons, text='Копировать журнал', command=self.copy_log).pack(side='left')
         self.state = tk.StringVar(value='Готово')
         ttk.Label(main, textvariable=self.state).pack(anchor='w')
+        self.progress = ttk.Progressbar(main, mode='determinate', maximum=1, value=0)
+        self.progress.pack(fill='x', pady=(3, 0))
         journal = ttk.Frame(main)
         journal.pack(fill='both', expand=True, pady=(4, 0))
         self.log = tk.Text(journal, height=10, wrap='word', state='disabled')
@@ -438,6 +441,14 @@ class App:
         if not data['map_ids']:
             raise ValueError('Выберите хотя бы одну карту для генерации')
         data['map_id'] = data['map_ids'][0]
+        if data['smart_placement_cache']:
+            required = ['placement-candidates.json', 'objects-native.tsv']
+            if data['avf_probe_size']:
+                required.append('objects.jsonl')
+            missing = [Path(mid).stem for mid in data['map_ids'] if not all(
+                (Path(data['smart_placement_cache'])/Path(mid).stem/name).is_file() for name in required)]
+            if missing:
+                raise ValueError('Кэш умной расстановки не содержит выбранные карты: ' + ', '.join(missing))
         return validate_config(data)
 
     def open_config(self):
@@ -491,12 +502,14 @@ class App:
             cmd.append('--replace-raw')
         self.running = True
         self.run_button.config(state='disabled')
-        self.state.set(f"Генерация {len(data['map_ids'])} карт → dataset/raw")
+        self.progress.configure(maximum=data['count'], value=0)
+        self.state.set(f"Генерация: 0/{data['count']} кадров, карт: {len(data['map_ids'])}")
         threading.Thread(target=self.worker, args=(data, cmd), daemon=True).start()
 
     def start_tool(self, script, arguments):
         if self.running: return
         self.running = True; self.run_button.config(state='disabled'); self.state.set('Проверка выполняется…')
+        self.progress.configure(maximum=1, value=0)
         cmd = [sys.executable, '-u', '-m', f'tools.{Path(script).stem}', *arguments]
         threading.Thread(target=self.tool_worker, args=(cmd,), daemon=True).start()
 
@@ -532,9 +545,18 @@ class App:
                 kind, value = self.events.get_nowait()
                 if kind == 'line':
                     self.log.config(state='normal'); self.log.insert('end', value); self.log.see('end'); self.log.config(state='disabled')
+                    if '[KE] ONLINE_FRAME ' in value:
+                        match = re.search(r'accepted=(\d+)/(\d+).*?attempts=(\d+)', value)
+                        if match:
+                            accepted,total,attempts = map(int,match.groups())
+                            self.progress.configure(maximum=total,value=accepted)
+                            self.state.set(f'Генерация: {accepted}/{total} кадров · попыток: {attempts}')
+                    elif '[KE] ONLINE_OK ' in value:
+                        self.state.set('Квоты набраны; завершение экспорта…')
                 else:
                     self.running = False; self.run_button.config(state='normal')
                     if kind == 'success':
+                        self.progress.configure(value=self.progress.cget('maximum'))
                         self.state.set(f'Готово: {value}')
                         messagebox.showinfo('Готово', f'Кадры и метаданные: {value}\nCOCO: {value}\\annotations\\instances.json\n\nПроверьте manifest.json и visibility-quotas.json. При отключённых масках рамка приблизительная.')
                     else:
