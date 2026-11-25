@@ -433,8 +433,8 @@ def generate_online(cfg, run, raw, *, executor=None):
                 if scene_cache is not None and (unstable is not None or placement is not None or rejection is not None or prefilter is not None):
                     key=cache_keys.get(idx)
                     scene_cache.observe(key)
-                    if key is not None:
-                        record["scene_cache_replay"]={"key":key,"proposal_only":True}
+                    # Rejection records must remain byte-for-byte equivalent to
+                    # the re-parsed native metadata during final audit.
                 if guided:
                     cache_keys.pop(idx,None)
                     guided_fields.pop(idx,None)
