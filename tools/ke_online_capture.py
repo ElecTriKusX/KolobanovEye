@@ -256,18 +256,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                 report["validated_candidates"] = len(records)
                 for item in report["maps"]:
                     item["actual"] = planner.report["selected_by_map"][item["map_id"]]
-                with (run / "online-progress.jsonl").open("a", encoding="utf-8") as stream:
-                    stream.write(json.dumps({"task": number, "index": idx, "image_id": record["image_id"],
-                        "requested_bin": target, "measured_bin": measured,
-                        "map_id": mid, "selected": after, "deficit": planner.report["deficit"],
-                        "smart_placement":record.get("smart_placement"),
-                        "attempt_wall_seconds":round(time.monotonic()-attempt_started,4),
-                        "deficit_by_map": planner.report["deficit_by_map"]}) + "\n")
-                write_json(run / "manifest.json", report)
-                print(f'[KE] ONLINE_FRAME task={number} index={idx} map={mid} '
-                      f'accepted={after}/{cfg["count"]} candidates={report["candidate_frames"]} '
-                      f'depth_rejected={len(rejected)} placement_rejected={len(placement_rejected)} '
-                      f'stability_rejected={len(stability_rejected)} attempts={report["attempted_candidates"]}', flush=True)
+                attempt_wall_seconds = round(time.monotonic()-attempt_started,4)
                 warmup_attempts = report["candidate_frames"] + len(stability_rejected)
                 if consecutive_unstable >= 3 or (warmup_attempts >= 30 and 10 * len(stability_rejected) > warmup_attempts):
                     raise ValueError("STABILITY: systematic frame instability (3 consecutive or >10% after 30 warmups)")
@@ -292,6 +281,22 @@ def generate_online(cfg, run, raw, *, executor=None):
                     publish(feedback / f"decision_{idx+1}.txt",
                             f"{VISIBILITY_BINS.index(request[1]) if same else -1}\n")
                 decision_published = time.monotonic()
+                # Durable candidate journal, validation, quota credit and abort guards
+                # precede the decision. Cosmetic progress and manifest can overlap
+                # native work without changing the one-request protocol.
+                with (run / "online-progress.jsonl").open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps({"task": number, "index": idx, "image_id": record["image_id"],
+                        "requested_bin": target, "measured_bin": measured,
+                        "map_id": mid, "selected": after, "deficit": planner.report["deficit"],
+                        "smart_placement":record.get("smart_placement"),
+                        "attempt_wall_seconds":attempt_wall_seconds,
+                        "deficit_by_map": planner.report["deficit_by_map"]}) + "\n")
+                write_json(run / "manifest.json", report)
+                print(f'[KE] ONLINE_FRAME task={number} index={idx} map={mid} '
+                      f'accepted={after}/{cfg["count"]} candidates={report["candidate_frames"]} '
+                      f'depth_rejected={len(rejected)} placement_rejected={len(placement_rejected)} '
+                      f'stability_rejected={len(stability_rejected)} attempts={report["attempted_candidates"]}', flush=True)
+                reporting_finished = time.monotonic()
                 with (run / "online-timing.jsonl").open("a", encoding="utf-8") as stream:
                     stream.write(json.dumps({"task": number, "index": idx, "map_id": mid,
                         "requested_bin": target, "measured_bin": measured,
@@ -302,6 +307,8 @@ def generate_online(cfg, run, raw, *, executor=None):
                         "scheduler_ms": round(1000*(scheduler_finished-bookkeeping_finished), 3),
                         "decision_publish_ms": round(1000*(decision_published-scheduler_finished), 3),
                         "python_turnaround_ms": round(1000*(decision_published-ready_observed), 3),
+                        "post_decision_reporting_ms": round(1000*(reporting_finished-decision_published), 3),
+                        "decision_sent": idx + 1 < cap,
                         "residency_attempts": residency_attempts, "residency_misses": residency_misses,
                         "prefer_current_map": prefer_current,
                         "continue_same_task": same, "switch_map": request is not None and request[0] != mid}) + "\n")
