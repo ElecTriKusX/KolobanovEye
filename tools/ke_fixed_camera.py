@@ -143,7 +143,11 @@ def read_fixed_final(blk, fixed):
     measured=fixed["estimate"] is not None
     if selected!=(measured and attempt==0):
         raise ValueError("Inconsistent fixed camera selection")
-    result={"selected":selected,"candidate_index":0 if measured else None}
+    hits=int(field("fixed_group_edge_hits","i"))
+    if not 0<=hits<=2*256*256 or (not measured and hits):
+        raise ValueError("Invalid fixed group edge count")
+    result={"selected":selected,"candidate_index":0 if measured else None,
+            "depth_edge_hits":hits}
     if measured:
         eye,look=point("fixed_group_eye"),point("fixed_group_look_at")
         planned=fixed["camera"]["eye_xz"]
@@ -160,3 +164,34 @@ def read_fixed_final(blk, fixed):
                           actual_azimuth_deg=math.degrees(math.atan2(dx,dz)),
                           actual_eye=list(eye),actual_look_at=list(look))
     return result
+
+
+def depth_edge_hits(scene,model,width,height,zn=.2,zf=20000.):
+    """Reference: count depth discontinuities that cross a model silhouette.
+
+    Zero reverse-Z is valid environment clear depth; a zero model pixel
+    is outside the isolated silhouette. Only count right/down pairs once.
+    """
+    if width<1 or height<1 or len(scene)!=width*height or len(model)!=len(scene):
+        raise ValueError("Invalid depth dimensions")
+    if not 0<zn<zf:
+        raise ValueError("Invalid perspective")
+    def valid(d,allow_zero):
+        return math.isfinite(d) and (0<=d if allow_zero else 0<d) and d<=1
+    def linear(d):
+        return zn*zf/(zn+d*(zf-zn))
+    def visible(i):
+        m,e=model[i],scene[i]
+        return e<=m+max(1e-7,1e-4*max(m,e))
+    def crosses(i,j):
+        if not all(valid(scene[k],True) and valid(model[k],False) for k in (i,j)):
+            return False
+        a,b=linear(scene[i]),linear(scene[j])
+        return abs(a-b)>max(.6,.06*min(a,b)) and visible(i)!=visible(j)
+    count=0
+    for y in range(height):
+        for x in range(width):
+            i=y*width+x
+            if x+1<width: count+=int(crosses(i,i+1))
+            if y+1<height: count+=int(crosses(i,i+width))
+    return count
