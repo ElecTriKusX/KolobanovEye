@@ -318,6 +318,28 @@ PROJECTION_FIX = (
 BUILD_FIXES["render"] += (PROJECTION_FIX,)
 
 
+# Counter buffers are bound directly via d3d::set_rwbuffer; they never need
+# a managed texture ID. UniqueBuf registers names, so four equal names alias
+# the same registry entry and cause a fatal refcount assertion on close.
+# BufPtr owns the actual Sbuffer without managed registration.
+RESOURCE_FIXES = (
+    ("    UniqueBuf counters;\n", "    BufPtr counters; // [KE] AVF_UNMANAGED_COUNTERS_V6\n"),
+    ("""    if (!q.counters)
+      q.counters = dag::buffers::create_ua_structured_readback(sizeof(uint32_t), 4, "ke_avf_counts");""",
+     """    if (!q.counters)
+    {
+      static const char *const names[4] = {
+        "ke_avf_counts_0", "ke_avf_counts_1", "ke_avf_counts_2", "ke_avf_counts_3"
+      };
+      q.counters = dag::buffers::create_ua_structured_readback(sizeof(uint32_t), 4, names[slot]);
+    }"""),
+    ("    auto *buf = q.counters.getBuf();", "    auto *buf = q.counters.get();"),
+    ("lock_sbuffer<const uint32_t>(q.counters.getBuf(),", "lock_sbuffer<const uint32_t>(q.counters.get(),"),
+)
+BUILD_FIXES["render"] += RESOURCE_FIXES
+
+
+
 
 def reverse_build_fixes(src, key):
     # An older checkout may lack later chained edits. Undo only present
