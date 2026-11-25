@@ -74,6 +74,23 @@ class AVFCompletionContracts(unittest.TestCase):
         self.assertEqual(apply_build_fixes(fixed, "render"), fixed)
         self.assertEqual(reverse_build_fixes(fixed, "render"), base)
 
+    def test_four_gpu_slots_have_independent_unmanaged_counter_buffers(self):
+        from tools.ke_dagor_avf_gpu import MEMBERS, RESOURCE_FIXES, apply_build_fixes
+        base = SCENE_NEW + SERVICE_NEW + MEMBERS
+        fixed = apply_build_fixes(base, "render")
+        self.assertIn("BufPtr counters;", fixed)
+        self.assertNotIn("UniqueBuf counters;", fixed)
+        self.assertNotIn("q.counters.getBuf()", fixed)
+        for slot in range(4):
+            self.assertIn(f'"ke_avf_counts_{slot}"', fixed)
+        self.assertIn("4, names[slot]", fixed)
+        previous = fixed
+        for old, new in reversed(RESOURCE_FIXES):
+            self.assertEqual(previous.count(new), 1)
+            previous = previous.replace(new, old, 1)
+        self.assertEqual(apply_build_fixes(previous, "render"), fixed)
+        self.assertEqual(apply_build_fixes(fixed, "render"), fixed)
+
     def test_gpu_skips_cpu_depth_readback_and_verification_uses_same_buffers(self):
         self.assertIn("return keSubmitProbe(slot, sceneTex, modelTex, width, height);", SCENE_NEW)
         self.assertLess(SCENE_NEW.index("return keSubmitProbe(slot"), SCENE_NEW.index("if (!read(sceneTex"))
