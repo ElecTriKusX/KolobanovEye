@@ -60,11 +60,33 @@ def read_occlusion_proxy(blk, target, attempts, visibility, *, probe_size=0):
 def summarize_search(records):
     by_target = {name: {"attempted": 0, "matched": 0} for name in VISIBILITY_BINS}
     errors = []
+    avf_errors, avf_attempts, avf_valid, avf_fallbacks = [], 0, 0, 0
+    avf_by_target = {name: {'valid_selected': 0, 'predicted_target': 0, 'matched': 0,
+                            'fallbacks': 0} for name in VISIBILITY_BINS}
     for record in records:
         item = record["occlusion_search"]
         group = by_target[item["target"]]
         group["attempted"] += 1
         group["matched"] += int(item["target_match"])
         errors.append(item["absolute_error"])
-    return {"method": "collision_proxy_v1", "by_target": by_target,
-            "candidates": len(errors), "mean_absolute_error": sum(errors) / len(errors) if errors else None}
+        avf = item.get("avf")
+        if avf is not None:
+            avf_attempts += avf["attempts"]
+            avf_valid += avf["valid"]
+            group = avf_by_target[item["target"]]
+            if avf["estimated_fraction"] is None:
+                avf_fallbacks += 1
+                group["fallbacks"] += 1
+            else:
+                avf_errors.append(avf["absolute_error"])
+                group["valid_selected"] += 1
+                group["predicted_target"] += int(visibility_bin(avf["estimated_fraction"]) == item["target"])
+                group["matched"] += int(item["target_match"])
+    result = {"method": "collision_proxy_v1", "by_target": by_target,
+              "candidates": len(errors), "mean_absolute_error": sum(errors) / len(errors) if errors else None}
+    if avf_attempts:
+        result["avf"] = {"method": "opaque_probe_v1", "probes_attempted": avf_attempts,
+                         "probes_valid": avf_valid, "fallback_frames": avf_fallbacks,
+                         "valid_selected_frames": len(avf_errors), "by_target": avf_by_target,
+                         "mean_absolute_error": sum(avf_errors)/len(avf_errors) if avf_errors else None}
+    return result
