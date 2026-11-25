@@ -50,6 +50,8 @@ class SceneIndexes:
 def family_for(target,attempt):
     if target=="open":
         return "explore"
+    if attempt<1:
+        raise ValueError('Non-open family counter must be positive')
     # A separate, one-based non-open counter per map is used by the caller.
     # Missing geometry falls back, not a failed or fabricated family.
     return FAMILIES[(attempt-1)%len(FAMILIES)]
@@ -89,7 +91,7 @@ def family_fields(base,index,bounds,points,target,cfg,seed,family):
     if family=="explore":
         return [base for _ in points]
     if family=="terrain":
-        # Keep angular coverage; lower two rings without altering their
+        # Keep angular coverage; lower the rings without altering their
         # horizontal distance or planned angular coordinates.
         lo,hi=cfg["camera_height_min"],cfg["camera_height_max"]
         rings=sorted({c["avf_ring"] for c in base})
@@ -109,3 +111,49 @@ def count_family(stats, family, target, measured=None, accepted=False):
         row["quota_gain_attempts"]+=int(accepted)
         bins=row["actual_bins"]
         bins[measured]=bins.get(measured,0)+1
+
+
+def read_aperture_hits(blk,measured):
+    import re
+    matches=re.findall(r"^fixed_group_aperture_hits:i=(\d+)\s*$",blk,re.M)
+    if len(matches)!=1:
+        raise ValueError("Missing or duplicate aperture evidence")
+    hits=int(matches[0])
+    if hits>512 or (not measured and hits):
+        raise ValueError("Invalid aperture evidence")
+    return hits
+
+
+def aperture_scanlines(scene,model,width,height,zn=.2,zf=20000.):
+    """Reference for native depth topology; counts lines, not objects."""
+    if width<1 or height<1 or len(scene)!=width*height or len(model)!=len(scene) or not 0<zn<zf:
+        raise ValueError("Invalid depth dimensions/projection")
+    def valid(i):
+        return (math.isfinite(scene[i]) and 0<=scene[i]<=1 and
+                math.isfinite(model[i]) and 0<model[i]<=1)
+    def visible(i):
+        e,m=scene[i],model[i]
+        return e<=m+max(1e-7,1e-4*max(e,m))
+    def edge(i,j):
+        a,b=(zn*zf/(zn+scene[k]*(zf-zn)) for k in (i,j))
+        return abs(a-b)>max(.6,.06*min(a,b))
+    def line(start,stride,n):
+        started=False
+        run=0
+        for j in range(1,n):
+            i,k=start+(j-1)*stride,start+j*stride
+            if not (valid(i) and valid(k)):
+                started=False; run=0; continue
+            a,b=visible(i),visible(k)
+            if not a and b:
+                started=edge(i,k); run=1
+            elif a and b and started:
+                run+=1
+            elif a and not b:
+                if started and run>=2 and edge(i,k):
+                    return 1
+                started=False; run=0
+            elif not b:
+                started=False; run=0
+        return 0
+    return sum(line(y*width,1,width) for y in range(height))+sum(line(x,width,height) for x in range(width))
