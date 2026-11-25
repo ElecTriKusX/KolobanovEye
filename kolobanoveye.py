@@ -1259,6 +1259,10 @@ def ensure_level_settings_accessor(header):
 def build(dagor, ooz=None):
     if os.name != "nt":
         raise ValueError("Build requires Windows x64")
+    if not dagor.is_dir():
+        raise ValueError(f"Dagor directory missing: {dagor}")
+    if ooz is not None and not ooz.is_dir():
+        raise ValueError(f"OOZ checkout directory missing: {ooz}. Omit --ooz to use a verified local vendor snapshot, if available.")
     actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=dagor, text=True).strip()
     if actual != REV:
         raise ValueError(f"Expected Dagor {REV}, got {actual}")
@@ -1285,7 +1289,11 @@ def build(dagor, ooz=None):
     args = [jam, "-sRoot=../..", "-sPlatformArch=x86_64", "-sConfig=dev"]
     if use_ooz:
         require_file(dagor / BIN / "dumpGrp-dev.exe")
-        library = prepare_ooz(ooz, logs)
+        print(f"[KE] OOZ_PREPARE source={ooz if ooz is not None else OOZ_VENDOR}", flush=True)
+        try:
+            library = prepare_ooz(ooz, logs)
+        except OSError as exc:
+            raise ValueError(f"OOZ preparation failed: source={ooz if ooz is not None else OOZ_VENDOR}; work={logs / 'ooz-compiled'}; {exc}") from exc
         args += ["-sUseOoz=yes", f"-sOozLib={dagor_path(library)}"]
     editor_log = logs / ("editor-ooz.log" if use_ooz else "editor.log")
     run_logged([*args, "-f", "sceneTools/daEditorX/jamfile-editor"], editor_log, dagor / "prog/tools")
