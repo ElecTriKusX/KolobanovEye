@@ -6,8 +6,9 @@ SETUP_OLD = "  int cameraAttemptUsed = -1;\n"
 SETUP_NEW = SETUP_OLD + r'''  // [KE] AVF_CAMERA_QUEUE_V4
   const char *keBackend = config.getStr("avf_backend", "gpu");
   const bool keGpuProbe = keProbeSize && strcmp(keBackend, "gpu")==0;
+  const bool keVerifyProbe = keProbeSize && strcmp(keBackend,"verify")==0;
   const int keBatchLimit = config.getInt("avf_batch_size", 4);
-  if (keProbeSize && ((strcmp(keBackend,"cpu") && strcmp(keBackend,"gpu")) ||
+  if (keProbeSize && ((strcmp(keBackend,"cpu") && strcmp(keBackend,"gpu") && strcmp(keBackend,"verify")) ||
       keBatchLimit<1 || keBatchLimit>4))
     return fail("AVF_QUEUE", "Invalid backend or batch size");
   struct KeCandidateProbe
@@ -61,7 +62,7 @@ EDITS = (
 """),
     ("        ++keProbeAttempts;\n", "        ++keProbeAttempts;\n        bool keSubmitted=false, keReady=false;\n"),
     ("              probeW, probeH, probeLod, probeAmodal, probeVisible, probeMissing);\n",
-     "              probeW, probeH, probeLod, probeAmodal, probeVisible, probeMissing, keGpuProbe ? keQueuedCount : -1);\n"
+     "              probeW, probeH, probeLod, probeAmodal, probeVisible, probeMissing, keGpuProbe ? keQueuedCount : (keVerifyProbe ? -2 : -1));\n"
      "            keSubmitted = keGpuProbe && probeOk;\n"),
     ("""            if (probeOk && plugin->getKolobanovEyeDrawCount() && ready() &&
                 get_managed_textures_streaming_pending_count() == 0)
@@ -84,7 +85,7 @@ EDITS = (
     ("  if (cameraAttemptUsed < 0)\n", "  if (keGpuProbe && keQueuedCount) keDrainProbes();\n  if (cameraAttemptUsed < 0)\n"),
     ('      result.setInt("avf_probe_size", keProbeSize);\n',
      '      result.setInt("avf_probe_size", keProbeSize);\n'
-     '      result.setStr("avf_backend", keGpuProbe ? "gpu" : "cpu");\n'
+     '      result.setStr("avf_backend", keGpuProbe ? "gpu" : (keVerifyProbe ? "verify" : "cpu"));\n'
      '      result.setInt("avf_batch_size", keGpuProbe ? keBatchLimit : 1);\n'),
 )
 
