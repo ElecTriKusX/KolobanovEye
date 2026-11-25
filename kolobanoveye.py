@@ -902,6 +902,8 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
     install_object_scan(dagor)
     from tools.ke_dagor_smart_placement import install_smart_placement
     install_smart_placement(capture_cpp)
+    from tools.ke_dagor_avf_camera import install_avf_camera
+    install_avf_camera(capture_cpp)
     from tools.ke_ri_scene_lifetime import install_scene_lifetime
     install_scene_lifetime(map_cpp)
     guard_impostor_shadow_atlas_slices(dagor)
