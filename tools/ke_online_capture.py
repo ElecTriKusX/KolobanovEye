@@ -55,6 +55,7 @@ def generate_online(cfg, run, raw, *, executor=None):
     from kolobanoveye import (inspect, require_file, run_logged, parse_resources,
         choose_resources, dagor_path, editor_failure, BIN, GRP)
 
+    from tools.ke_guided_prerender import allow_skip, read_prerender_rejection
     started = time.monotonic()
     run, raw = Path(run).resolve(), Path(raw).resolve()
     game, dagor = Path(cfg["game"]).resolve(), Path(cfg["dagor"]).resolve()
@@ -99,13 +100,14 @@ def generate_online(cfg, run, raw, *, executor=None):
         write_json(run/"smart-placement-banks.json",bank_info)
     write_json(run / "generation-config.json", cfg)
     write_json(run / "manifest.json", report)
-    tasks, validated, rejected, placement_rejected, stability_rejected = [], {}, {}, {}, {}
+    tasks, validated, rejected, placement_rejected, stability_rejected, guided_rejected = [], {}, {}, {}, {}, {}
     records = []
     no_gain = 0
     consecutive_mismatch = 0
     report["depth_mismatch_rejections"] = 0
     report["placement_rejections"] = 0
     report["stability_rejections"] = 0
+    report["guided_prerender_rejections"] = 0
     consecutive_unstable = 0
     report["attempted_candidates"] = 0
     # A single miss is not stagnation. Allow several map-sized windows of
@@ -173,6 +175,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                     stream.write(f'smart_placement:b=yes\nsmart_bounds_min:p2={xmin:.9f},{zmin:.9f}\n'
                                  f'smart_bounds_max:p2={xmax:.9f},{zmax:.9f}\n')
                 task["smart_points"] = {}
+                task["guided_skip"] = {}
                 guided_fields = {}
                 selected_fields = {}
                 def publish_points(frame_index, requested):
@@ -185,7 +188,10 @@ def generate_online(cfg, run, raw, *, executor=None):
                         fields = candidate_fields(task["cameras"][frame_index],occluders[mid],sampler.bounds,
                             points,requested,cfg,f'{task["seed"]}:{frame_index}')
                         guided_fields[frame_index] = fields
+                        skip = cfg.get("guided_prerender","off") == "conservative" and allow_skip(planner,mid,requested)
+                        task["guided_skip"][frame_index] = skip
                         block += "guided_sampling:b=yes\n"+fields_block(fields)
+                        block += f"guided_skip_open:b={'yes' if skip else 'no'}\n"
                     publish(feedback/f"smart_{frame_index}.blk",block)
                     with (run/"smart-placement-plans.jsonl").open("a",encoding="utf-8") as stream:
                         stream.write(json.dumps({"task":number,"index":frame_index,"map_id":mid,
@@ -213,11 +219,22 @@ def generate_online(cfg, run, raw, *, executor=None):
                 unstable = read_stability_rejection(cfg, raw, task, idx, blk)
                 placement = read_placement_rejection(cfg, raw, task, idx, blk)
                 rejection = read_depth_rejection(cfg, raw, task, idx, blk)
+                prefilter = read_prerender_rejection(cfg,raw,task,idx,blk)
+                if sum(x is not None for x in (unstable,placement,rejection,prefilter)) > 1:
+                    raise ValueError("Conflicting native rejection records")
                 if unstable is None and placement is None:
                     consecutive_unstable = 0
                 rejection_checked = time.monotonic()
                 before = planner.report["selected"]
-                if unstable is not None:
+                if prefilter is not None:
+                    record = prefilter
+                    guided_rejected[record["image_id"]] = record
+                    task.setdefault("guided_rejected_indices",set()).add(idx)
+                    planner.finish()
+                    measured = "reject_guided_prerender"
+                    journal_name = "rejected-frames.jsonl"
+                    print(f'[KE] ONLINE_REJECT task={number} index={idx} reason=redundant_open_probe',flush=True)
+                elif unstable is not None:
                     record = unstable
                     stability_rejected[record["image_id"]] = record
                     task.setdefault("stability_rejected_indices", set()).add(idx)
@@ -291,7 +308,8 @@ def generate_online(cfg, run, raw, *, executor=None):
                 report["candidate_frames"] = len(records) + len(rejected)
                 report["placement_rejections"] = len(placement_rejected)
                 report["stability_rejections"] = len(stability_rejected)
-                report["attempted_candidates"] = report["candidate_frames"] + len(placement_rejected) + len(stability_rejected)
+                report["guided_prerender_rejections"] = len(guided_rejected)
+                report["attempted_candidates"] = report["candidate_frames"] + len(placement_rejected) + len(stability_rejected) + len(guided_rejected)
                 report["validated_candidates"] = len(records)
                 for item in report["maps"]:
                     item["actual"] = planner.report["selected_by_map"][item["map_id"]]
@@ -334,7 +352,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                 print(f'[KE] ONLINE_FRAME task={number} index={idx} map={mid} '
                       f'accepted={after}/{cfg["count"]} candidates={report["candidate_frames"]} '
                       f'depth_rejected={len(rejected)} placement_rejected={len(placement_rejected)} '
-                      f'stability_rejected={len(stability_rejected)} attempts={report["attempted_candidates"]}', flush=True)
+                      f'stability_rejected={len(stability_rejected)} guided_rejected={len(guided_rejected)} attempts={report["attempted_candidates"]}', flush=True)
                 reporting_finished = time.monotonic()
                 with (run / "online-timing.jsonl").open("a", encoding="utf-8") as stream:
                     stream.write(json.dumps({"task": number, "index": idx, "map_id": mid,
@@ -364,7 +382,7 @@ def generate_online(cfg, run, raw, *, executor=None):
             plan["online_occlusion_targets"] = task["occlusion_targets"][:task["count"]]
             write_json(plan_path, plan)
             done = mailbox / f"done_{number}.txt"
-            await_value(process, lambda: True if done.is_file() and done.read_bytes() == b"ok\n" else None,
+            await_value(process, lambda: True if read_ready_acknowledgement(done) else None,
                         cfg["timeout"], f"task {number} acknowledgement")
         publish(mailbox / f"task_{len(tasks)+1}.blk", "stop:b=yes\n")
         exit_code = process.wait(timeout=cfg["timeout"])
@@ -375,7 +393,7 @@ def generate_online(cfg, run, raw, *, executor=None):
         # Verify native task sequence/stability/overview even though each
         # RGB/mask/BLK was already validated before the next decision.
         pool = collect_candidates(cfg, run, raw, tasks, prevalidated=validated, rejected=rejected,
-                                  placement_rejected=placement_rejected, stability_rejected=stability_rejected)
+                                  placement_rejected=placement_rejected, stability_rejected=stability_rejected, guided_rejected=guided_rejected)
         selected, quota = choose_candidates(pool[0], targets, map_targets)
         if len(selected) != planner.report["selected"]:
             raise ValueError("Online planner disagrees with final full-pool selection")
@@ -384,6 +402,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                      candidate_budget=sum(budget.values()), tasks=len(tasks),
                      depth_mismatch_rejections=len(rejected), placement_rejections=len(placement_rejected),
                      stability_rejections=len(stability_rejected),
+                     guided_prerender_rejections=len(guided_rejected),
                      attempted_candidates=report["attempted_candidates"], rendered_candidates=report["candidate_frames"])
         write_json(run / "visibility-quotas.json", quota)
         report["stop_reason"] = stop_reason
