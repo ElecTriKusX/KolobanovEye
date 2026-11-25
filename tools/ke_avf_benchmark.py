@@ -71,6 +71,8 @@ def summarize_run(path, native_log=None):
             "valid_log_entries": sum(int(m[2]) for m in probes),
             "latency_ms": distribution([float(m[4]) for m in probes]),
             "roi_entries": sum(m[1] == "roi" for m in probes),
+            "gpu_verify_ok": len(re.findall(r"\[KE\] AVF_GPU_VERIFY_OK\b", native)),
+            "gpu_verify_fail": len(re.findall(r"\[KE\] AVF_GPU_VERIFY_FAIL\b", native)),
         }
         # Use one supplied native log only: do not aggregate duplicate logs.
         # MAP_BEGIN is emitted twice in debug logs (raw and CON). Prefer the
