@@ -102,6 +102,9 @@ EDGE_EDITS = (
 )
 
 def normalize_edge_capture(src):
+    from tools.ke_dagor_depth_proposals import MARKER as WORLD_MARKER, CAPTURE_EDITS, reverse_successors
+    if WORLD_MARKER in src:
+        src=reverse_successors(src,CAPTURE_EDITS)
     if EDGE_MARKER not in src:
         return src
     for old,new in reversed(EDGE_EDITS):
@@ -137,6 +140,8 @@ def install_fixed_final(source: Path):
         if src.count(old)!=1:
             raise ValueError(f"Missing fixed edge capture anchor: {old[:100]!r}")
         src=src.replace(old,new,1)
+    from tools.ke_dagor_depth_proposals import CAPTURE_EDITS, apply_successors
+    src=apply_successors(src,CAPTURE_EDITS)
     updated=src.encode("utf-8").replace(b"\n",b"\r\n" if b"\r\n" in raw else b"\n")
     if updated==raw:
         return False
