@@ -24,7 +24,7 @@ DEFAULTS = {
     'min_warmup_renders': 8, 'wait_sky_convergence': False, 'wait_frame_stability': True,
     'screen_position_weights': DEFAULT_WEIGHTS.copy(), 'capture_visibility_masks': False,
     'enforce_visibility_quotas': False, 'visibility_weights': DEFAULT_VISIBILITY_WEIGHTS.copy(),
-    'visibility_candidate_multiplier': 5, 'search_occlusion': False, 'avf_probe_size': 0, 'avf_region': 'roi', 'avf_reuse_map': True, 'avf_backend': 'gpu', 'avf_batch_size': 4, 'guided_sampling': 'off',
+    'visibility_candidate_multiplier': 5, 'search_occlusion': False, 'avf_probe_size': 0, 'avf_region': 'roi', 'avf_reuse_map': True, 'avf_backend': 'gpu', 'avf_batch_size': 4, 'guided_sampling': 'off', 'guided_prerender': 'off',
     'refill_batch_per_map': 256, 'refill_stall_rounds': 3, 'refill_max_rounds': 10000,
     'visibility_quota_mode': 'refill', 'smart_placement_cache': '',
     'keep_open': False, 'render_debug': False, 'capture_last_clip': False, 'clipmap_feedback': 'software', 'timeout': 360,
@@ -96,6 +96,10 @@ def validate_config(raw):
         raise ValueError('AVF: backend cpu/gpu/verify, размер группы 1–4')
     if c['avf_region'] not in ('full', 'roi'):
         raise ValueError('avf_region: full или roi')
+    if c['guided_prerender'] not in ('off', 'conservative'):
+        raise ValueError('guided_prerender: off или conservative')
+    if c['guided_prerender'] != 'off' and c['guided_sampling'] != 'obstacle':
+        raise ValueError('Предварительная отбраковка требует направленный поиск obstacle')
     if c['guided_sampling'] not in ('off', 'obstacle'):
         raise ValueError('guided_sampling: off или obstacle')
     if c['guided_sampling'] != 'off' and not c['avf_probe_size']:
