@@ -914,6 +914,10 @@ def apply_dagor_patches(dagor, *, with_ooz=False):
     install_guided(capture_cpp)
     from tools.ke_guided_prerender import install_prerender
     install_prerender(capture_cpp)
+    from tools.ke_dagor_fixed_depth import install_fixed_renderer
+    from tools.ke_dagor_fixed_camera import install_fixed_capture
+    install_fixed_renderer(dagor)
+    install_fixed_capture(capture_cpp)
     from tools.ke_ri_scene_lifetime import install_scene_lifetime
     install_scene_lifetime(map_cpp)
     guard_impostor_shadow_atlas_slices(dagor)
