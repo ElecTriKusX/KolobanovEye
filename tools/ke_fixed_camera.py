@@ -120,3 +120,43 @@ def read_fixed_metadata(blk,group,selected):
             "valid_placements":placed,"valid_probes":valid,
             "environment_passes":passes,"estimate":estimate if valid else None,
             "selected_index":selected,"camera":group}
+
+
+def read_fixed_final(blk, fixed):
+    """Confirm actual eye and look-at against the preselection, not a plan."""
+    import re
+    def field(name,kind):
+        values=re.findall(r"^"+name+":"+kind+r"=([^\r\n]+)",blk,re.M)
+        if len(values)!=1:
+            raise ValueError("Missing or duplicate fixed final field: "+name)
+        return values[0].strip()
+    def point(name):
+        p=tuple(float(x) for x in field(name,"p3").split(","))
+        if len(p)!=3 or not all(map(math.isfinite,p)):
+            raise ValueError("Invalid point: "+name)
+        return p
+    flag=field("fixed_camera_selected","b")
+    if flag not in ("yes","no","true","false","1","0"):
+        raise ValueError("Invalid fixed camera selection flag")
+    selected=flag in ("yes","true","1")
+    attempt=int(field("camera_attempt","i"))
+    measured=fixed["estimate"] is not None
+    if selected!=(measured and attempt==0):
+        raise ValueError("Inconsistent fixed camera selection")
+    result={"selected":selected,"candidate_index":0 if measured else None}
+    if measured:
+        eye,look=point("fixed_group_eye"),point("fixed_group_look_at")
+        planned=fixed["camera"]["eye_xz"]
+        if max(abs(eye[0]-planned[0]),abs(eye[2]-planned[1]))>.1:
+            raise ValueError("Native fixed camera differs from published eye")
+        result.update(preselected_eye=list(eye),preselected_look_at=list(look))
+        if selected:
+            for name,expected in (("eye",eye),("look_at",look)):
+                if max(abs(a-b) for a,b in zip(point(name),expected))>.01:
+                    raise ValueError("Final camera differs from measured fixed view")
+            tank=point("tank_world")
+            dx,dz=eye[0]-tank[0],eye[2]-tank[2]
+            result.update(actual_horizontal_distance=math.hypot(dx,dz),
+                          actual_azimuth_deg=math.degrees(math.atan2(dx,dz)),
+                          actual_eye=list(eye),actual_look_at=list(look))
+    return result
