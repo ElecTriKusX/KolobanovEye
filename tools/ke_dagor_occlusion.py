@@ -104,7 +104,9 @@ def install_occlusion_search(source: Path) -> bool:
     if MARKER in text:
         # The online successor replaces just the requested-target expression.
         from tools.ke_dagor_online import OLD_TARGET, NEW_TARGET
-        checked = text.replace(NEW_TARGET, OLD_TARGET, 1) if text.count(NEW_TARGET) == 1 else text
+        from tools.ke_dagor_avf_camera import normalize_capture
+        checked = normalize_capture(text)
+        checked = checked.replace(NEW_TARGET, OLD_TARGET, 1) if checked.count(NEW_TARGET) == 1 else checked
         if not all(checked.count(new) == 1 for _, new in EDITS):
             raise ValueError(f"Partial occlusion-search installation: {source}")
         return False
