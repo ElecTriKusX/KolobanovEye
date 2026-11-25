@@ -295,8 +295,9 @@ def normalize_roi(src):
 
 
 def normalize_capture(src):
+    from tools.ke_dagor_guided import normalize_guided
     from tools.ke_dagor_avf_batch import normalize_batch
-    src = normalize_field(normalize_roi(normalize_batch(src)))
+    src = normalize_field(normalize_roi(normalize_batch(normalize_guided(src))))
     if MARKER not in src:
         return src
     for old, new in EDITS:
