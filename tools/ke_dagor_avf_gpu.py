@@ -184,6 +184,94 @@ BUILD_FIXES = {
 }
 
 
+# Preserve the original patch literals for migration; diagnose each early exit
+# before accepting a collision fallback as a usable AVF measurement.
+RUNTIME_DIAGNOSTICS = (
+    ("""        width > 512 || height > 512 || !d3d::validatepersp(perspective))
+      return false;""",
+     """        width > 512 || height > 512 || !d3d::validatepersp(perspective))
+    {
+      debug("[KE] AVF_NATIVE_FAIL stage=precondition rtype=%d width=%d height=%d wk=%f hk=%f zn=%f zf=%f ox=%f oy=%f",
+        rtype,width,height,perspective.wk,perspective.hk,perspective.zn,perspective.zf,perspective.ox,perspective.oy);
+      return false;
+    }"""),
+    ("""      if (!d3d::setpersp(perspective, &projection))
+        return false;
+      d3d::settm(TM_WORLD, TMatrix::IDENT);""",
+     """      if (!d3d::setpersp(perspective, &projection))
+      {
+        debug("[KE] AVF_NATIVE_FAIL stage=initial_projection");
+        return false;
+      }
+      d3d::settm(TM_WORLD, TMatrix::IDENT);"""),
+    ("""      if (!renderMatrixOk)
+        return false;
+      d3d::settm(TM_VIEW, curView.tm);
+      if (!d3d::setpersp(perspective, &projection))
+        return false;""",
+     """      if (!renderMatrixOk)
+      {
+        debug("[KE] AVF_NATIVE_FAIL stage=before_render_matrix");
+        return false;
+      }
+      d3d::settm(TM_VIEW, curView.tm);
+      if (!d3d::setpersp(perspective, &projection))
+      {
+        debug("[KE] AVF_NATIVE_FAIL stage=restored_projection");
+        return false;
+      }"""),
+    ("""      if (!sceneTex)
+        return false;
+      // Queue the staging copy""",
+     """      if (!sceneTex)
+      {
+        debug("[KE] AVF_NATIVE_FAIL stage=scene_depth_missing");
+        return false;
+      }
+      // Queue the staging copy"""),
+    ("""      if (!modelTex)
+        return false;
+      if (slot >= 0)""",
+     """      if (!modelTex)
+      {
+        debug("[KE] AVF_NATIVE_FAIL stage=model_depth_missing");
+        return false;
+      }
+      if (slot >= 0)"""),
+    ("""      if (!read(sceneTex, sceneDepth) || !read(modelTex, modelDepth))
+        return false;""",
+     """      if (!read(sceneTex, sceneDepth))
+      {
+        debug("[KE] AVF_NATIVE_FAIL stage=scene_readback");
+        return false;
+      }
+      if (!read(modelTex, modelDepth))
+      {
+        debug("[KE] AVF_NATIVE_FAIL stage=model_readback");
+        return false;
+      }"""),
+    ("""      // An undersampled or inconsistent probe is unknown, not heavy overlap.
+      return amodal >= 16 && missing <= max(4, amodal / 20);""",
+     """      // An undersampled or inconsistent probe is unknown, not heavy overlap.
+      if (amodal < 16 || missing > max(4, amodal / 20))
+        debug("[KE] AVF_NATIVE_FAIL stage=depth_counts amodal=%d visible=%d missing=%d",amodal,visible,missing);
+      return amodal >= 16 && missing <= max(4, amodal / 20);"""),
+    ("""    if (!dynScene || !model || model->getCurrentLodNo() != lod)
+      return false;
+    d3d::GpuAutoLock gpuLock;
+    const bool ok = dynScene->probeKolobanovEyeOpaque""",
+     """    if (!dynScene || !model || model->getCurrentLodNo() != lod)
+    {
+      debug("[KE] AVF_NATIVE_FAIL stage=service_precondition scene=%d model=%d lod=%d current=%d",
+        int(dynScene!=nullptr),int(model!=nullptr),lod,model?model->getCurrentLodNo():-1);
+      return false;
+    }
+    d3d::GpuAutoLock gpuLock;
+    const bool ok = dynScene->probeKolobanovEyeOpaque"""),
+)
+BUILD_FIXES["render"] += RUNTIME_DIAGNOSTICS
+
+
 def apply_build_fixes(src, key):
     for old, new in BUILD_FIXES[key]:
         if src.count(new) == 1:
