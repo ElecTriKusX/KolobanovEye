@@ -91,6 +91,11 @@ def summarize_run(path, native_log=None):
             "tasks": manifest.get("tasks"), "map_begin_log_entries": loads,
             "actual_map_loads": actual_loads, "map_reuses": reuses,
             "backend": config.get("avf_backend"), "batch_size": config.get("avf_batch_size"),
+            "guided_sampling": config.get("guided_sampling","off"),
+            "guided_prerender": config.get("guided_prerender","off"),
+            "guided_prerender_rejections": manifest.get("guided_prerender_rejections",0),
+            "guided_prerender_probes": manifest.get("guided_prerender_probes",0),
+            "guided_prerender_disabled_maps": manifest.get("guided_prerender_disabled_maps",{}),
             "reuse_map_enabled": config.get("avf_reuse_map"),
             "probe_size": config.get("avf_probe_size", 0), "region": config.get("avf_region"),
             "host_turnaround_ms": distribution([r["python_turnaround_ms"] for r in timing
@@ -101,15 +106,17 @@ def summarize_run(path, native_log=None):
             "probe_log": probe_stats, "occlusion": search}, config
 
 
-def compare_runs(paths, logs=None):
+def compare_runs(paths, logs=None, *, compare_guided=False):
     logs = logs if logs is not None else [None]*len(paths)
     if len(logs) != len(paths) or not paths:
         raise ValueError("Specify one log per run, or no logs")
     rows, configs = [], []
+    ignored = IGNORED_CONFIG | ({"guided_sampling","guided_prerender"} if compare_guided else set())
     for path, log in zip(paths, logs):
         row, config = summarize_run(path, log)
         rows.append(row)
-        configs.append({k: v for k, v in config.items() if k not in IGNORED_CONFIG})
+        config = {"guided_sampling":"off","guided_prerender":"off",**config}
+        configs.append({k: v for k, v in config.items() if k not in ignored})
     differences = sorted(k for k in set().union(*(c.keys() for c in configs))
                          if any(c.get(k) != configs[0].get(k) for c in configs[1:]))
     baseline = rows[0]["seconds_per_accepted_frame"]
@@ -117,6 +124,7 @@ def compare_runs(paths, logs=None):
         rate = row["seconds_per_accepted_frame"]
         row["speedup_vs_first"] = baseline/rate if not differences and baseline and rate else None
     return {"comparable_config": not differences, "differing_config_keys": differences,
+            "compared_guided_modes": compare_guided,
             "all_complete": all(r["complete"] for r in rows), "runs": rows}
 
 
@@ -125,8 +133,9 @@ def main():
     parser.add_argument("runs", type=Path, nargs="+")
     parser.add_argument("--native-log", type=Path, action="append",
                         help="One native log for each run, in the same order")
+    parser.add_argument("--compare-guided", action="store_true", help="Allow explicit A/B comparison across directed sampling and prefilter modes")
     args = parser.parse_args()
-    print(json.dumps(compare_runs(args.runs, args.native_log), ensure_ascii=False, indent=2))
+    print(json.dumps(compare_runs(args.runs, args.native_log, compare_guided=args.compare_guided), ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
