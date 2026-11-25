@@ -23,7 +23,7 @@ NEW_LOAD = r'''  const bool keResidentEnabled = keResidentBatch && config.getInt
   }
   console->addMessage(ILogWriter::NOTE, "[KE] MAP_RESIDENCY action=%s", keMapReused ? "reuse" : "load");
 '''
-METHOD = "bool DagorEdAppWindow::runKolobanovEyeFrame(const char *config_path)"
+METHOD = "// [KE] ONLINE_FEEDBACK_V1\n"
 HELPER = r'''// [KE] AVF_MAP_RESIDENCY_V1
 namespace
 {
