@@ -175,6 +175,81 @@ EDITS = {
 }
 
 
+
+READBACK_MARKER = "// [KE] AVF_PAIRED_READBACK_V2"
+# Keep the V1 method literal for upgrading long-lived local Dagor sources.
+def paired_scene():
+    text = SCENE
+    replacements = (
+        ("    amodal = visible = missing = 0;\n",
+         "    " + READBACK_MARKER + "\n    amodal = visible = missing = 0;\n"),
+        ("      if (!keProbeTarget || keProbeTarget->getWidth() != width || keProbeTarget->getHeight() != height)\n",
+         "      if (!keProbeTarget || !keProbeModelTarget || keProbeTarget->getWidth() != width || keProbeTarget->getHeight() != height)\n"),
+        ('          deferred_mrt_cnt, deferred_mrt_fmts, TEXFMT_DEPTH32);\n      }',
+         '''          deferred_mrt_cnt, deferred_mrt_fmts, TEXFMT_DEPTH32);
+        keProbeModelTarget.reset();
+        keProbeModelTarget = eastl::make_unique<DeferredRenderTarget>("deferred_shadow_to_buffer",
+          "ke_avf_model", width, height, DeferredRT::StereoMode::MonoOrMultipass, 0,
+          deferred_mrt_cnt, deferred_mrt_fmts, TEXFMT_DEPTH32);
+      }'''),
+        ("      auto read = [&](Tab<float> &out) -> bool {\n        d3d::set_render_target();\n        Texture *texture = keProbeTarget->getDepth();",
+         "      auto read = [&](Texture *texture, Tab<float> &out) -> bool {"),
+        ("      auto clear = [&]() {\n        keProbeTarget->setRt();",
+         "      auto clear = [&](DeferredRenderTarget &target) {\n        target.setRt();"),
+        ('''      clear();
+      renderGeomOpaque();
+      if (!read(sceneDepth))
+        return false;
+      clear();''',
+         '''      clear(*keProbeTarget);
+      renderGeomOpaque();
+      d3d::set_render_target();
+      Texture *sceneTex = keProbeTarget->getDepth();
+      if (!sceneTex)
+        return false;
+      // Queue the staging copy; do not map it before submitting model work.
+      request_readback_nosyslock(sceneTex, 0);
+      clear(*keProbeModelTarget);'''),
+        ('''      render_model(Point3::ZERO);
+      if (!read(modelDepth))
+        return false;''',
+         '''      render_model(Point3::ZERO);
+      d3d::set_render_target();
+      Texture *modelTex = keProbeModelTarget->getDepth();
+      if (!modelTex)
+        return false;
+      request_readback_nosyslock(modelTex, 0);
+      // Both draws and both copy requests have been submitted before the
+      // first blocking map. The CPU still does the exact V1 comparison.
+      if (!read(sceneTex, sceneDepth) || !read(modelTex, modelDepth))
+        return false;'''),
+    )
+    for old, new in replacements:
+        if text.count(old) != 1:
+            raise ValueError("AVF paired readback source anchor mismatch")
+        text = text.replace(old, new, 1)
+    return text
+
+
+PAIRED_EDITS = (
+    (SCENE, paired_scene()),
+    ("  eastl::unique_ptr<DeferredRenderTarget> keProbeTarget;\n",
+     "  eastl::unique_ptr<DeferredRenderTarget> keProbeTarget, keProbeModelTarget;\n"),
+    ("  void closeIsolatedTargets()\n  {\n    keProbeTarget.reset();\n",
+     "  void closeIsolatedTargets()\n  {\n    keProbeTarget.reset();\n    keProbeModelTarget.reset();\n"),
+)
+
+
+def normalize_readback(src):
+    if READBACK_MARKER not in src:
+        return src
+    for old, new in reversed(PAIRED_EDITS):
+        if src.count(new) != 1:
+            raise ValueError("Partial paired AVF readback installation")
+        src = src.replace(new, old, 1)
+    return src
+
+
 def install_avf_probe(dagor: Path) -> bool:
     paths = {"header": dagor / BASE / "include/de3_dynRenderService.h",
              "render": dagor / BASE / "services/dynRenderSrv/dynRender.cpp"}
@@ -188,16 +263,24 @@ def install_avf_probe(dagor: Path) -> bool:
                            "  void closeIsolatedTargets()\n  {\n    keProbeTarget.reset();\n"),)}
     marked = [MARKER in v for v in src.values()]
     if all(marked):
-        if not all(src[k].count(new) == 1 for k, pairs in changes.items() for _, new in pairs):
+        checked = dict(src)
+        checked["render"] = normalize_readback(src["render"])
+        if not all(checked[k].count(new) == 1 for k, pairs in changes.items() for _, new in pairs):
             raise ValueError("Partial AVF probe installation")
-        return False
-    if any(marked):
+        if READBACK_MARKER in src["render"]:
+            return False
+        changes = {"render": ()}
+    if any(marked) and not all(marked):
         raise ValueError("Partial AVF probe across renderer files")
     for k, pairs in changes.items():
         for old, new in pairs:
             if src[k].count(old) != 1:
                 raise ValueError(f"AVF probe anchor missing/ambiguous: {k} {old[:90]!r}")
             src[k] = src[k].replace(old, new, 1)
+    for old, new in PAIRED_EDITS:
+        if src["render"].count(old) != 1:
+            raise ValueError(f"AVF paired readback anchor missing/ambiguous: {old[:90]!r}")
+        src["render"] = src["render"].replace(old, new, 1)
     for k, p in paths.items():
         p.write_bytes(src[k].encode("utf-8").replace(b"\n", b"\r\n" if b"\r\n" in raw[k] else b"\n"))
     print("[KE] Installed experimental opaque-only AVF probe", flush=True)
