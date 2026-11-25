@@ -137,7 +137,16 @@ def make_command(cfg, run, mailbox):
             stream.write((f'\nworkspace {{\n name:t="{name}"\n application_dir:t="{dagor_path(cdk)}/"\n'
                           f' application_path:t="{dagor_path(cdk / "application.blk")}"\n}}\n').encode("ascii"))
     batch = run / "map-batch.blk"
-    batch.write_text(f'online_dir:t="{dagor_path(mailbox)}"\n', encoding="ascii")
+    if isinstance(mailbox, (list, tuple)):
+        # Object inventory is a fixed scan, not a dataset generation mode.
+        # It still uses the native batch command to prepare all selected maps.
+        if not 1 <= len(mailbox) <= 256:
+            raise ValueError("Native object scan supports 1..256 maps")
+        batch.write_text(f'map_count:i={len(mailbox)}\n' +
+            "".join(f'map_{i}:t="{dagor_path(task["capture"])}"\n'
+                    for i,task in enumerate(mailbox)),encoding="ascii")
+    else:
+        batch.write_text(f'online_dir:t="{dagor_path(mailbox)}"\n', encoding="ascii")
     script = run / "probe.dcmd"
     # The editor logs "ready for interaction" before invoking its async command queue.
     # Do not yield eight idle frames before processing the first map: a Windows
