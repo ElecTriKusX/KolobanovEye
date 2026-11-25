@@ -74,6 +74,8 @@ def generate_online(cfg, run, raw, *, executor=None):
     samplers, bank_info, occluders = {}, {}, {}
     guided = cfg.get("guided_sampling", "off") in ("obstacle","fixed_camera")
     fixed_mode = cfg.get("guided_sampling") == "fixed_camera"
+    from tools.ke_depth_feedback import DepthFeedback, read_world_edges
+    depth_feedback = DepthFeedback()
     from tools.ke_fixed_camera import fixed_camera_group, fixed_block, read_fixed_metadata, read_fixed_final
     if guided:
         from tools.ke_guided_sampling import OccluderIndex, candidate_fields, fields_block, prioritize_points
@@ -113,7 +115,7 @@ def generate_online(cfg, run, raw, *, executor=None):
     report["guided_prerender_probes"] = 0
     report["guided_prerender_disabled_maps"] = {}
     report["fixed_camera"] = {"planned_groups":0,"measured_groups":0,"environment_passes":0,"valid_probes":0,
-                              "selected_fixed_views":0,
+                              "selected_fixed_views":0,"world_edge_proposals":0,"depth_feedback_offered":0,"depth_feedback_used":0,
                               "measurement_scope":"validated_full_frames_only; native FIXED_PRESELECT includes rejected frames"}
     consecutive_unstable = 0
     report["attempted_candidates"] = 0
@@ -192,8 +194,11 @@ def generate_online(cfg, run, raw, *, executor=None):
                         points = prioritize_points(occluders[mid],sampler.bounds,points,requested,cfg)
                     group = None
                     if fixed_mode and planner.attempts[mid]%5!=0:
-                        points,group = fixed_camera_group(occluders[mid],sampler.bounds,points,requested,cfg,
-                            f'{task["seed"]}:fixed:{frame_index}')
+                        points,group = depth_feedback.take(mid,requested,points,sampler.bounds,cfg)
+                        if group is None:
+                            points,group = fixed_camera_group(occluders[mid],sampler.bounds,points,requested,cfg,
+                                f'{task["seed"]}:fixed:{frame_index}')
+                        report["fixed_camera"]["depth_feedback_used"] = depth_feedback.used
                     if group is not None:
                         report["fixed_camera"]["planned_groups"] += 1
                     fixed_groups[frame_index] = group
@@ -306,6 +311,12 @@ def generate_online(cfg, run, raw, *, executor=None):
                             if fixed is not None:
                                 final = read_fixed_final(blk,fixed)
                                 fixed["final_view"] = final
+                                edges = read_world_edges(blk,fixed["estimate"] is not None)
+                                fixed["world_edge_proposals"] = edges
+                                stats = report["fixed_camera"]
+                                stats["world_edge_proposals"] += len(edges)
+                                depth_feedback.offer(mid,target,fixed["camera"],edges,sampler.bounds,cfg)
+                                stats["depth_feedback_offered"] = depth_feedback.offered
                                 if final["selected"]:
                                     # The immutable angular bank was only a fallback for slot zero.
                                     # Do not report its unrelated azimuth/distance as the actual view.
