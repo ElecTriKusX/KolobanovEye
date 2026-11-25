@@ -105,6 +105,8 @@ def write_capture(cfg, map_id, count, seed, run, raw, index, model, skeleton, fi
         f'capture_visibility_masks:b={"yes" if cfg["capture_visibility_masks"] else "no"}',
         f'search_occlusion:b={"yes" if cfg["search_occlusion"] else "no"}',
     ]
+    if cfg.get('avf_probe_size', 0):
+        lines.append(f'avf_probe_size:i={cfg["avf_probe_size"]}')
     if poses:
         lines.append("articulate_tank:b=yes")
         lines.extend(f"articulation_{i}:p2={numbers(pose)}" for i, pose in enumerate(poses))
