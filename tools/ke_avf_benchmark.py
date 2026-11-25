@@ -104,6 +104,7 @@ def summarize_run(path, native_log=None):
             "guided_prerender_disabled_maps": manifest.get("guided_prerender_disabled_maps",{}),
             "fixed_camera": manifest.get("fixed_camera"),
             "scene_families": manifest.get("scene_families",{}),
+            "scene_cache": manifest.get("scene_cache",{"enabled":False}),
             "fixed_camera_native":fixed_native,
             "reuse_map_enabled": config.get("avf_reuse_map"),
             "probe_size": config.get("avf_probe_size", 0), "region": config.get("avf_region"),
@@ -120,11 +121,11 @@ def compare_runs(paths, logs=None, *, compare_guided=False):
     if len(logs) != len(paths) or not paths:
         raise ValueError("Specify one log per run, or no logs")
     rows, configs = [], []
-    ignored = IGNORED_CONFIG | ({"guided_sampling","guided_prerender"} if compare_guided else set())
+    ignored = IGNORED_CONFIG | ({"guided_sampling","guided_prerender","scene_cache"} if compare_guided else set())
     for path, log in zip(paths, logs):
         row, config = summarize_run(path, log)
         rows.append(row)
-        config = {"guided_sampling":"off","guided_prerender":"off",**config}
+        config = {"guided_sampling":"off","guided_prerender":"off","scene_cache":"",**config}
         configs.append({k: v for k, v in config.items() if k not in ignored})
     differences = sorted(k for k in set().union(*(c.keys() for c in configs))
                          if any(c.get(k) != configs[0].get(k) for c in configs[1:]))
