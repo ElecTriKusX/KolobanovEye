@@ -457,7 +457,9 @@ def collect_frame(cfg, run, raw, task, idx, blk):
                   if cfg["capture_visibility_masks"] else None)
     occlusion = (read_occlusion_proxy(blk, task["occlusion_targets"][idx], cfg["camera_attempts"], visibility,
                                       probe_size=cfg.get('avf_probe_size', 0),
-                                      probe_region=cfg.get('avf_region', 'roi') if cfg.get('avf_probe_size', 0) else None)
+                                      probe_region=cfg.get('avf_region', 'roi') if cfg.get('avf_probe_size', 0) else None,
+                                      probe_backend=cfg.get('avf_backend', 'gpu') if cfg.get('avf_probe_size', 0) else None,
+                                      probe_batch_size=cfg.get('avf_batch_size', 4))
                  if cfg["search_occlusion"] else None)
     image_id = int(image_path.stem)
     scene_id = f'{run.name}:{task["index"]}:{task["stem"]}:{comp}'
