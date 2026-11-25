@@ -13,7 +13,7 @@ from pathlib import Path
 from tools.ke_adaptive_quotas import AdaptiveQuotaPlanner
 from tools.ke_visibility import VISIBILITY_BINS
 from tools.ke_visibility_quotas import choose_candidates, visibility_targets
-from tools.ke_frame_journal import read_journal
+from tools.ke_frame_journal import JournalCursor
 from tools.ke_smart_positions import load_pool, CandidateSampler, frame_block, verify_frame
 
 
@@ -169,6 +169,7 @@ def generate_online(cfg, run, raw, *, executor=None):
             publish(mailbox / f"task_{number}.blk", f'capture:t="{dagor_path(task["capture"])}"\n')
             tasks.append(task)
             report["tasks"] = number
+            journal_cursor = JournalCursor(task["journal"])
             for idx in range(cap):
                 ready = feedback / f"ready_{idx}.txt"
                 def completed_record():
@@ -176,10 +177,7 @@ def generate_online(cfg, run, raw, *, executor=None):
                         return None
                     # Native acknowledgement follows PNG and journal close.
                     # A ready marker with a missing record is a protocol error.
-                    journal = read_journal(task["journal"])
-                    if idx not in journal:
-                        raise ValueError("Ready marker has no matching frame journal record")
-                    return journal[idx]
+                    return journal_cursor.read_next(idx)
                 wait_started = time.monotonic()
                 blk = await_value(process, completed_record, cfg["timeout"], f"task {number} frame {idx}")
                 ready_observed = time.monotonic()
