@@ -9,7 +9,7 @@ import math
 from pathlib import Path
 import re
 
-IGNORED_CONFIG = {"output", "avf_probe_size", "avf_region"}
+IGNORED_CONFIG = {"output", "avf_probe_size", "avf_region", "avf_backend", "avf_batch_size", "avf_reuse_map"}
 PROBE_RE = re.compile(
     r"\[KE\] AVF_PROBE index=\d+ attempt=\d+ size=(\d+)"
     r"(?: region=(roi|full))? valid=([01]) fraction=([-.\d]+)"
@@ -62,6 +62,7 @@ def summarize_run(path, native_log=None):
     rate = (elapsed/selected if complete and selected and elapsed is not None else None)
     probe_stats = None
     loads = None
+    actual_loads = reuses = None
     if native_log is not None:
         native = Path(native_log).read_text(encoding="utf-8", errors="replace")
         probes = PROBE_RE.findall(native)
@@ -72,13 +73,23 @@ def summarize_run(path, native_log=None):
             "roi_entries": sum(m[1] == "roi" for m in probes),
         }
         # Use one supplied native log only: do not aggregate duplicate logs.
-        loads = len(re.findall(r"\[KE\] MAP_BEGIN\b", native))
+        # MAP_BEGIN is emitted twice in debug logs (raw and CON). Prefer the
+        # console stream when present; residency markers occur once per task.
+        console = [line.split("CON: ", 1)[1] for line in native.splitlines() if "CON: [KE]" in line]
+        events = "\n".join(console) if console else native
+        loads = len(re.findall(r"\[KE\] MAP_BEGIN\b", events))
+        actions = re.findall(r"\[KE\] MAP_RESIDENCY action=(load|reuse)\b", events)
+        if actions:
+            actual_loads, reuses = actions.count("load"), actions.count("reuse")
     return {"run": path.name, "status": manifest.get("status"), "complete": complete,
             "requested": manifest.get("requested_frames"), "selected": selected,
             "attempted": attempted, "rendered": manifest.get("candidate_frames"),
             "total_wall_seconds": elapsed,
             "seconds_per_accepted_frame": rate,
             "tasks": manifest.get("tasks"), "map_begin_log_entries": loads,
+            "actual_map_loads": actual_loads, "map_reuses": reuses,
+            "backend": config.get("avf_backend"), "batch_size": config.get("avf_batch_size"),
+            "reuse_map_enabled": config.get("avf_reuse_map"),
             "probe_size": config.get("avf_probe_size", 0), "region": config.get("avf_region"),
             "host_turnaround_ms": distribution([r["python_turnaround_ms"] for r in timing
                                                if r.get("decision_sent", True)]),
