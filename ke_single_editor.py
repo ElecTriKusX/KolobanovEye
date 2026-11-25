@@ -116,6 +116,8 @@ def write_capture(cfg, map_id, count, seed, run, raw, index, model, skeleton, fi
         lines.append(f'avf_probe_size:i={cfg["avf_probe_size"]}')
         lines.append(f'avf_roi:b={"yes" if cfg.get("avf_region", "roi") == "roi" else "no"}')
         lines.append(f'avf_reuse_map:b={"yes" if cfg.get("avf_reuse_map", True) else "no"}')
+        lines.append(f'avf_backend:t="{cfg.get("avf_backend", "gpu")}"')
+        lines.append(f'avf_batch_size:i={cfg.get("avf_batch_size", 4)}')
     if poses:
         lines.append("articulate_tank:b=yes")
         lines.extend(f"articulation_{i}:p2={numbers(pose)}" for i, pose in enumerate(poses))
