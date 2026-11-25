@@ -108,22 +108,40 @@ SERVICE = r'''  // [KE] FIXED_CAMERA_DEPTH_SERVICE_V1
   }
 
 '''
+def renderer_edits(key):
+    return {"header":((HEADER_ANCHOR,HEADER_ANCHOR+HEADER),),
+            "render":((SCENE_ANCHOR,scene_method()+SCENE_ANCHOR),
+                      (SERVICE_ANCHOR,SERVICE+SERVICE_ANCHOR))}[key]
+
+
+def normalize_fixed_renderer(src,key):
+    if MARKER not in src and "FIXED_CAMERA_DEPTH_SERVICE_V1" not in src:
+        return src
+    for old,new in reversed(renderer_edits(key)):
+        if src.count(new)!=1:
+            raise ValueError("Partial fixed camera renderer")
+        src=src.replace(new,old,1)
+    return src
+
+
+def add_fixed_renderer(src,key):
+    for old,new in renderer_edits(key):
+        if src.count(new)==1:
+            continue
+        if src.count(old)!=1:
+            raise ValueError(f"Fixed renderer anchor missing/ambiguous: {key}")
+        src=src.replace(old,new,1)
+    return src
+
+
 def install_fixed_renderer(dagor: Path):
     paths={"header":dagor/BASE/"include/de3_dynRenderService.h",
            "render":dagor/BASE/"services/dynRenderSrv/dynRender.cpp"}
-    edits={"header":((HEADER_ANCHOR,HEADER_ANCHOR+HEADER),),
-           "render":((SCENE_ANCHOR,scene_method()+SCENE_ANCHOR),
-                     (SERVICE_ANCHOR,SERVICE+SERVICE_ANCHOR))}
     prepared={}
     for key,path in paths.items():
         raw=path.read_bytes()
         src=raw.replace(b"\r\n",b"\n").decode("utf-8")
-        for old,new in edits[key]:
-            if src.count(new)==1:
-                continue
-            if src.count(old)!=1:
-                raise ValueError(f"Fixed renderer anchor missing/ambiguous: {key}")
-            src=src.replace(old,new,1)
+        src=add_fixed_renderer(src,key)
         prepared[key]=(raw,src.encode("utf-8").replace(b"\n",b"\r\n" if b"\r\n" in raw else b"\n"))
     changed=False
     for key,path in paths.items():
